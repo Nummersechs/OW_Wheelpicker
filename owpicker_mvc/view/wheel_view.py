@@ -71,7 +71,7 @@ class NamesList(QtWidgets.QListWidget):
         self.customContextMenuRequested.connect(self._show_context_menu)
 
 
-    def _new_item(self, text: str = "", subroles: Optional[List[str]] = None) -> QtWidgets.QListWidgetItem:
+    def _new_item(self, text: str = "", subroles: Optional[List[str]] = None, active: Optional[bool] = None) -> QtWidgets.QListWidgetItem:
         item = QtWidgets.QListWidgetItem(text)
         item.setFlags(
             item.flags()
@@ -81,7 +81,9 @@ class NamesList(QtWidgets.QListWidget):
         # Neue Zeile: Checkbox abhängig vom Inhalt setzen
         # - leerer Text  → unchecked
         # - nicht leerer Text → checked
-        if text.strip():
+        if active is not None:
+            item.setCheckState(QtCore.Qt.Checked if active else QtCore.Qt.Unchecked)
+        elif text.strip():
             item.setCheckState(QtCore.Qt.Checked)
         else:
             item.setCheckState(QtCore.Qt.Unchecked)
@@ -92,8 +94,8 @@ class NamesList(QtWidgets.QListWidget):
         widget = NameRowWidget(self, item, self.subrole_labels)
         self.setItemWidget(item, widget)
 
-    def add_name(self, text: str = "", subroles: Optional[List[str]] = None):
-        item = self._new_item(text, subroles=subroles)
+    def add_name(self, text: str = "", subroles: Optional[List[str]] = None, active: Optional[bool] = None):
+        item = self._new_item(text, subroles=subroles, active=active)
         self.addItem(item)
         self._attach_row_widget(item)
         self.setCurrentItem(item)
@@ -406,7 +408,11 @@ class WheelView(QtWidgets.QWidget):
 
         # Start-Namen anlegen – neue Namen sind standardmäßig aktiv (Checked)
         for entry in self._normalize_entries(defaults):
-            self.names.add_name(entry["name"], subroles=entry.get("subroles", []))
+            self.names.add_name(
+                entry["name"],
+                subroles=entry.get("subroles", []),
+                active=entry.get("active", True),
+            )
         
         # Falls gar keine Defaults/Saved Names vorhanden sind, eine leere Zeile hinzufügen
         if self.names.count() == 0:
@@ -925,14 +931,14 @@ class WheelView(QtWidgets.QWidget):
     def _normalize_entries(self, defaults: Union[List[str], List[dict]]) -> List[dict]:
         """
         Macht aus verschiedenen Input-Formaten eine einheitliche Liste von
-        {"name": str, "subroles": [str]}.
+        {"name": str, "subroles": [str], "active": bool}.
         """
         entries: List[dict] = []
         for item in defaults or []:
             if isinstance(item, str):
                 name = item.strip()
                 if name:
-                    entries.append({"name": name, "subroles": []})
+                    entries.append({"name": name, "subroles": [], "active": True})
             elif isinstance(item, dict) and "name" in item:
                 name = str(item.get("name", "")).strip()
                 if not name:
@@ -942,8 +948,69 @@ class WheelView(QtWidgets.QWidget):
                     subs_list = [str(s) for s in subs if str(s).strip()]
                 else:
                     subs_list = []
-                entries.append({"name": name, "subroles": subs_list})
+                active = bool(item.get("active", True))
+                entries.append({"name": name, "subroles": subs_list, "active": active})
         return entries
+    def load_entries(self, entries: Union[List[str], List[dict]],
+                     pair_mode: Optional[bool] = None,
+                     include_in_all: Optional[bool] = None,
+                     use_subroles: Optional[bool] = None):
+        """
+        Ersetzt die gesamte Namensliste durch neue Einträge (z.B. beim Moduswechsel).
+        Optionale Flags setzen Pair-/Subrollen- und Include-Status mit.
+        """
+        normalized = self._normalize_entries(entries)
+        # Liste ohne Signale neu aufbauen
+        blockers = [
+            QtCore.QSignalBlocker(self.names),
+            QtCore.QSignalBlocker(self.names.model()),
+        ]
+        try:
+            self.names.clear()
+            for entry in normalized:
+                self.names.add_name(
+                    entry.get("name", ""),
+                    subroles=entry.get("subroles", []),
+                    active=entry.get("active", True),
+                )
+            if not normalized:
+                self.names.add_name("")
+        finally:
+            del blockers
+
+        # Disabled-Segmente und Hilfswerte zurücksetzen
+        self._disabled_indices.clear()
+        self._disabled_labels.clear()
+        self._last_wheel_names = []
+
+        # Pair-/Subrollen-Status setzen (Signale blocken, UI updaten)
+        if pair_mode is not None and not getattr(self, "allow_pair_toggle", False):
+            pair_mode = False
+        if pair_mode is not None:
+            self.pair_mode = bool(pair_mode)
+            if getattr(self, "toggle", None):
+                blocker = QtCore.QSignalBlocker(self.toggle)
+                self.toggle.setChecked(self.pair_mode)
+                del blocker
+            if not self.pair_mode and getattr(self, "chk_subroles", None):
+                blocker = QtCore.QSignalBlocker(self.chk_subroles)
+                self.chk_subroles.setChecked(False)
+                del blocker
+        if use_subroles is not None and getattr(self, "chk_subroles", None):
+            blocker = QtCore.QSignalBlocker(self.chk_subroles)
+            self.chk_subroles.setChecked(bool(use_subroles))
+            del blocker
+            self.use_subrole_filter = bool(self.chk_subroles.isChecked())
+        self._update_subrole_toggle_state()
+
+        if include_in_all is not None and hasattr(self, "btn_include_in_all"):
+            blocker = QtCore.QSignalBlocker(self.btn_include_in_all)
+            self.btn_include_in_all.setChecked(bool(include_in_all))
+            del blocker
+            self._on_include_in_all_toggled(self.btn_include_in_all.isChecked())
+
+        self._apply_placeholder()
+        self._on_names_list_changed()
 
     # --- Added resize behaviour ---
 

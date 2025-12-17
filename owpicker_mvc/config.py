@@ -5,7 +5,7 @@ Hier kannst du das Verhalten und die Startdaten des Programms anpassen.
 
 # ---------- Logging/Debug ----------
 DEBUG = False
-QUIET = True
+QUIET = False
 
 def debug_print(*args, **kwargs):
     """Wrapper um print, der nur aktiv ist, wenn DEBUG True ist."""
@@ -23,6 +23,25 @@ DEFAULT_NAMES = {
     "Tank": ["Grymllon", "SpB"],
     "Damage": ["CoMaE", "DenMuchel", "Massith", "Pledoras"],
     "Support": ["blue", "Nummersechs", "Tillinski", "Internetwaffel"],
+}
+
+# Helden-Defaults nach Rolle (inkl. Vandetta)
+DEFAULT_HEROES = {
+    "Tank": [
+        "D.Va", "Doomfist", "Hazard", "Junker Queen", "Mauga", "Orisa",
+        "Ramattra", "Reinhardt", "Roadhog", "Sigma", "Winston",
+        "Wrecking Ball", "Zarya",
+    ],
+    "Damage": [
+        "Ashe", "Bastion", "Cassidy", "Echo", "Genji",
+        "Hanzo", "Junkrat", "Mei", "Pharah", "Reaper",
+        "Sojourn", "Soldier: 76", "Sombra", "Symmetra", "Torbjorn",
+        "Tracer", "Vendetta", "Venture", "Widowmaker",
+    ],
+    "Support": [
+        "Ana", "Baptiste", "Brigitte", "Illari", "Juno", "Kiriko",
+        "Lifeweaver", "Lucio", "Mercy", "Moira", "Wuyang", "Zenyatta",
+    ],
 }
 # Added label box config
 LABEL_FONT_SIZE = 14

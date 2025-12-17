@@ -22,15 +22,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._state_file = self._get_state_file()
         saved = self._load_saved_state()
         self._restoring_state = True   # während des Aufbaus nicht speichern
+        self.current_mode = "players"  # immer mit Spieler-Auswahl starten
+        self._mode_states = self._build_mode_states(saved)
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
         self._apply_theme()
         root = QtWidgets.QVBoxLayout(central)
 
-        title = QtWidgets.QLabel("Overwatch 2 – Spieler-Auswahl")
-        title.setAlignment(QtCore.Qt.AlignCenter)
-        title.setStyleSheet("font-size:22px; font-weight:700; margin:8px 0 2px 0;")
+        self.title = QtWidgets.QLabel("")
+        self.title.setAlignment(QtCore.Qt.AlignCenter)
+        self.title.setStyleSheet("font-size:22px; font-weight:700; margin:8px 0 2px 0;")
 
         # Lautstärke-Regler oben rechts
         vol_row = QtWidgets.QHBoxLayout()
@@ -38,7 +40,7 @@ class MainWindow(QtWidgets.QMainWindow):
         vol_row.addStretch(1)
         spacer_for_balance = QtWidgets.QSpacerItem(160, 0, QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Minimum)
         vol_row.addItem(spacer_for_balance)
-        vol_row.addWidget(title, 0, QtCore.Qt.AlignCenter)
+        vol_row.addWidget(self.title, 0, QtCore.Qt.AlignCenter)
         vol_row.addStretch(1)
         self.lbl_volume_icon = QtWidgets.QToolButton()
         self.lbl_volume_icon.setText("🔊")
@@ -66,36 +68,51 @@ class MainWindow(QtWidgets.QMainWindow):
         self._on_volume_changed(self.volume_slider.value())
         self._last_volume_before_mute = self.volume_slider.value()
 
+        # Modus-Schalter (Spieler / Helden)
+        self.btn_mode_players = QtWidgets.QPushButton("Spieler-Auswahl")
+        self.btn_mode_players.setCheckable(True)
+        self.btn_mode_heroes = QtWidgets.QPushButton("Helden-Auswahl")
+        self.btn_mode_heroes.setCheckable(True)
+        self.btn_mode_players.clicked.connect(lambda: self._on_mode_button_clicked("players"))
+        self.btn_mode_heroes.clicked.connect(lambda: self._on_mode_button_clicked("heroes"))
+        mode_group = QtWidgets.QButtonGroup(self)
+        mode_group.setExclusive(True)
+        mode_group.addButton(self.btn_mode_players)
+        mode_group.addButton(self.btn_mode_heroes)
+        mode_row = QtWidgets.QHBoxLayout()
+        mode_row.setContentsMargins(8, 0, 8, 4)
+        mode_row.addStretch(1)
+        mode_row.addWidget(QtWidgets.QLabel("Modus:"))
+        mode_row.addWidget(self.btn_mode_players)
+        mode_row.addWidget(self.btn_mode_heroes)
+        mode_row.addStretch(1)
+        root.addLayout(mode_row)
+
         grid = QtWidgets.QGridLayout()
         root.addLayout(grid, 1)
 
-        # gespeicherte Daten pro Rolle (falls vorhanden)
-        tank_state = saved.get("Tank", {})
-        dps_state = saved.get("Damage", {})
-        support_state = saved.get("Support", {})
-
-        def defaults_for(state_key: dict, role_name: str):
-            # Bevorzugt die neue Struktur mit Einträgen und Subrollen.
-            if "entries" in state_key:
-                return state_key["entries"]
-            return state_key.get("names", config.DEFAULT_NAMES[role_name])
+        # Startzustand pro Rolle (Spieler-Modus)
+        active_states = self._mode_states[self.current_mode]
+        tank_state = active_states["Tank"]
+        dps_state = active_states["Damage"]
+        support_state = active_states["Support"]
 
         self.tank = WheelView(
             "Tank",
-            defaults_for(tank_state, "Tank"),
+            tank_state.get("entries", []),
             pair_mode=tank_state.get("pair_mode", False),
             allow_pair_toggle=False,
         )
         self.dps = WheelView(
             "Damage",
-            defaults_for(dps_state, "Damage"),
+            dps_state.get("entries", []),
             pair_mode=dps_state.get("pair_mode", True),
             allow_pair_toggle=True,
             subrole_labels=["HS", "FDPS"],
         )
         self.support = WheelView(
             "Support",
-            defaults_for(support_state, "Support"),
+            support_state.get("entries", []),
             pair_mode=support_state.get("pair_mode", True),
             allow_pair_toggle=True,
             subrole_labels=["MS", "FS"],
@@ -105,17 +122,10 @@ class MainWindow(QtWidgets.QMainWindow):
         grid.addWidget(self.dps, 0, 1)
         grid.addWidget(self.support, 0, 2)
 
-        # Include-in-all Flags anwenden, bevor wir Save-Hooks anschließen
-        if "include_in_all" in tank_state:
-            self.tank.btn_include_in_all.setChecked(tank_state["include_in_all"])
-        if "include_in_all" in dps_state:
-            self.dps.btn_include_in_all.setChecked(dps_state["include_in_all"])
-        if "include_in_all" in support_state:
-            self.support.btn_include_in_all.setChecked(support_state["include_in_all"])
-        if "use_subroles" in dps_state and getattr(self.dps, "chk_subroles", None):
-            self.dps.chk_subroles.setChecked(bool(dps_state["use_subroles"]))
-        if "use_subroles" in support_state and getattr(self.support, "chk_subroles", None):
-            self.support.chk_subroles.setChecked(bool(support_state["use_subroles"]))
+        # Aktiven Modus vollständig anwenden (Einträge, Toggles etc.)
+        self.btn_mode_players.setChecked(self.current_mode == "players")
+        self.btn_mode_heroes.setChecked(self.current_mode == "heroes")
+        self._load_mode_into_wheels(self.current_mode)
 
         # Spin-Signale
         self.tank.request_spin.connect(lambda: self._spin_single(self.tank, 1.00))
@@ -575,14 +585,145 @@ class MainWindow(QtWidgets.QMainWindow):
             self.volume_slider.setValue(new_val)
             self.volume_slider.blockSignals(False)
             self._on_volume_changed(new_val)
+    def _normalize_entries_for_state(self, defaults) -> list[dict]:
+        """Formatiert eine Eingabeliste in das interne Eintragsformat."""
+        entries: list[dict] = []
+        for item in defaults or []:
+            if isinstance(item, str):
+                name = item.strip()
+                if name:
+                    entries.append({"name": name, "subroles": [], "active": True})
+            elif isinstance(item, dict) and "name" in item:
+                name = str(item.get("name", "")).strip()
+                if not name:
+                    continue
+                subs = item.get("subroles", [])
+                if isinstance(subs, (list, set, tuple)):
+                    subs_list = [str(s) for s in subs if str(s).strip()]
+                else:
+                    subs_list = []
+                entries.append({
+                    "name": name,
+                    "subroles": subs_list,
+                    "active": bool(item.get("active", True)),
+                })
+        return entries
+
+    def _default_role_state(self, role: str, mode: str) -> dict:
+        """Liefert Startwerte pro Rolle/Modus."""
+        pair_defaults = {"Tank": False, "Damage": True, "Support": True}
+        if mode == "heroes":
+            defaults = config.DEFAULT_HEROES.get(role, [])
+        else:
+            defaults = config.DEFAULT_NAMES.get(role, [])
+        return {
+            "entries": self._normalize_entries_for_state(defaults),
+            "include_in_all": True,
+            "pair_mode": pair_defaults.get(role, False),
+            "use_subroles": False,
+        }
+
+    def _role_state_from_saved(self, data, role: str, mode: str) -> dict:
+        """Mischt gespeicherte Werte mit Defaults."""
+        base = self._default_role_state(role, mode)
+        if not isinstance(data, dict):
+            return base
+        if "entries" in data:
+            base["entries"] = self._normalize_entries_for_state(data["entries"])
+        elif "names" in data:
+            base["entries"] = self._normalize_entries_for_state(data["names"])
+        base["include_in_all"] = bool(data.get("include_in_all", base["include_in_all"]))
+        base["pair_mode"] = bool(data.get("pair_mode", base["pair_mode"]))
+        base["use_subroles"] = bool(data.get("use_subroles", base["use_subroles"]))
+        return base
+
+    def _build_mode_states(self, saved: dict) -> dict:
+        """Baut Modus-States aus gespeicherten Daten (inkl. Legacy-Fallback)."""
+        roles = ("Tank", "Damage", "Support")
+        players_saved = saved.get("players") if isinstance(saved, dict) else {}
+        heroes_saved = saved.get("heroes") if isinstance(saved, dict) else {}
+        mode_states = {"players": {}, "heroes": {}}
+        for role in roles:
+            if isinstance(players_saved, dict) and role in players_saved:
+                players_src = players_saved.get(role, {})
+            else:
+                players_src = saved.get(role, {})
+            mode_states["players"][role] = self._role_state_from_saved(players_src, role, "players")
+
+            heroes_src = heroes_saved.get(role, {}) if isinstance(heroes_saved, dict) else {}
+            mode_states["heroes"][role] = self._role_state_from_saved(heroes_src, role, "heroes")
+        return mode_states
+
+    def _role_states_from_wheels(self) -> dict:
+        """Aktuellen Zustand aller Räder (aktiver Modus) auslesen."""
+        def wheel_state(w: WheelView) -> dict:
+            return {
+                "entries": w.get_current_entries(),
+                "include_in_all": w.btn_include_in_all.isChecked(),
+                "pair_mode": getattr(w, "pair_mode", False),
+                "use_subroles": getattr(w, "use_subrole_filter", False),
+            }
+        return {
+            "Tank": wheel_state(self.tank),
+            "Damage": wheel_state(self.dps),
+            "Support": wheel_state(self.support),
+        }
+
+    def _capture_current_mode_state(self):
+        """Schreibt den UI-Zustand des aktiven Modus in _mode_states."""
+        self._mode_states[self.current_mode] = self._role_states_from_wheels()
+
+    def _load_mode_into_wheels(self, mode: str):
+        """Wendet den gespeicherten Zustand eines Modus auf die UI an."""
+        if mode not in self._mode_states:
+            return
+        state = self._mode_states[mode]
+        prev_restoring = getattr(self, "_restoring_state", False)
+        self._restoring_state = True
+        try:
+            for role, wheel in (("Tank", self.tank), ("Damage", self.dps), ("Support", self.support)):
+                role_state = state.get(role) or self._default_role_state(role, mode)
+                state[role] = role_state
+                wheel.load_entries(
+                    role_state.get("entries", []),
+                    pair_mode=role_state.get("pair_mode", False),
+                    include_in_all=role_state.get("include_in_all", True),
+                    use_subroles=role_state.get("use_subroles", False),
+                )
+        finally:
+            self._restoring_state = prev_restoring
+        if hasattr(self, "btn_spin_all"):
+            self._update_spin_all_enabled()
+        if hasattr(self, "btn_cancel_spin"):
+            self._update_cancel_enabled()
+        self._update_title()
+
+    def _on_mode_button_clicked(self, target: str):
+        if target == self.current_mode:
+            return
+        self._switch_mode(target)
+
+    def _switch_mode(self, mode: str):
+        if mode not in ("players", "heroes"):
+            return
+        # Aktuellen Modus sichern
+        self._capture_current_mode_state()
+        self.current_mode = mode
+        self.btn_mode_players.setChecked(mode == "players")
+        self.btn_mode_heroes.setChecked(mode == "heroes")
+        self._load_mode_into_wheels(mode)
+        self._save_state()
+
+    def _update_title(self):
+        self.title.setText("Overwatch 2 – Triple Wheel Picker")
     def _load_saved_state(self) -> dict:
         """
         Lädt den gespeicherten Zustand aus saved_state.json, falls vorhanden.
         Struktur:
         {
-          "Tank":    {"names": [...], "include_in_all": bool, "pair_mode": bool},
-          "Damage":  {...},
-          "Support": {...}
+          "players": {"Tank": {...}, "Damage": {...}, "Support": {...}},
+          "heroes":  {"Tank": {...}, "Damage": {...}, "Support": {...}},
+          "volume": int
         }
         """
         try:
@@ -597,21 +738,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _gather_state(self) -> dict:
         """
-        Liest den aktuellen Zustand aller drei Wheels aus.
+        Liest den aktuellen Zustand beider Modi aus.
         """
-        def wheel_state(w: WheelView) -> dict:
-            return {
-                "names": w.get_current_names(),
-                "entries": w.get_current_entries(),
-                "include_in_all": w.btn_include_in_all.isChecked(),
-                "pair_mode": getattr(w, "pair_mode", False),
-                "use_subroles": getattr(w, "use_subrole_filter", False),
-            }
-
+        self._capture_current_mode_state()
         return {
-            "Tank": wheel_state(self.tank),
-            "Damage": wheel_state(self.dps),
-            "Support": wheel_state(self.support),
+            "players": self._mode_states.get("players", {}),
+            "heroes": self._mode_states.get("heroes", {}),
             "volume": self.volume_slider.value(),
         }
 
