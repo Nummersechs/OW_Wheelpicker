@@ -1,5 +1,5 @@
 from typing import List, Optional, Union
-import random, itertools
+import random, itertools, difflib
 from PySide6 import QtCore, QtGui, QtWidgets
 from view.wheel_disc import WheelDisc
 from logic.spin_engine import plan_spin
@@ -297,6 +297,7 @@ class WheelView(QtWidgets.QWidget):
         r = self.wheel.radius
         self._disabled_indices: set[int] = set()
         self._disabled_labels: set[str] = set()
+        self._last_wheel_names: List[str] = list(self.wheel.names)
 
         # Szene mit etwas Rand oben (für den Pfeil) und wenig Rand unten
         self.scene.setSceneRect(-r - 80, -r - 100, 2 * r + 160, 2 * r + 160)
@@ -581,10 +582,14 @@ class WheelView(QtWidgets.QWidget):
 
     def _on_names_list_changed(self, *args):
         """Wenn Namen geändert, hinzugefügt oder entfernt werden."""
+        old_names = list(getattr(self, "_last_wheel_names", []))
+        new_names = self._effective_names_from(self._active_entries(), include_disabled=True)
         # Rad mit aktiven Namen aktualisieren
-        self.wheel.set_names(self._effective_names_from(self._active_entries(), include_disabled=True))
+        self.wheel.set_names(new_names)
+        self._rebuild_disabled_indices(old_names, new_names)
         self._refresh_disabled_indices()
         self._update_name_dependent_ui()
+        self._last_wheel_names = list(new_names)
         self.stateChanged.emit()
 
     def _effective_names_from(self, base: Union[List[dict], List[str]], include_disabled: bool = True) -> List[str]:
@@ -639,6 +644,27 @@ class WheelView(QtWidgets.QWidget):
         if not getattr(self, "_disabled_indices", None):
             return set(self.wheel.names if hasattr(self.wheel, "names") else [])
         return {n for i, n in enumerate(getattr(self.wheel, "names", [])) if i not in self._disabled_indices}
+
+    def _rebuild_disabled_indices(self, old_names: List[str], new_names: List[str]):
+        """
+        Überträgt deaktivierte Segmente auf die neue Namensliste, wenn Einträge
+        entfernt oder hinzugefügt wurden. Deaktivierte Einträge, die nicht mehr
+        existieren, fallen dabei weg.
+        """
+        if not getattr(self, "_disabled_indices", None):
+            self._disabled_indices = set()
+            self._disabled_labels = set()
+            return
+
+        sm = difflib.SequenceMatcher(a=old_names, b=new_names)
+        mapped: set[int] = set()
+        for tag, i1, i2, j1, j2 in sm.get_opcodes():
+            if tag == "equal":
+                for offset in range(i2 - i1):
+                    if (i1 + offset) in self._disabled_indices:
+                        mapped.add(j1 + offset)
+        self._disabled_indices = mapped
+        self._disabled_labels = {new_names[i] for i in self._disabled_indices}
 
     def _refresh_disabled_indices(self):
         names = list(getattr(self.wheel, "names", []))
