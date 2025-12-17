@@ -1,0 +1,30 @@
+[aist#0:0/pcm_u8 @ 0x987054180] Guessed Channel Layout: stereo
+Input #0, wav, from 'ding.wav':
+  Metadata:
+    encoder         : Lavf61.1.100
+  Duration: 00:00:09.56, bitrate: 352 kb/s
+  Stream #0:0: Audio: pcm_u8 ([1][0][0][0] / 0x0001), 22050 Hz, stereo, u8, 352 kb/s
+Stream mapping:
+  Stream #0:0 -> #0:0 (pcm_u8 (native) -> pcm_s16le (native))
+Press [q] to stop, [?] for help
+Output #0, null, to 'pipe:':
+  Metadata:
+    encoder         : Lavf62.3.100
+  Stream #0:0: Audio: pcm_s16le, 192000 Hz, stereo, s16, 6144 kb/s
+    Metadata:
+      encoder         : Lavc62.11.100 pcm_s16le
+[Parsed_loudnorm_0 @ 0x9870a0900] 
+{
+	"input_i" : "-13.02",
+	"input_tp" : "0.02",
+	"input_lra" : "3.40",
+	"input_thresh" : "-23.38",
+	"output_i" : "-16.10",
+	"output_tp" : "-3.02",
+	"output_lra" : "1.00",
+	"output_thresh" : "-26.33",
+	"normalization_type" : "dynamic",
+	"target_offset" : "0.10"
+}
+[out#0/null @ 0x9870a0180] video:0KiB audio:7171KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown
+size=N/A time=00:00:09.60 bitrate=N/A speed=  28x elapsed=0:00:00.34    

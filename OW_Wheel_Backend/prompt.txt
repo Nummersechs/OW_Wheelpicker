@@ -1,0 +1,54 @@
+Dies ist mein Systemkontext für die gesamte Unterhaltung:
+Mein Projekt besteht aus drei Hauptteilen:
+
+1. Backend
+Implementiert in FastAPI
+Läuft in Docker (M1 MacBook Air)
+PostgreSQL als Datenbank (ebenfalls in Docker)
+API unter Port 5326 erreichbar
+Erreicht wird alles extern über Tailscale Funnel, nicht per Port Forwarding
+
+Backend bietet:
+Rollenverwaltung (Tank/Damage/Support)
+Spin-Speicherung
+WebSocket-Broadcasts über /ws
+Endpunkte wie /roles-sync, /roles-current, /spin-result
+
+2. WheelPicker-Client
+PySide6-App
+Einzelner User bedient ein „Wheel of Fortune“
+GUI enthält Rollenlisten, Spinner, Pair-Mode usw.
+Unterstützt Offline/Online-Modus per Overlay (kein Systemdialog!)
+
+Online:
+Sendet Rollen per /roles-sync
+Sendet Spin-Ergebnisse per /spin-result
+
+Offline:
+Keine Netzwerkrequests
+Nutzt WebSockets NICHT, sendet nur Daten an das Backend
+
+3. Bet-Client
+PySide6-App
+Benutzer gibt beim Start einen Namen ein (Overlay-Popup-Stil wie beim WheelPicker)
+Lokale Speicherung des Nutzernamens (Savefile)
+Verbindet sich über WebSocket mit dem Backend
+
+Funktionen:
+Empfängt Rollen-Updates (Tank/Damage/Support) per WS
+Holt beim Verbindungsaufbau einmalig via HTTP /roles-current
+Zeigt dynamische Checkbox-Listen, damit Nutzer Tipps platzieren können
+Keine Trainer-Funktion, nur Empfang + Anzeige
+
+Technische Vorgaben:
+WebSocket-URL wird aus API_BASE_URL abgeleitet
+Kommunikation Backend → Clients: JSON-Broadcasts
+PostgreSQL-Struktur: Tabellen spin_results, role_names
+Docker Compose nutzt Service-Name db für PostgreSQL
+System soll robust gegen Offline-Betrieb sein (Verbindungsfehler dürfen nicht crashen)
+
+Bei Fragen bitte immer alle 3 Komponenten im Blick behalten
+
+📌 Bitte diesen gesamten Kontext für alle folgenden Antworten berücksichtigen.
+
+Wenn ich neue Fragen stelle, erwarte ich, dass du dich automatisch auf dieses Gesamtprojekt beziehst (Backend + WheelPicker + Bet-Client).

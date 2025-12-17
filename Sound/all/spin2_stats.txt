@@ -1,0 +1,30 @@
+[aist#0:0/pcm_u8 @ 0xc11034180] Guessed Channel Layout: stereo
+Input #0, wav, from 'spin2.wav':
+  Metadata:
+    encoder         : Lavf61.1.100
+  Duration: 00:00:10.03, bitrate: 352 kb/s
+  Stream #0:0: Audio: pcm_u8 ([1][0][0][0] / 0x0001), 22050 Hz, stereo, u8, 352 kb/s
+Stream mapping:
+  Stream #0:0 -> #0:0 (pcm_u8 (native) -> pcm_s16le (native))
+Press [q] to stop, [?] for help
+Output #0, null, to 'pipe:':
+  Metadata:
+    encoder         : Lavf62.3.100
+  Stream #0:0: Audio: pcm_s16le, 192000 Hz, stereo, s16, 6144 kb/s
+    Metadata:
+      encoder         : Lavc62.11.100 pcm_s16le
+[Parsed_loudnorm_0 @ 0xc11088900] 
+{
+	"input_i" : "-15.15",
+	"input_tp" : "-0.69",
+	"input_lra" : "13.40",
+	"input_thresh" : "-28.57",
+	"output_i" : "-17.55",
+	"output_tp" : "-3.48",
+	"output_lra" : "15.00",
+	"output_thresh" : "-29.88",
+	"normalization_type" : "dynamic",
+	"target_offset" : "1.55"
+}
+[out#0/null @ 0xc11088180] video:0KiB audio:7523KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown
+size=N/A time=00:00:10.10 bitrate=N/A speed=27.3x elapsed=0:00:00.36    
