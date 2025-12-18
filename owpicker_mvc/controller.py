@@ -8,8 +8,9 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from view.wheel_view import WheelView
 from view.overlay import ResultOverlay
 from services.sound import SoundManager
+from services import persistence, state_store
 import config
-import requests
+from services import sync_service, spin_planner, hero_ban_merge
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
@@ -28,7 +29,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._hero_ban_rebuild = False
         self._hero_ban_pending = False
         self._hero_ban_override_role: str | None = None
-        self._mode_states = self._build_mode_states(saved)
+        self._state_store = state_store.ModeStateStore.from_saved(saved)
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
@@ -102,7 +103,7 @@ class MainWindow(QtWidgets.QMainWindow):
         root.addLayout(grid, 1)
 
         # Startzustand pro Rolle (Spieler-Modus)
-        active_states = self._mode_states[self.current_mode]
+        active_states = self._state_store.get_mode_state(self.current_mode)
         tank_state = active_states["Tank"]
         dps_state = active_states["Damage"]
         support_state = active_states["Support"]
@@ -482,35 +483,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # --- Vollständige, konfliktfreie Zuordnung per Backtracking suchen ---
 
-        num_roles = len(active)
-        role_indices = list(range(num_roles))
-        random.shuffle(role_indices)
-
-        assigned_for_role = [None] * num_roles  # speichert das Label pro Rolle
-
-        def backtrack(pos: int, used_players: set) -> bool:
-            if pos == num_roles:
-                return True  # alle Rollen erfolgreich belegt
-
-            idx = role_indices[pos]
-            candidates = list(all_candidates_per_role[idx])
-            random.shuffle(candidates)
-
-            for label, players in candidates:
-                # Kandidat nur verwenden, wenn keiner der Spieler schon benutzt wurde
-                if any(p in used_players for p in players):
-                    continue
-                assigned_for_role[idx] = label
-                new_used = set(used_players)
-                new_used.update(players)
-                if backtrack(pos + 1, new_used):
-                    return True
-                # Rückgängig machen
-                assigned_for_role[idx] = None
-
-            return False
-
-        if not backtrack(0, set()):
+        assigned_for_role = spin_planner.plan_assignments(all_candidates_per_role)
+        if not assigned_for_role:
             # Es existiert keine vollständige, konfliktfreie Belegung aller ausgewählten Rollen
             self.sound.stop_spin()
             self.sound.stop_ding()
@@ -672,7 +646,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # Normaler Script-Run
             base_dir = Path(__file__).resolve().parent
 
-        return base_dir / "saved_state.json"
+        return persistence.state_file(base_dir)
     def _on_volume_changed(self, value: int):
         factor = max(0.0, min(1.0, value / 100.0))
         self.sound.set_master_volume(factor)
@@ -734,83 +708,16 @@ class MainWindow(QtWidgets.QMainWindow):
                 })
         return entries
 
-    def _default_role_state(self, role: str, mode: str) -> dict:
-        """Liefert Startwerte pro Rolle/Modus."""
-        pair_defaults = {"Tank": False, "Damage": True, "Support": True}
-        if mode == "heroes":
-            defaults = config.DEFAULT_HEROES.get(role, [])
-        else:
-            defaults = config.DEFAULT_NAMES.get(role, [])
-        return {
-            "entries": self._normalize_entries_for_state(defaults),
-            "include_in_all": True,
-            "pair_mode": pair_defaults.get(role, False),
-            "use_subroles": False,
-        }
-
-    def _role_state_from_saved(self, data, role: str, mode: str) -> dict:
-        """Mischt gespeicherte Werte mit Defaults."""
-        base = self._default_role_state(role, mode)
-        if not isinstance(data, dict):
-            return base
-        if "entries" in data:
-            base["entries"] = self._normalize_entries_for_state(data["entries"])
-        elif "names" in data:
-            base["entries"] = self._normalize_entries_for_state(data["names"])
-        base["include_in_all"] = bool(data.get("include_in_all", base["include_in_all"]))
-        base["pair_mode"] = bool(data.get("pair_mode", base["pair_mode"]))
-        base["use_subroles"] = bool(data.get("use_subroles", base["use_subroles"]))
-        return base
-
-    def _build_mode_states(self, saved: dict) -> dict:
-        """Baut Modus-States aus gespeicherten Daten (inkl. Legacy-Fallback)."""
-        roles = ("Tank", "Damage", "Support")
-        players_saved = saved.get("players") if isinstance(saved, dict) else {}
-        heroes_saved = saved.get("heroes") if isinstance(saved, dict) else {}
-        mode_states = {"players": {}, "heroes": {}}
-        for role in roles:
-            if isinstance(players_saved, dict) and role in players_saved:
-                players_src = players_saved.get(role, {})
-            else:
-                players_src = saved.get(role, {})
-            mode_states["players"][role] = self._role_state_from_saved(players_src, role, "players")
-
-            heroes_src = heroes_saved.get(role, {}) if isinstance(heroes_saved, dict) else {}
-            mode_states["heroes"][role] = self._role_state_from_saved(heroes_src, role, "heroes")
-        return mode_states
-
-    def _role_states_from_wheels(self) -> dict:
-        """Aktuellen Zustand aller Räder (aktiver Modus) auslesen."""
-        base_state = self._mode_states.get(self.current_mode, {}) if self.hero_ban_active else {}
-
-        def wheel_state(w: WheelView, role: str) -> dict:
-            base = base_state.get(role, {}) if isinstance(base_state, dict) else {}
-            return {
-                "entries": w.get_current_entries(),
-                "include_in_all": w.btn_include_in_all.isChecked(),
-                "pair_mode": base.get("pair_mode", getattr(w, "pair_mode", False)),
-                "use_subroles": base.get("use_subroles", getattr(w, "use_subrole_filter", False)),
-            }
-        return {
-            "Tank": wheel_state(self.tank, "Tank"),
-            "Damage": wheel_state(self.dps, "Damage"),
-            "Support": wheel_state(self.support, "Support"),
-        }
-
-    def _capture_current_mode_state(self):
-        """Schreibt den UI-Zustand des aktiven Modus in _mode_states."""
-        self._mode_states[self.current_mode] = self._role_states_from_wheels()
-
     def _load_mode_into_wheels(self, mode: str, hero_ban: bool = False):
         """Wendet den gespeicherten Zustand eines Modus auf die UI an."""
-        if mode not in self._mode_states:
+        state = self._state_store.get_mode_state(mode)
+        if not state:
             return
-        state = self._mode_states[mode]
         prev_restoring = getattr(self, "_restoring_state", False)
         self._restoring_state = True
         try:
             for role, wheel in (("Tank", self.tank), ("Damage", self.dps), ("Support", self.support)):
-                role_state = state.get(role) or self._default_role_state(role, mode)
+                role_state = state.get(role) or self._state_store.default_role_state(role, mode)
                 state[role] = role_state
                 wheel.load_entries(
                     role_state.get("entries", []),
@@ -843,7 +750,11 @@ class MainWindow(QtWidgets.QMainWindow):
             if self.hero_ban_active:
                 return
             self.last_non_hero_mode = self.current_mode
-            self._capture_current_mode_state()
+            self._state_store.capture_mode_from_wheels(
+                self.current_mode,
+                {"Tank": self.tank, "Damage": self.dps, "Support": self.support},
+                hero_ban_active=self.hero_ban_active,
+            )
             self.current_mode = "heroes"
             self.btn_mode_players.setChecked(False)
             self.btn_mode_heroes.setChecked(False)
@@ -855,7 +766,11 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         # Beim Verlassen des Hero-Ban die Hero-Listen sichern
         if self.hero_ban_active:
-            self._capture_current_mode_state()
+            self._state_store.capture_mode_from_wheels(
+                self.current_mode,
+                {"Tank": self.tank, "Damage": self.dps, "Support": self.support},
+                hero_ban_active=self.hero_ban_active,
+            )
             self.hero_ban_active = False
             # Mittleres Rad wieder normalisieren
             self.dps.set_override_entries(None)
@@ -882,26 +797,21 @@ class MainWindow(QtWidgets.QMainWindow):
           "volume": int
         }
         """
-        try:
-            if self._state_file.exists():
-                with self._state_file.open("r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    return data
-        except Exception as e:
-            config.debug_print("Konnte saved_state.json nicht laden:", e)
+        data = persistence.load_state(self._state_file)
+        if isinstance(data, dict):
+            return data
         return {}
 
     def _gather_state(self) -> dict:
         """
         Liest den aktuellen Zustand beider Modi aus.
         """
-        self._capture_current_mode_state()
-        return {
-            "players": self._mode_states.get("players", {}),
-            "heroes": self._mode_states.get("heroes", {}),
-            "volume": self.volume_slider.value(),
-        }
+        self._state_store.capture_mode_from_wheels(
+            self.current_mode,
+            {"Tank": self.tank, "Damage": self.dps, "Support": self.support},
+            hero_ban_active=self.hero_ban_active,
+        )
+        return self._state_store.to_saved(self.volume_slider.value())
 
     def _update_hero_ban_wheel(self):
         """Führt die aktivierten Rollen zu einem zentralen Rad zusammen (Einzel-Helden)."""
@@ -928,21 +838,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 selected_roles.append("Support")
 
         combined: list[dict] = []
-        seen = set()
         role_to_wheel = {"Tank": self.tank, "Damage": self.dps, "Support": self.support}
-        for role in selected_roles:
-            wheel = role_to_wheel.get(role)
-            if not wheel:
-                continue
-            base_entries = wheel.get_current_entries()
-            for entry in base_entries:
-                if not entry.get("active", True):
-                    continue
-                name = str(entry.get("name", "")).strip()
-                if not name or name in seen:
-                    continue
-                seen.add(name)
-                combined.append({"name": name, "subroles": [], "active": True})
+        combined = hero_ban_merge.merge_selected_roles(selected_roles, role_to_wheel)
 
         try:
             # Nur das mittlere Rad nutzt die zusammengeführte Liste – ohne die sichtbare Liste zu überschreiben.
@@ -982,12 +879,8 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         if getattr(self, "_restoring_state", False):
             return
-        try:
-            state = self._gather_state()
-            with self._state_file.open("w", encoding="utf-8") as f:
-                json.dump(state, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            config.debug_print("Konnte saved_state.json nicht speichern:", e)
+        state = self._gather_state()
+        persistence.save_state(self._state_file, state)
         self._sync_all_roles_to_server()
         if self.hero_ban_active:
             self._update_hero_ban_wheel()
@@ -1008,96 +901,20 @@ class MainWindow(QtWidgets.QMainWindow):
         if not getattr(self, "online_mode", False):
             config.debug_print("Spin-Result: Offline-Modus – kein Senden.")
             return
-        
-        import threading
-        import requests
-
-        # Kleine Hilfsfunktion: Label + pair_mode -> (name1, name2)
-        def split_pair(label: str, is_pair_mode: bool):
-            label = (label or "").strip()
-            if not label:
-                return "", ""
-
-            if not is_pair_mode:
-                # Kein Paarmodus → alles in *_1, *_2 bleibt leer
-                return label, ""
-
-            # Paarmodus: nach "+" aufsplitten
-            parts = [p.strip() for p in label.split("+") if p.strip()]
-            if not parts:
-                return "", ""
-            if len(parts) == 1:
-                return parts[0], ""
-            # Falls mehr als 2 drinstehen sollten, nehmen wir den ersten als *_1
-            # und den Rest zusammen als *_2
-            return parts[0], " + ".join(parts[1:])
-
-        def _worker():
-            try:
-                tank1, tank2 = split_pair(tank,    getattr(self.tank,    "pair_mode", False))
-                dps1, dps2   = split_pair(damage,  getattr(self.dps,     "pair_mode", False))
-                sup1, sup2   = split_pair(support, getattr(self.support, "pair_mode", False))
-
-                payload = {
-                    "tank1": tank1,
-                    "tank2": tank2,
-                    "dps1": dps1,
-                    "dps2": dps2,
-                    "support1": sup1,
-                    "support2": sup2,
-                }
-
-                base = config.API_BASE_URL
-                url = base.rstrip("/") + "/spin-result"
-
-                config.debug_print("Sende Payload:", payload)  # zum Debuggen
-
-                resp = requests.post(url, json=payload, timeout=3)
-                resp.raise_for_status()
-                config.debug_print("Spin-Ergebnis erfolgreich an Server gesendet:", resp.json())
-            except Exception as e:
-                config.debug_print("Fehler beim Senden des Spin-Ergebnisses:", e)
-
-        threading.Thread(target=_worker, daemon=True).start()
+        pair_modes = {
+            "Tank": getattr(self.tank, "pair_mode", False),
+            "Damage": getattr(self.dps, "pair_mode", False),
+            "Support": getattr(self.support, "pair_mode", False),
+        }
+        sync_service.send_spin_result(tank, damage, support, pair_modes)
         
     def _sync_all_roles_to_server(self):
         if not getattr(self, "online_mode", False):
             config.debug_print("Sync übersprungen: Offline-Modus.")
             return
-        """
-        Schickt alle Rollenlisten in ihrer aktuellen Reihenfolge an den Server.
-        """
-        import threading
-        import requests
-
-        def _worker():
-            try:
-                payload = {
-                    "roles": [
-                        {
-                            "role": "Tank",
-                            "names": self.tank.get_current_names(),
-                        },
-                        {
-                            "role": "Damage",
-                            "names": self.dps.get_current_names(),
-                        },
-                        {
-                            "role": "Support",
-                            "names": self.support.get_current_names(),
-                        },
-                    ]
-                }
-
-                base = config.API_BASE_URL
-                url = base.rstrip("/") + "/roles-sync"
-
-                config.debug_print("SYNC →", payload)
-                resp = requests.post(url, json=payload, timeout=3)
-                resp.raise_for_status()
-                config.debug_print("SYNC OK:", resp.json())
-
-            except Exception as e:
-                config.debug_print("Fehler beim Rollen-Sync:", e)
-
-        threading.Thread(target=_worker, daemon=True).start()
+        payload = [
+            {"role": "Tank", "names": self.tank.get_current_names()},
+            {"role": "Damage", "names": self.dps.get_current_names()},
+            {"role": "Support", "names": self.support.get_current_names()},
+        ]
+        sync_service.sync_roles(payload)
