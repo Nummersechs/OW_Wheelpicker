@@ -223,8 +223,6 @@ class MainWindow(QtWidgets.QMainWindow):
         
         self.online_mode = False  # Standard
         self.overlay.modeChosen.connect(self._on_mode_chosen)
-        # Tooltip-Caches nach dem ersten User-Klick aufwärmen
-        self._tooltip_warmed = False
         self.installEventFilter(self)
         app = QtWidgets.QApplication.instance()
         if app:
@@ -233,6 +231,9 @@ class MainWindow(QtWidgets.QMainWindow):
         # Direkt beim Start Modus wählen lassen
         self._set_controls_enabled(False)
         self.overlay.show_online_choice()
+        # Buttons vorerst sperren, bis Caches einmal aufgebaut sind
+        self.overlay.set_choice_enabled(False)
+        QtCore.QTimer.singleShot(0, self._warmup_tooltips_initial)
 
         # JETZT: Save-Hooks anschließen
         for w in (self.tank, self.dps, self.support):
@@ -256,6 +257,12 @@ class MainWindow(QtWidgets.QMainWindow):
         # Tooltips sofort erlauben (werden später noch einmal frisch berechnet)
         self._set_tooltips_ready(True)
 
+    def _warmup_tooltips_initial(self):
+        """Initial Cache/Tooltips vorbereiten und Online/Offline-Buttons freigeben."""
+        self._refresh_tooltip_caches()
+        self._reset_hover_cache_under_cursor()
+        QtCore.QTimer.singleShot(180, lambda: self.overlay.set_choice_enabled(True))
+
     def _on_overlay_closed(self):
         self._set_controls_enabled(True)
         self.sound.stop_ding()
@@ -267,12 +274,14 @@ class MainWindow(QtWidgets.QMainWindow):
         QtCore.QTimer.singleShot(200, self._refresh_tooltip_caches)
 
     def eventFilter(self, obj, event):
-        # Nach dem ersten Nutzer-Event (Klick/Bewegung) Tooltip-Caches erzwingen
-        if event.type() in (QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseMove) and not getattr(self, "_tooltip_warmed", False):
-            self._tooltip_warmed = True
+        # Nach längeren Pausen/Focus-Wechsel Tooltip-Caches auffrischen
+        if event.type() in (
+            QtCore.QEvent.FocusIn,
+            QtCore.QEvent.WindowActivate,
+            QtCore.QEvent.ApplicationActivate,
+        ):
             QtCore.QTimer.singleShot(0, self._refresh_tooltip_caches)
-            QtCore.QTimer.singleShot(200, self._refresh_tooltip_caches)
-            QtCore.QTimer.singleShot(0, self._reset_hover_cache_under_cursor)
+            QtCore.QTimer.singleShot(150, self._refresh_tooltip_caches)
         return super().eventFilter(obj, event)
 
     def _apply_theme(self):
@@ -1330,8 +1339,6 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_mode_chosen(self, online: bool):
         self.online_mode = online
         self._set_controls_enabled(True)
-        # Erste Benutzereingabe (Online/Offline) → Tooltip-Caches sofort aufwärmen
-        self._tooltip_warmed = True
         self._refresh_tooltip_caches()
         QtCore.QTimer.singleShot(150, self._refresh_tooltip_caches)
         QtCore.QTimer.singleShot(0, self._reset_hover_cache_under_cursor)

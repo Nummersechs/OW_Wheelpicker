@@ -122,6 +122,11 @@ class ResultOverlay(QtWidgets.QWidget):
 
         self._show()
 
+    def set_choice_enabled(self, enabled: bool):
+        """Aktiviert/Deaktiviert die Online/Offline-Buttons (z.B. während des Ladens)."""
+        self.btn_online.setEnabled(enabled)
+        self.btn_offline.setEnabled(enabled)
+
     def _choose_online(self):
         self.hide()
         self.modeChosen.emit(True)   # True = Online
