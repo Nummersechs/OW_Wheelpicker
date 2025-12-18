@@ -117,6 +117,10 @@ class WheelView(QtWidgets.QWidget):
             "Gleiche Namen werden pro Spin nur einmal vergeben."
         )
         self.names_hint.setStyleSheet("color:#444; font-size:12px; padding:2px;")
+        self.btn_sort_names = QtWidgets.QPushButton("A→Z sortieren")
+        self.btn_sort_names.setFixedHeight(28)
+        self.btn_sort_names.setToolTip("Liste alphabetisch sortieren")
+        self.btn_sort_names.clicked.connect(self._on_sort_names_clicked)
         self.names = NamesList(subrole_labels=self.subrole_labels)
 
         # Start-Namen anlegen – neue Namen sind standardmäßig aktiv (Checked)
@@ -182,6 +186,7 @@ class WheelView(QtWidgets.QWidget):
         inner.addLayout(btn_row)
         inner.addWidget(self.names_hint)
         inner.addWidget(self.names)
+        inner.addWidget(self.btn_sort_names, 0, QtCore.Qt.AlignRight)
         
         # NEU: Checkbox-Styling
         self.setStyleSheet("""
@@ -212,6 +217,10 @@ class WheelView(QtWidgets.QWidget):
         if hasattr(self, "view") and hasattr(self.view, "_refit_view"):
             self.view._refit_view()
         
+    def _on_sort_names_clicked(self):
+        """Sortiert die Namensliste alphabetisch und aktualisiert das Rad."""
+        self.names.sort_alphabetically()
+        self._on_names_list_changed()
 
     def _apply_placeholder(self):
         self.result.setToolTip(

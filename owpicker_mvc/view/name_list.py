@@ -131,6 +131,34 @@ class NamesList(QtWidgets.QListWidget):
             return
         super().keyPressEvent(ev)
 
+    def sort_alphabetically(self):
+        """Sortiert die Liste A→Z (Case-insensitive), leere Namen ans Ende."""
+        entries = []
+        for i in range(self.count()):
+            item = self.item(i)
+            entries.append(
+                (
+                    item.text(),
+                    item.checkState() == QtCore.Qt.Checked,
+                    item.data(self.SUBROLE_ROLE) or [],
+                )
+            )
+
+        # Leere nach unten, ansonsten case-insensitive sortieren
+        entries.sort(key=lambda e: (not e[0].strip(), e[0].lower()))
+
+        # Bestehende Widgets sauber lösen, dann neu aufbauen
+        self.blockSignals(True)
+        while self.count():
+            it = self.takeItem(0)
+            widget = self.itemWidget(it)
+            if widget:
+                widget.setParent(None)
+        for name, active, subroles in entries:
+            self.add_name(name, subroles=subroles, active=active)
+        self.blockSignals(False)
+        self.metaChanged.emit()
+
     def _show_context_menu(self, pos: QtCore.QPoint):
         item = self.itemAt(pos)
         if item is not None and not item.isSelected():
