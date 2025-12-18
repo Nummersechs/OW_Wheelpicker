@@ -64,7 +64,14 @@ class ModeStateStore:
         if not isinstance(data, dict):
             return base
         if "entries" in data:
-            base["entries"] = cls._normalize_entries_for_state(data["entries"])
+            entries = cls._normalize_entries_for_state(data["entries"])
+            # Schutz: Falls versehentlich Hero-Default-Liste bei Spielern gelandet ist,
+            # setze auf Player-Defaults zurück (fix für überschriebenen Spieler-Tab).
+            if mode == "players":
+                hero_defaults = set(config.DEFAULT_HEROES.get(role, []))
+                if hero_defaults and set(e["name"] for e in entries) == hero_defaults:
+                    entries = cls._normalize_entries_for_state(config.DEFAULT_NAMES.get(role, []))
+            base["entries"] = entries
         elif "names" in data:
             base["entries"] = cls._normalize_entries_for_state(data["names"])
         # include_in_all wird nicht mehr aus saved_state übernommen (immer Default True)

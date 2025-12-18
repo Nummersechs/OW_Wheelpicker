@@ -112,9 +112,8 @@ class WheelView(QtWidgets.QWidget):
         # Eine Liste, in der jede Zeile ein Name mit Häkchen ist.
                 # Hinweislabel für die Checkboxen
         self.names_hint = QtWidgets.QLabel(
-            "Aktivierte Namen werden berücksichtigt.\n"
-            "Segmente anklicken, um sie vom Spin auszuschließen.\n"
-            "Gleiche Namen werden pro Spin nur einmal vergeben."
+            "Aktive Namen zählen. Segment-Klick schließt aus.\n"
+            "Jeder Name nur einmal pro Spin."
         )
         self.names_hint.setStyleSheet("color:#444; font-size:12px; padding:2px;")
         self.btn_sort_names = QtWidgets.QPushButton("A→Z sortieren")
@@ -143,7 +142,7 @@ class WheelView(QtWidgets.QWidget):
         # Neue Zeilen sollen sofort die korrekte Sichtbarkeit der Subrollen übernehmen
         self.names.model().rowsInserted.connect(lambda *_: self._apply_subrole_visibility())
 # ---------- Buttons unter dem Rad ----------
-        self._default_spin_label = "🔁 Dieses Rad drehen"
+        self._default_spin_label = "🔁 Diese Rolle drehen"
         self.btn_local_spin = QtWidgets.QPushButton(self._default_spin_label)
         self.btn_local_spin.setFixedHeight(36)
         self.btn_local_spin.clicked.connect(self.request_spin.emit)
@@ -229,18 +228,18 @@ class WheelView(QtWidgets.QWidget):
 
         if self.pair_mode:
             if self.use_subrole_filter and len(self.subrole_labels) >= 2:
-                self.names_hint.setText(f"Paare: {self.subrole_labels[0]} + {self.subrole_labels[1]}")
+                self.names_hint.setText(
+                    f"Paare: {self.subrole_labels[0]} + {self.subrole_labels[1]}. Segment-Klick schließt aus."
+                )
             else:
                 self.names_hint.setText(
-                    "Paare werden automatisch gebildet.\n"
-                    "Segmente anklicken, um sie vom Spin auszuschließen.\n"
-                    "Gleiche Namen werden pro Spin nur einmal vergeben."
+                    "Paare entstehen automatisch. Segment-Klick schließt aus.\n"
+                    "Jeder Name nur einmal pro Spin."
                 )
         else:
             self.names_hint.setText(
-                "Aktivierte Namen werden berücksichtigt.\n"
-                "Segmente anklicken, um sie vom Spin auszuschließen.\n"
-                "Gleiche Namen werden pro Spin nur einmal vergeben."
+                "Aktive Namen zählen. Segment-Klick schließt aus.\n"
+                "Jeder Name nur einmal pro Spin."
             )
 
     def get_current_names(self) -> list[str]:

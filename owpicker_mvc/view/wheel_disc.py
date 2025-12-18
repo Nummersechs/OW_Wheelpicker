@@ -24,6 +24,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         self.setTransformOriginPoint(0, 0)
         self.setAcceptHoverEvents(True)
         self._last_hover_idx: int | None = None
+        self._label_truncated: list[bool] = []
         # Own hover overlay inside the scene (more reliable than native tooltips)
         self._hover_item: QtWidgets.QGraphicsTextItem | None = None
         self._hover_bg: QtWidgets.QGraphicsRectItem | None = None
@@ -53,6 +54,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         s = int(2 * self.radius) + 4
         pm = QtGui.QPixmap(s, s)
         pm.fill(QtCore.Qt.transparent)
+        self._label_truncated = [False for _ in self.names]
 
         p = QtGui.QPainter(pm)
         p.setRenderHint(QtGui.QPainter.Antialiasing, True)
@@ -169,6 +171,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
 
             # 1) Wenn es *extrem* schmal ist → gar kein Label
             if max_w < 12.0:
+                self._label_truncated[i] = True
                 continue
 
             # 2) Wenn es recht schmal ist → nur Initialen
@@ -186,6 +189,10 @@ class WheelDisc(QtWidgets.QGraphicsObject):
                 text = initials_label(raw)
             else:
                 text = fmt(raw)
+            full_text = fmt(raw)
+            # Wenn wir nicht den vollen Text zeigen können (Initialen), merken wir das für den Tooltip
+            if text != full_text:
+                self._label_truncated[i] = True
 
             # FontMetrics für aktuelle Schrift
             fm = QtGui.QFontMetrics(base_font)
@@ -209,6 +216,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
             # als "…" oder "A…" dargestellt würde, dann nur Initialen anzeigen.
             # Wir erlauben aber z.B. "AB..." (mind. 2 Buchstaben vor den Punkten).
             if safe_text != text and "\n" not in safe_text:
+                self._label_truncated[i] = True
                 trimmed = safe_text.strip()
                 # reine Ellipse "..." oder "…"
                 is_just_ellipsis = trimmed in ("...", "…")
@@ -269,6 +277,8 @@ class WheelDisc(QtWidgets.QGraphicsObject):
                     ok, fm_current, final_text = fits_height(current_font, safe_text)
                     if ok:
                         break
+            if final_text != full_text:
+                self._label_truncated[i] = True
 
             # Zeichnen mit Rotation (Text „zeigt“ zum Mittelpunkt)
             p.save()
@@ -312,6 +322,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         """Zeigt beim Hover den vollen Namen an der Maus, wenn das Segment aktiv ist."""
         if not self.names:
             self._hide_hover_overlay()
+            self._hide_floating_label()
             self._last_hover_idx = None
             return
         pos = event.pos()
@@ -322,6 +333,18 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         idx = int(angle // angle_step) % n
         if idx in self.disabled_indices or not self.show_labels:
             self._hide_hover_overlay()
+            self._hide_floating_label()
+            self._last_hover_idx = None
+            return
+        # Tooltip nur anzeigen, wenn der Label-Text im Segment abgeschnitten ist
+        self._ensure_cache()
+        is_truncated = (
+            0 <= idx < len(self._label_truncated)
+            and self._label_truncated[idx]
+        )
+        if not is_truncated:
+            self._hide_hover_overlay()
+            self._hide_floating_label()
             self._last_hover_idx = None
             return
         # Tooltip bei jeder Bewegung neu setzen, damit er der Maus folgt
@@ -428,5 +451,6 @@ class WheelDisc(QtWidgets.QGraphicsObject):
     def set_names(self, names: List[str]):
         self.names = [n.strip() for n in names if n.strip()]
         self.disabled_indices.clear()
+        self._label_truncated = []
         self._cached = None
         self.update()

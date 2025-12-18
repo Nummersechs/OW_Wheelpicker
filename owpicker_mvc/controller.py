@@ -84,6 +84,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_mode_heroban.setCheckable(True)
         self.btn_mode_maps = QtWidgets.QPushButton("Map-Wahl/Ban")
         self.btn_mode_maps.setCheckable(True)
+        self._mode_buttons = [
+            self.btn_mode_players,
+            self.btn_mode_heroes,
+            self.btn_mode_heroban,
+            self.btn_mode_maps,
+        ]
+        for btn in self._mode_buttons:
+            btn.setProperty("modeButton", True)
+            btn.toggled.connect(self._update_mode_button_styles)
         self.btn_mode_players.clicked.connect(lambda: self._on_mode_button_clicked("players"))
         self.btn_mode_heroes.clicked.connect(lambda: self._on_mode_button_clicked("heroes"))
         self.btn_mode_heroban.clicked.connect(lambda: self._on_mode_button_clicked("hero_ban"))
@@ -156,6 +165,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_mode_players.setChecked(self.current_mode == "players")
         self.btn_mode_heroes.setChecked(self.current_mode == "heroes")
         self.btn_mode_heroban.setChecked(False)
+        self._update_mode_button_styles()
         self._load_mode_into_wheels(self.current_mode)
 
         # Spin-Signale
@@ -289,6 +299,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 font-weight:600;
                 padding:8px 18px;
             }
+            QPushButton[modeButton="true"] {
+                padding:6px 14px;
+                font-size:13px;
+                min-width:120px;
+            }
+            QPushButton[modeButton="true"]:checked {
+                padding:10px 18px;
+                font-size:14px;
+            }
             QPushButton:hover { background:#0a4fc0; }
             QPushButton:pressed { background:#0946ab; }
 
@@ -329,6 +348,18 @@ class MainWindow(QtWidgets.QMainWindow):
                 background: black;            /* Hakenfarbe */
             }
         """)
+
+    def _update_mode_button_styles(self, *_args):
+        """
+        Erzwingt ein Neupolishen der Mode-Buttons, damit die padding-Änderung
+        bei checked/unchecked sofort gegriffen wird.
+        """
+        if not getattr(self, "_mode_buttons", None):
+            return
+        for btn in self._mode_buttons:
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+            btn.updateGeometry()
 
     def resizeEvent(self, e: QtGui.QResizeEvent):
         super().resizeEvent(e); 
@@ -441,6 +472,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _spin_map_all(self, subset: list[str] | None = None):
         if self.pending > 0:
             return
+        # Neuer Spin → finale Anzeige wieder erlauben
+        self._result_sent_this_spin = False
         candidates = list(subset) if subset is not None else list(getattr(self, "_map_combined", []))
         if not candidates:
             self.summary.setText("Bitte Maps eintragen.")
@@ -839,7 +872,7 @@ class MainWindow(QtWidgets.QMainWindow):
             w.result_widget.setVisible(False)
             w.btn_local_spin.setVisible(True)
             w.btn_local_spin.setEnabled(True)
-            w.btn_local_spin.setText("🔁 Diese Kategorie")
+            w.btn_local_spin.setText("🔁 Diese Map drehen")
             w.btn_local_spin.clicked.connect(lambda _=None, c=cat: self._spin_map_category(c))
             w.btn_include_in_all.setChecked(include_checked)
             w.btn_include_in_all.toggled.connect(self._rebuild_map_wheel)
@@ -1079,6 +1112,9 @@ class MainWindow(QtWidgets.QMainWindow):
         # Aktuelle Ergebnisse für den Modus merken, bevor wir wechseln
         self._snapshot_mode_results()
         if target == "maps":
+            # Merk dir, welcher Rollen-Modus gerade in den Wheels steckt,
+            # damit Map-Mode-Saves später nicht versehentlich den falschen Modus überschreiben.
+            self.last_non_hero_mode = self.current_mode
             if self.hero_ban_active:
                 self.hero_ban_active = False
                 self.dps.set_override_entries(None)
@@ -1125,7 +1161,9 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         mode_to_capture = self.current_mode
         if mode_to_capture == "maps":
-            mode_to_capture = getattr(self, "last_non_hero_mode", "players")
+            mode_to_capture = getattr(self, "last_non_hero_mode", "players") or "players"
+            if mode_to_capture not in ("players", "heroes"):
+                mode_to_capture = "players"
         self._state_store.capture_mode_from_wheels(
             mode_to_capture,
             {"Tank": self.tank, "Damage": self.dps, "Support": self.support},
