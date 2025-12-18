@@ -12,6 +12,9 @@ from services import persistence, state_store
 import config
 from services import sync_service, spin_planner, hero_ban_merge, spin_service, mode_manager
 
+# Fallback für "unbegrenzt" bei Widgetbreiten/Höhen (PySide6 exportiert QWIDGETSIZE_MAX nicht immer)
+QWIDGETSIZE_MAX = getattr(QtWidgets, "QWIDGETSIZE_MAX", getattr(QtCore, "QWIDGETSIZE_MAX", 16777215))
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -29,6 +32,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._hero_ban_rebuild = False
         self._hero_ban_pending = False
         self._hero_ban_override_role: str | None = None
+        self._role_base_widths: dict[str, int] = {}
         self._state_store = state_store.ModeStateStore.from_saved(saved)
         self._mode_results: dict[str, dict[str, str]] = {}
 
@@ -119,6 +123,9 @@ class MainWindow(QtWidgets.QMainWindow):
         grid = QtWidgets.QGridLayout(role_container)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(12)
+        # Alle drei Spalten gleichmäßig strecken, damit die Breiten beim Moduswechsel stabil bleiben
+        for col in range(3):
+            grid.setColumnStretch(col, 1)
 
         # Startzustand pro Rolle (Spieler-Modus)
         active_states = self._state_store.get_mode_state(self.current_mode)
@@ -150,6 +157,8 @@ class MainWindow(QtWidgets.QMainWindow):
         grid.addWidget(self.tank, 0, 0)
         grid.addWidget(self.dps, 0, 1)
         grid.addWidget(self.support, 0, 2)
+        # Basisbreiten nach dem ersten Layout ermitteln
+        QtCore.QTimer.singleShot(0, self._capture_role_base_widths)
 
         # ----- Map-Mode-Container -----
         self._map_result_text = "–"
@@ -361,6 +370,28 @@ class MainWindow(QtWidgets.QMainWindow):
             btn.style().polish(btn)
             btn.updateGeometry()
 
+    def _capture_role_base_widths(self):
+        """Merkt sich die aktuelle Breite jeder Rollen-Karte als Referenz."""
+        widths: dict[str, int] = {}
+        for name, widget in (("Tank", self.tank), ("Damage", self.dps), ("Support", self.support)):
+            w = widget.width() or widget.sizeHint().width()
+            widths[name] = max(1, int(w))
+        self._role_base_widths = widths
+
+    def _apply_role_width_lock(self, lock: bool):
+        """
+        Begrenze/entgrenze die Rollenbreiten – in Hero-Ban sperren wir auf die
+        gemerkte Basisbreite, damit z.B. Tank nicht breiter wird.
+        """
+        if not self._role_base_widths:
+            self._capture_role_base_widths()
+        for name, widget in (("Tank", self.tank), ("Damage", self.dps), ("Support", self.support)):
+            base = self._role_base_widths.get(name, widget.sizeHint().width() or widget.width())
+            if lock:
+                widget.setMaximumWidth(base)
+            else:
+                widget.setMaximumWidth(QWIDGETSIZE_MAX)
+
     def resizeEvent(self, e: QtGui.QResizeEvent):
         super().resizeEvent(e); 
         if self.overlay and self.centralWidget(): self.overlay.setGeometry(self.centralWidget().rect())
@@ -434,7 +465,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     wheel._update_clear_button_enabled()
 
     def _set_hero_ban_visuals(self, active: bool):
-        """Delegiert an den Mode-Manager."""
+        """Delegiert an den Mode-Manager und sperrt Breiten in Hero-Ban."""
+        self._apply_role_width_lock(active)
         mode_manager.set_hero_ban_visuals(self, active)
     def _set_controls_enabled(self, en: bool):
         if en:
@@ -769,6 +801,7 @@ class MainWindow(QtWidgets.QMainWindow):
         btn_edit_types.clicked.connect(lambda: self._show_map_type_editor(container))
         sb_layout.addWidget(btn_edit_types, 0, QtCore.Qt.AlignLeft)
         sb_layout.addStretch(1)
+        self.map_sidebar = sidebar
 
         # --- Listen-Gitter rechts ---
         self.map_grid_container = QtWidgets.QWidget()
@@ -776,20 +809,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.map_grid.setContentsMargins(4, 4, 4, 4)
         self.map_grid.setSpacing(8)
 
-        # Scroll um viele Listen aufzunehmen
+        # Scroll um viele Listen aufzunehmen (ohne äußeren Rahmen)
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.map_grid_container)
-        # Gerahmtes Container mit abgerundeten Ecken für die Listen
-        map_lists_frame = QtWidgets.QFrame()
-        map_lists_frame.setObjectName("mapListsContainer")
-        map_lists_frame.setStyleSheet(
-            "#mapListsContainer { background: rgba(255,255,255,0.9); border:1px solid #dddddd; border-radius:12px; }"
+        scroll.setObjectName("mapListScroll")
+        scroll.setStyleSheet(
+            "#mapListScroll { border: none; background: transparent; }"
         )
-        lists_layout = QtWidgets.QVBoxLayout(map_lists_frame)
-        lists_layout.setContentsMargins(8, 8, 8, 8)
-        lists_layout.addWidget(scroll)
-        map_lists_frame.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        self.map_lists_frame = scroll
+        scroll.installEventFilter(self)
+        # Wrapper, um den rechten Bereich gezielt zu verschieben
+        right_wrap = QtWidgets.QWidget()
+        right_wrap_layout = QtWidgets.QVBoxLayout(right_wrap)
+        right_wrap_layout.setSpacing(0)
+        right_wrap_layout.addWidget(scroll)
+        self.map_lists_wrapper = right_wrap
 
         # Listen initial erstellen
         self._build_map_lists(map_state)
@@ -810,8 +845,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.map_main.btn_sort_names.setVisible(False)
         self.map_main.result_widget.setVisible(False)
         self.map_main.btn_local_spin.setVisible(False)
-        # Rad-Größe etwas anheben, damit es näher an den anderen Modi liegt
-        self.map_main.view.setMinimumSize(260, 260)
+        # Rad-Größe an den Standard-Rädern ausrichten (WHEEL_RADIUS*2 + Padding)
+        base_canvas = max(200, int(2 * config.WHEEL_RADIUS + 80))
+        self.map_main.view.setMinimumSize(base_canvas, base_canvas)
         self.map_main.view.setMaximumSize(QtCore.QSize(16777215, 16777215))
         self.map_main.view.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
 
@@ -821,17 +857,36 @@ class MainWindow(QtWidgets.QMainWindow):
         row.setSpacing(10)
         row.addWidget(sidebar, 0)
         row.addWidget(self.map_main, 0, QtCore.Qt.AlignCenter)
-        row.addWidget(map_lists_frame, 1)
+        row.addWidget(right_wrap, 1)
         row.setStretch(0, 0)
         row.setStretch(1, 1)
         row.setStretch(2, 1)
         layout.addLayout(row, 1)
         layout.setStretchFactor(row, 1)
-        # Höhe begrenzen, orientiert an der Kartenhöhe eines normalen Rads
+        # Höhe des Map-Rads an die anderen Räder angleichen
         def _cap_heights():
-            ref_h = max(200, (self.tank.height() or self.tank.sizeHint().height()) - 25)
-            map_lists_frame.setMaximumHeight(ref_h)
+            ref_h = max(
+                200,
+                self.tank.height() or self.tank.sizeHint().height(),
+                self.dps.height() or self.dps.sizeHint().height(),
+                self.support.height() or self.support.sizeHint().height(),
+            )
+            self.map_main.view.setMinimumHeight(ref_h)
+            self.map_main.view.setMaximumHeight(ref_h)
+            self.map_main.setMinimumHeight(ref_h)
             self.map_main.setMaximumHeight(ref_h)
+            if hasattr(self, "map_lists_frame"):
+                adj = max(100, ref_h - 20)  # 20px weniger Höhe
+                self.map_lists_frame.setMinimumHeight(adj)
+                self.map_lists_frame.setMaximumHeight(adj)
+            if hasattr(self, "map_lists_wrapper"):
+                adj = max(100, ref_h - 20)
+                self.map_lists_wrapper.setMinimumHeight(adj)
+                self.map_lists_wrapper.setMaximumHeight(adj)
+            if hasattr(self, "map_sidebar"):
+                adj = max(100, ref_h - 20)
+                self.map_sidebar.setMinimumHeight(adj)
+                self.map_sidebar.setMaximumHeight(adj)
         QtCore.QTimer.singleShot(0, _cap_heights)
         QtCore.QTimer.singleShot(0, self._rebuild_map_wheel)
         return container
