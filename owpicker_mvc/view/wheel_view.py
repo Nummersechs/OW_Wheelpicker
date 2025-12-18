@@ -289,6 +289,13 @@ class WheelView(QtWidgets.QWidget):
         self.pair_mode = pair_mode; self.allow_pair_toggle = allow_pair_toggle; self._is_spinning = False
         self.subrole_labels = subrole_labels or []
         self.use_subrole_filter = False
+        self._suppress_wheel_render = False
+        self._suppress_state_signal = False
+        self._force_spin_enabled = False
+        self._override_entries: Optional[List[dict]] = None
+        self._subrole_controls_visible = True
+        self._header_controls_visible = True
+        self._show_names_visible = True
         self.view = QtWidgets.QGraphicsView()
         self.view.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.view.setStyleSheet("QGraphicsView { background: transparent; border: none; }")
@@ -423,8 +430,11 @@ class WheelView(QtWidgets.QWidget):
         self.names.model().rowsInserted.connect(self._on_names_list_changed)
         self.names.model().rowsRemoved.connect(self._on_names_list_changed)
         self.names.metaChanged.connect(self._on_names_list_changed)
+        # Neue Zeilen sollen sofort die korrekte Sichtbarkeit der Subrollen übernehmen
+        self.names.model().rowsInserted.connect(lambda *_: self._apply_subrole_visibility())
 # ---------- Buttons unter dem Rad ----------
-        self.btn_local_spin = QtWidgets.QPushButton("🔁 Dieses Rad drehen")
+        self._default_spin_label = "🔁 Dieses Rad drehen"
+        self.btn_local_spin = QtWidgets.QPushButton(self._default_spin_label)
         self.btn_local_spin.setFixedHeight(36)
         self.btn_local_spin.clicked.connect(self.request_spin.emit)
 
@@ -546,6 +556,22 @@ class WheelView(QtWidgets.QWidget):
             active = item.checkState() == QtCore.Qt.Checked
             entries.append({"name": name, "subroles": subroles, "active": active})
         return entries
+    def set_override_entries(self, entries: Optional[List[dict]]):
+        """
+        Externe Einträge für das Rad setzen (z.B. im Hero-Ban).
+        Die sichtbare Namensliste bleibt unverändert.
+        """
+        self._override_entries = list(entries) if entries is not None else None
+        self._apply_override()
+    def get_effective_wheel_names(self, include_disabled: bool = True) -> List[str]:
+        """
+        Liefert die aktuell vom Rad genutzten Namen (Override falls gesetzt).
+        """
+        base_entries = self._override_entries if self._override_entries is not None else self._active_entries()
+        names = self._effective_names_from(base_entries, include_disabled=True)
+        if not include_disabled and getattr(self, "_disabled_indices", None):
+            names = [n for i, n in enumerate(names) if i not in self._disabled_indices]
+        return names
     def _item_text(self, item: QtWidgets.QListWidgetItem) -> str:
         widget = self.names.itemWidget(item)
         if isinstance(widget, NameRowWidget):
@@ -583,20 +609,38 @@ class WheelView(QtWidgets.QWidget):
             entries.append({"name": text, "subroles": subroles})
         return entries
 
+    def _entries_for_spin(self) -> List[dict]:
+        """Nutzt Override-Einträge, falls gesetzt, sonst die aktiven Einträge."""
+        if self._override_entries is not None:
+            return list(self._override_entries)
+        return self._active_entries()
+
     def _active_names(self) -> List[str]:
         return [entry["name"] for entry in self._active_entries()]
 
     def _on_names_list_changed(self, *args):
         """Wenn Namen geändert, hinzugefügt oder entfernt werden."""
+        if self._override_entries is not None:
+            # Override bestimmt das Rad – sichtbare Liste nur Anzeige
+            self._apply_override()
+            if not self._suppress_state_signal:
+                self.stateChanged.emit()
+            return
         old_names = list(getattr(self, "_last_wheel_names", []))
         new_names = self._effective_names_from(self._active_entries(), include_disabled=True)
         # Rad mit aktiven Namen aktualisieren
-        self.wheel.set_names(new_names)
-        self._rebuild_disabled_indices(old_names, new_names)
+        if getattr(self, "_suppress_wheel_render", False):
+            self.wheel.set_names([])
+            self._rebuild_disabled_indices([], [])
+        else:
+            self.wheel.set_names(new_names)
+            self._rebuild_disabled_indices(old_names, new_names)
         self._refresh_disabled_indices()
         self._update_name_dependent_ui()
         self._last_wheel_names = list(new_names)
-        self.stateChanged.emit()
+        self._apply_subrole_visibility()
+        if not self._suppress_state_signal:
+            self.stateChanged.emit()
 
     def _effective_names_from(self, base: Union[List[dict], List[str]], include_disabled: bool = True) -> List[str]:
         """
@@ -637,6 +681,26 @@ class WheelView(QtWidgets.QWidget):
         if not include_disabled and getattr(self, "_disabled_indices", None):
             names = [n for i, n in enumerate(names) if i not in self._disabled_indices]
         return names
+    def _apply_subrole_visibility(self):
+        """Blendet Subrollen-Checkboxen in den Zeilen ein/aus."""
+        for i in range(self.names.count()):
+            widget = self.names.itemWidget(self.names.item(i))
+            if isinstance(widget, NameRowWidget):
+                for cb in widget.subrole_checks:
+                    cb.setVisible(self._subrole_controls_visible)
+    def _apply_override(self):
+        """Wendet die Override-Liste auf das Rad an, ohne die sichtbare Liste zu ändern."""
+        if self._override_entries is None:
+            # Zurück zum normalen Rendering basierend auf der Liste
+            self._on_names_list_changed()
+            return
+        names = self._effective_names_from(self._override_entries, include_disabled=True)
+        # Bei neuem Override: deaktivierte Segmente zurücksetzen, damit Indizes passen
+        self._disabled_indices.clear()
+        self._disabled_labels.clear()
+        self.wheel.set_names(names)
+        self._refresh_disabled_indices()
+        self._last_wheel_names = list(names)
 
     def _on_segment_toggled(self, idx: int, disabled: bool, label: str):
         if disabled:
@@ -751,7 +815,7 @@ class WheelView(QtWidgets.QWidget):
         self.result.setText("–")
         self._update_clear_button_enabled()
 
-        base_entries = self._active_entries()
+        base_entries = self._entries_for_spin()
         names = self._effective_names_from(base_entries, include_disabled=True)
         enabled_indices = [i for i in range(len(names)) if i not in self._disabled_indices]
         if (self.pair_mode and len(base_entries) < 2) or not enabled_indices:
@@ -802,7 +866,7 @@ class WheelView(QtWidgets.QWidget):
         self.result.setText("–")
         self._update_clear_button_enabled()
 
-        base_entries = self._active_entries()
+        base_entries = self._entries_for_spin()
         names = self._effective_names_from(base_entries, include_disabled=True)
         enabled_indices = [i for i in range(len(names)) if i not in self._disabled_indices]
         if (self.pair_mode and len(base_entries) < 2) or not enabled_indices:
@@ -875,7 +939,10 @@ class WheelView(QtWidgets.QWidget):
 
         # --- Single-Rad drehen ---
         # Wenn kein Name da ist, deaktivieren
-        self.btn_local_spin.setEnabled(count > 0)
+        if not self._force_spin_enabled:
+            self.btn_local_spin.setEnabled(count > 0)
+        else:
+            self.btn_local_spin.setEnabled(True)
 
         # --- Paare-Toggle ---
         if getattr(self, "allow_pair_toggle", False) and getattr(self, "toggle", None) is not None:
@@ -928,6 +995,44 @@ class WheelView(QtWidgets.QWidget):
     def _clear_result(self):
         self.result.setText("–")
         self._update_clear_button_enabled()
+    def set_spin_button_text(self, text: Optional[str]):
+        """Setzt den Text des lokalen Spin-Buttons (None → Default)."""
+        if text:
+            self.btn_local_spin.setText(text)
+        else:
+            self.btn_local_spin.setText(self._default_spin_label)
+    def set_force_spin_enabled(self, enabled: bool):
+        """Erzwingt, dass der lokale Spin-Button aktiv bleibt (Hero-Ban)."""
+        self._force_spin_enabled = bool(enabled)
+        self._update_name_dependent_ui()
+    def set_show_names_visible(self, visible: bool):
+        """Blendet die Checkbox 'Namen anzeigen' ein/aus."""
+        self._show_names_visible = bool(visible)
+        if self.chk_show_names:
+            self.chk_show_names.setVisible(visible)
+    def set_header_controls_visible(self, visible: bool):
+        """Blendet Pair-/Subrollen-Toggles im Header ein/aus."""
+        self._header_controls_visible = bool(visible)
+        if self.toggle:
+            self.toggle.setVisible(visible)
+        if self.chk_subroles:
+            self.chk_subroles.setVisible(visible)
+    def set_subrole_controls_visible(self, visible: bool):
+        """Blendet Subrollen-Kästchen in den Zeilen ein/aus."""
+        self._subrole_controls_visible = bool(visible)
+        self._apply_subrole_visibility()
+    def set_wheel_render_enabled(self, enabled: bool):
+        """
+        Schaltet das Zeichnen des Rads an/aus (z.B. im Hero-Ban für äußere Räder).
+        Listen/Buttons bleiben davon unberührt.
+        """
+        self._suppress_wheel_render = not enabled
+        prev = self._suppress_state_signal
+        self._suppress_state_signal = True
+        try:
+            self._on_names_list_changed()
+        finally:
+            self._suppress_state_signal = prev
     def _normalize_entries(self, defaults: Union[List[str], List[dict]]) -> List[dict]:
         """
         Macht aus verschiedenen Input-Formaten eine einheitliche Liste von
@@ -1011,6 +1116,8 @@ class WheelView(QtWidgets.QWidget):
 
         self._apply_placeholder()
         self._on_names_list_changed()
+        # Sichtbarkeit der Subrollen-Kästchen nach einem vollständigen Neuaufbau anwenden
+        self._apply_subrole_visibility()
 
     # --- Added resize behaviour ---
 

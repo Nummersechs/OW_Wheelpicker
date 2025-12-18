@@ -23,6 +23,11 @@ class MainWindow(QtWidgets.QMainWindow):
         saved = self._load_saved_state()
         self._restoring_state = True   # während des Aufbaus nicht speichern
         self.current_mode = "players"  # immer mit Spieler-Auswahl starten
+        self.last_non_hero_mode = "players"
+        self.hero_ban_active = False
+        self._hero_ban_rebuild = False
+        self._hero_ban_pending = False
+        self._hero_ban_override_role: str | None = None
         self._mode_states = self._build_mode_states(saved)
 
         central = QtWidgets.QWidget()
@@ -73,18 +78,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_mode_players.setCheckable(True)
         self.btn_mode_heroes = QtWidgets.QPushButton("Helden-Auswahl")
         self.btn_mode_heroes.setCheckable(True)
+        self.btn_mode_heroban = QtWidgets.QPushButton("Hero-Ban")
+        self.btn_mode_heroban.setCheckable(True)
         self.btn_mode_players.clicked.connect(lambda: self._on_mode_button_clicked("players"))
         self.btn_mode_heroes.clicked.connect(lambda: self._on_mode_button_clicked("heroes"))
+        self.btn_mode_heroban.clicked.connect(lambda: self._on_mode_button_clicked("hero_ban"))
         mode_group = QtWidgets.QButtonGroup(self)
         mode_group.setExclusive(True)
         mode_group.addButton(self.btn_mode_players)
         mode_group.addButton(self.btn_mode_heroes)
+        mode_group.addButton(self.btn_mode_heroban)
         mode_row = QtWidgets.QHBoxLayout()
         mode_row.setContentsMargins(8, 0, 8, 4)
         mode_row.addStretch(1)
         mode_row.addWidget(QtWidgets.QLabel("Modus:"))
         mode_row.addWidget(self.btn_mode_players)
         mode_row.addWidget(self.btn_mode_heroes)
+        mode_row.addWidget(self.btn_mode_heroban)
         mode_row.addStretch(1)
         root.addLayout(mode_row)
 
@@ -125,6 +135,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Aktiven Modus vollständig anwenden (Einträge, Toggles etc.)
         self.btn_mode_players.setChecked(self.current_mode == "players")
         self.btn_mode_heroes.setChecked(self.current_mode == "heroes")
+        self.btn_mode_heroban.setChecked(False)
         self._load_mode_into_wheels(self.current_mode)
 
         # Spin-Signale
@@ -167,7 +178,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.overlay = ResultOverlay(parent=central)
         self.overlay.hide()
-        self.overlay.closed.connect(lambda: (self._set_controls_enabled(True), self.sound.stop_ding()))
+        self.overlay.closed.connect(self._on_overlay_closed)
         
         self.online_mode = False  # Standard
         self.overlay.modeChosen.connect(self._on_mode_chosen)
@@ -180,6 +191,8 @@ class MainWindow(QtWidgets.QMainWindow):
         for w in (self.tank, self.dps, self.support):
             w.stateChanged.connect(self._save_state)
             w.btn_include_in_all.toggled.connect(self._update_spin_all_enabled)
+            w.stateChanged.connect(self._on_wheel_state_changed)
+            w.btn_include_in_all.toggled.connect(self._on_role_include_toggled)
 
         # jetzt darf gespeichert werden
         self._restoring_state = False
@@ -187,6 +200,13 @@ class MainWindow(QtWidgets.QMainWindow):
         # Buttons initial updaten (nutzt schon include_in_all)
         self._update_spin_all_enabled()
         self._update_cancel_enabled()
+
+    def _on_overlay_closed(self):
+        self._set_controls_enabled(True)
+        self.sound.stop_ding()
+        if self.hero_ban_active:
+            self._hero_ban_override_role = None
+            self._update_hero_ban_wheel()
 
     def _apply_theme(self):
         """
@@ -288,6 +308,13 @@ class MainWindow(QtWidgets.QMainWindow):
         
     def _update_spin_all_enabled(self):
         """Aktiviere/Deaktiviere den 'Drehen'-Button je nach Auswahl."""
+        if getattr(self, "hero_ban_active", False):
+            any_selected = any(w.btn_include_in_all.isChecked() for w in (self.tank, self.dps, self.support))
+            # In Hero-Ban zählen die effektiven Namen des zentralen Rads (inkl. Override).
+            has_candidates = bool(self.dps.get_effective_wheel_names())
+            self.btn_spin_all.setEnabled(any_selected and has_candidates and self.pending == 0)
+            self._update_cancel_enabled()
+            return
         any_selected = any(
             w.is_selected_for_global_spin()
             for w in (self.tank, self.dps, self.support)
@@ -295,6 +322,80 @@ class MainWindow(QtWidgets.QMainWindow):
         # Nur aktiv, wenn allgemein erlaubt UND mindestens ein Rad ausgewählt
         self.btn_spin_all.setEnabled(any_selected and self.pending == 0)
         self._update_cancel_enabled()
+
+    def _set_hero_ban_visuals(self, active: bool):
+        """
+        Graut nur die Rad-Grafiken aus. Listen und Buttons bleiben bedienbar.
+        Include-Buttons steuern, welche Rollen ins zentrale Rad einfließen.
+        """
+        self.hero_ban_active = active
+        for wheel in (self.tank, self.dps, self.support):
+            effect = QtWidgets.QGraphicsOpacityEffect(wheel.view) if active else None
+            if active:
+                is_center = wheel is self.dps
+                op = 1.0 if is_center else 0.25
+                effect.setOpacity(op)
+                wheel.view.setGraphicsEffect(effect)
+                wheel.view.setEnabled(is_center)
+                # Nur das mittlere Rad bleibt interaktiv, äußere Rad-Grafiken aus
+                if is_center:
+                    wheel.set_interactive_enabled(True)
+                    wheel.btn_local_spin.setEnabled(True)
+                    wheel.set_force_spin_enabled(True)
+                    wheel.set_spin_button_text("🔁 Diese Rolle drehen")
+                    wheel.btn_include_in_all.setEnabled(True)
+                    wheel.names.setEnabled(True)
+                else:
+                    # Rad selbst ausblenden, aber Liste/Editieren und Include-Button aktiv lassen
+                    wheel.view.setEnabled(False)
+                    wheel.btn_local_spin.setEnabled(True)
+                    # Local spin soll auch ohne sichtbares Rad erlaubt bleiben
+                    wheel.set_force_spin_enabled(True)
+                    wheel.set_show_names_visible(False)
+                    wheel.set_spin_button_text(None)
+                    wheel.btn_include_in_all.setEnabled(True)
+                    wheel.names.setEnabled(True)
+                    # Paare/Subrollen aus
+                    wheel.set_interactive_enabled(True)
+                    if wheel.toggle:
+                        wheel.toggle.setEnabled(False)
+                        wheel.toggle.setChecked(False)
+                    if wheel.chk_subroles:
+                        wheel.chk_subroles.setEnabled(False)
+                        wheel.chk_subroles.setChecked(False)
+                # Im Hero-Ban immer Einzel-Helden → Paar/Subrollen aus
+                if wheel.toggle:
+                    wheel.toggle.setEnabled(False)
+                    wheel.toggle.setChecked(False)
+                if wheel.chk_subroles:
+                    wheel.chk_subroles.setEnabled(False)
+                    wheel.chk_subroles.setChecked(False)
+                # Header-Toggles und Subrollen-Kästchen ausblenden
+                wheel.set_header_controls_visible(False)
+                wheel.set_subrole_controls_visible(False)
+                # Seitliche Räder leer zeichnen, mittleres normal
+                if wheel is not self.dps:
+                    wheel.set_wheel_render_enabled(False)
+                else:
+                    wheel.set_wheel_render_enabled(True)
+            else:
+                wheel.view.setGraphicsEffect(None)
+                wheel.view.setEnabled(True)
+                wheel.set_interactive_enabled(True)
+                if wheel.toggle:
+                    wheel.toggle.setEnabled(True)
+                if wheel.chk_subroles:
+                    wheel.chk_subroles.setEnabled(True)
+                wheel.btn_local_spin.setEnabled(True)
+                wheel.set_force_spin_enabled(False)
+                wheel.set_show_names_visible(True)
+                wheel.set_spin_button_text(None)
+                wheel.btn_include_in_all.setEnabled(True)
+                wheel.names.setEnabled(True)
+                wheel.set_wheel_render_enabled(True)
+                wheel.set_header_controls_visible(True)
+                wheel.set_subrole_controls_visible(True)
+                wheel.set_override_entries(None)
 
     def _set_controls_enabled(self, en: bool):
         if en:
@@ -305,7 +406,8 @@ class MainWindow(QtWidgets.QMainWindow):
             w.set_interactive_enabled(en)
         if not en:
             self._update_cancel_enabled()
-
+        if self.hero_ban_active and en:
+            self._set_hero_ban_visuals(True)
     def _stop_all_wheels(self):
         for w in (self.tank, self.dps, self.support): w.hard_stop()
     def _update_cancel_enabled(self):
@@ -320,6 +422,14 @@ class MainWindow(QtWidgets.QMainWindow):
         Regel: Kein Spieler darf in mehr als einem gewählten Kandidaten
         (also auch nicht in mehreren Paaren) vorkommen.
         """
+        if self.hero_ban_active:
+            if self.pending > 0:
+                return
+            # Immer mit allen aktuell gewählten Rollen arbeiten, nicht mit einem alten Override.
+            self._hero_ban_override_role = None
+            self._update_hero_ban_wheel()
+            self._spin_single(self.dps, 1.0, hero_ban_override=False)
+            return
         if self.pending > 0:
             return
         self._result_sent_this_spin = False
@@ -453,15 +563,22 @@ class MainWindow(QtWidgets.QMainWindow):
             self._set_controls_enabled(True)
             self.summary.setText("Bitte Namen für die Rollen eintragen.")
         self._update_cancel_enabled()
-    def _spin_single(self, wheel: WheelView, mult: float = 1.0):
+    def _spin_single(self, wheel: WheelView, mult: float = 1.0, hero_ban_override: bool = True):
         if self.pending > 0: return
+        if self.hero_ban_active:
+            role_map = {self.tank: "Tank", self.dps: "Damage", self.support: "Support"}
+            self._hero_ban_override_role = role_map.get(wheel) if hero_ban_override else None
+            self._update_hero_ban_wheel()
+            target_wheel = self.dps
+        else:
+            target_wheel = wheel
         self._result_sent_this_spin = False
         self._snapshot_results()
         self.sound.stop_ding(); self._stop_all_wheels(); self._set_controls_enabled(False)
         self.summary.setText(""); self.pending = 0; self.overlay.hide()
         self.sound.play_spin()
         duration = int(self.duration.value()*mult)
-        if wheel.spin(duration_ms=duration): self.pending = 1
+        if target_wheel.spin(duration_ms=duration): self.pending = 1
         else:
             self.sound.stop_spin(); self._set_controls_enabled(True)
             self.summary.setText("Bitte Namen für dieses Rad eintragen.")
@@ -484,15 +601,23 @@ class MainWindow(QtWidgets.QMainWindow):
             self.sound.stop_ding()
             self.sound.play_ding()
 
-            t = self.tank.result.text().replace("Ergebnis: ", "")
-            d = self.dps.result.text().replace("Ergebnis: ", "")
-            s = self.support.result.text().replace("Ergebnis: ", "")
+            if self.hero_ban_active:
+                d = self.dps.result.text().replace("Ergebnis: ", "")
+                self.summary.setText(f"Hero-Ban: {d}")
+                self.overlay.show_message("Hero-Ban", [d, "", ""])
+                self._last_results_snapshot = None
+                self._update_cancel_enabled()
+                return
+            else:
+                t = self.tank.result.text().replace("Ergebnis: ", "")
+                d = self.dps.result.text().replace("Ergebnis: ", "")
+                s = self.support.result.text().replace("Ergebnis: ", "")
 
-            self.summary.setText(f"Auswahl → Tank: {t} | Damage: {d} | Support: {s}")
-            self.overlay.show_result(t, d, s)
+                self.summary.setText(f"Auswahl → Tank: {t} | Damage: {d} | Support: {s}")
+                self.overlay.show_result(t, d, s)
 
-            # Nur noch EIN Request pro abgeschlossenem Spin
-            self._send_spin_result_to_server(t, d, s)
+                # Nur noch EIN Request pro abgeschlossenem Spin
+                self._send_spin_result_to_server(t, d, s)
             self._last_results_snapshot = None
         self._update_cancel_enabled()
 
@@ -656,24 +781,27 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _role_states_from_wheels(self) -> dict:
         """Aktuellen Zustand aller Räder (aktiver Modus) auslesen."""
-        def wheel_state(w: WheelView) -> dict:
+        base_state = self._mode_states.get(self.current_mode, {}) if self.hero_ban_active else {}
+
+        def wheel_state(w: WheelView, role: str) -> dict:
+            base = base_state.get(role, {}) if isinstance(base_state, dict) else {}
             return {
                 "entries": w.get_current_entries(),
                 "include_in_all": w.btn_include_in_all.isChecked(),
-                "pair_mode": getattr(w, "pair_mode", False),
-                "use_subroles": getattr(w, "use_subrole_filter", False),
+                "pair_mode": base.get("pair_mode", getattr(w, "pair_mode", False)),
+                "use_subroles": base.get("use_subroles", getattr(w, "use_subrole_filter", False)),
             }
         return {
-            "Tank": wheel_state(self.tank),
-            "Damage": wheel_state(self.dps),
-            "Support": wheel_state(self.support),
+            "Tank": wheel_state(self.tank, "Tank"),
+            "Damage": wheel_state(self.dps, "Damage"),
+            "Support": wheel_state(self.support, "Support"),
         }
 
     def _capture_current_mode_state(self):
         """Schreibt den UI-Zustand des aktiven Modus in _mode_states."""
         self._mode_states[self.current_mode] = self._role_states_from_wheels()
 
-    def _load_mode_into_wheels(self, mode: str):
+    def _load_mode_into_wheels(self, mode: str, hero_ban: bool = False):
         """Wendet den gespeicherten Zustand eines Modus auf die UI an."""
         if mode not in self._mode_states:
             return
@@ -686,12 +814,23 @@ class MainWindow(QtWidgets.QMainWindow):
                 state[role] = role_state
                 wheel.load_entries(
                     role_state.get("entries", []),
-                    pair_mode=role_state.get("pair_mode", False),
+                    pair_mode=False if hero_ban else role_state.get("pair_mode", False),
                     include_in_all=role_state.get("include_in_all", True),
-                    use_subroles=role_state.get("use_subroles", False),
+                    use_subroles=False if hero_ban else role_state.get("use_subroles", False),
                 )
         finally:
             self._restoring_state = prev_restoring
+        if hero_ban:
+            self._set_hero_ban_visuals(True)
+            self._update_hero_ban_wheel()
+        else:
+            self._set_hero_ban_visuals(False)
+            for w in (self.tank, self.dps, self.support):
+                w.set_header_controls_visible(True)
+                w.set_subrole_controls_visible(True)
+                w.set_show_names_visible(True)
+            # sicherstellen, dass das mittlere Rad wieder seine eigene Liste nutzt
+            self.dps.set_override_entries(None)
         if hasattr(self, "btn_spin_all"):
             self._update_spin_all_enabled()
         if hasattr(self, "btn_cancel_spin"):
@@ -699,19 +838,36 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_title()
 
     def _on_mode_button_clicked(self, target: str):
-        if target == self.current_mode:
+        came_from_hero_ban = self.hero_ban_active
+        if target == "hero_ban":
+            if self.hero_ban_active:
+                return
+            self.last_non_hero_mode = self.current_mode
+            self._capture_current_mode_state()
+            self.current_mode = "heroes"
+            self.btn_mode_players.setChecked(False)
+            self.btn_mode_heroes.setChecked(False)
+            self.btn_mode_heroban.setChecked(True)
+            self._load_mode_into_wheels("heroes", hero_ban=True)
             return
-        self._switch_mode(target)
 
-    def _switch_mode(self, mode: str):
-        if mode not in ("players", "heroes"):
+        if target not in ("players", "heroes"):
             return
-        # Aktuellen Modus sichern
-        self._capture_current_mode_state()
-        self.current_mode = mode
-        self.btn_mode_players.setChecked(mode == "players")
-        self.btn_mode_heroes.setChecked(mode == "heroes")
-        self._load_mode_into_wheels(mode)
+        # Beim Verlassen des Hero-Ban die Hero-Listen sichern
+        if self.hero_ban_active:
+            self._capture_current_mode_state()
+            self.hero_ban_active = False
+            # Mittleres Rad wieder normalisieren
+            self.dps.set_override_entries(None)
+        # Wenn wir aus dem Hero-Ban kommen, trotz identischem target neu laden
+        if target == self.current_mode and not came_from_hero_ban:
+            return
+        self.current_mode = target
+        self.last_non_hero_mode = target
+        self.btn_mode_players.setChecked(target == "players")
+        self.btn_mode_heroes.setChecked(target == "heroes")
+        self.btn_mode_heroban.setChecked(False)
+        self._load_mode_into_wheels(target, hero_ban=False)
         self._save_state()
 
     def _update_title(self):
@@ -747,6 +903,79 @@ class MainWindow(QtWidgets.QMainWindow):
             "volume": self.volume_slider.value(),
         }
 
+    def _update_hero_ban_wheel(self):
+        """Führt die aktivierten Rollen zu einem zentralen Rad zusammen (Einzel-Helden)."""
+        if not self.hero_ban_active:
+            return
+        if self._hero_ban_rebuild:
+            # Wenn wir gerade am Neuaufbau sind, das Update nach Abschluss nachholen.
+            self._hero_ban_pending = True
+            return
+        self._hero_ban_rebuild = True
+        # Wir starten jetzt einen frischen Rebuild – eventuell markiertes Pending zurücksetzen.
+        self._hero_ban_pending = False
+        # Im Normalfall alle per Include-Button gewählten Rollen zusammenführen.
+        # Wenn ein lokaler Spin einer Rolle gestartet wurde, nur diese Rolle nutzen.
+        selected_roles: list[str] = []
+        if self._hero_ban_override_role:
+            selected_roles.append(self._hero_ban_override_role)
+        else:
+            if self.tank.btn_include_in_all.isChecked():
+                selected_roles.append("Tank")
+            if self.dps.btn_include_in_all.isChecked():
+                selected_roles.append("Damage")
+            if self.support.btn_include_in_all.isChecked():
+                selected_roles.append("Support")
+
+        combined: list[dict] = []
+        seen = set()
+        role_to_wheel = {"Tank": self.tank, "Damage": self.dps, "Support": self.support}
+        for role in selected_roles:
+            wheel = role_to_wheel.get(role)
+            if not wheel:
+                continue
+            base_entries = wheel.get_current_entries()
+            for entry in base_entries:
+                if not entry.get("active", True):
+                    continue
+                name = str(entry.get("name", "")).strip()
+                if not name or name in seen:
+                    continue
+                seen.add(name)
+                combined.append({"name": name, "subroles": [], "active": True})
+
+        try:
+            # Nur das mittlere Rad nutzt die zusammengeführte Liste – ohne die sichtbare Liste zu überschreiben.
+            self.dps.set_override_entries(combined)
+        finally:
+            self._hero_ban_rebuild = False
+        self._set_hero_ban_visuals(True)
+        # sicherstellen, dass nur das mittlere Rad spinnt
+        self.tank.btn_local_spin.setEnabled(True)
+        self.support.btn_local_spin.setEnabled(True)
+        self.dps.btn_local_spin.setEnabled(True)
+        self._update_spin_all_enabled()
+        # Falls während des Aufbaus weitere Änderungen kamen, sofort nachziehen.
+        if self._hero_ban_pending:
+            self._hero_ban_pending = False
+            QtCore.QTimer.singleShot(0, self._update_hero_ban_wheel)
+
+    def _on_role_include_toggled(self, _checked: bool):
+        if self.hero_ban_active:
+            # Zurück in den normalen Zusammenführungsmodus
+            self._hero_ban_override_role = None
+            self._update_hero_ban_wheel()
+    def _on_wheel_state_changed(self):
+        """Reagiert auf Änderungen in den Rädern (z.B. Namensliste) im Hero-Ban-Modus."""
+        if not self.hero_ban_active:
+            return
+        if self._hero_ban_rebuild:
+            # Signal kam während eines Rebuilds → später nachholen
+            self._hero_ban_pending = True
+            return
+        self._hero_ban_override_role = None
+        self._update_hero_ban_wheel()
+
     def _save_state(self):
         """
         Speichert den aktuellen Zustand in saved_state.json neben dem Script/der EXE.
@@ -760,6 +989,8 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             config.debug_print("Konnte saved_state.json nicht speichern:", e)
         self._sync_all_roles_to_server()
+        if self.hero_ban_active:
+            self._update_hero_ban_wheel()
     
     @QtCore.Slot(bool)
     def _on_mode_chosen(self, online: bool):
