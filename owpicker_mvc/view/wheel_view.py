@@ -1,6 +1,7 @@
 from typing import List, Optional, Union
 import random, itertools, difflib
 from PySide6 import QtCore, QtGui, QtWidgets
+from logic.spin_engine import plan_spin
 from view.wheel_widget import WheelWidget
 from view.name_list import NamesList, NameRowWidget
 import config
@@ -206,6 +207,10 @@ class WheelView(QtWidgets.QWidget):
         outer = QtWidgets.QVBoxLayout(self)
         outer.addWidget(card)
         QtCore.QTimer.singleShot(0, self._refit_view)
+    def _refit_view(self):
+        """Reicht Größenanpassung an das WheelWidget weiter."""
+        if hasattr(self, "view") and hasattr(self.view, "_refit_view"):
+            self.view._refit_view()
         
 
     def _apply_placeholder(self):
