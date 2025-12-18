@@ -50,6 +50,7 @@ class ModeStateStore:
             defaults = config.DEFAULT_NAMES.get(role, [])
         return {
             "entries": cls._normalize_entries_for_state(defaults),
+            # Include-Status nicht mehr persistieren -> immer True
             "include_in_all": True,
             "pair_mode": pair_defaults.get(role, False),
             "use_subroles": False,
@@ -64,7 +65,7 @@ class ModeStateStore:
             base["entries"] = cls._normalize_entries_for_state(data["entries"])
         elif "names" in data:
             base["entries"] = cls._normalize_entries_for_state(data["names"])
-        base["include_in_all"] = bool(data.get("include_in_all", base["include_in_all"]))
+        # include_in_all wird nicht mehr aus saved_state übernommen (immer Default True)
         base["pair_mode"] = bool(data.get("pair_mode", base["pair_mode"]))
         base["use_subroles"] = bool(data.get("use_subroles", base["use_subroles"]))
         return base
@@ -106,7 +107,7 @@ class ModeStateStore:
             base = base_state.get(role, {}) if isinstance(base_state, dict) else {}
             return {
                 "entries": w.get_current_entries(),
-                "include_in_all": w.btn_include_in_all.isChecked(),
+                # include_in_all nicht persistieren
                 "pair_mode": base.get("pair_mode", getattr(w, "pair_mode", False)),
                 "use_subroles": base.get("use_subroles", getattr(w, "use_subrole_filter", False)),
             }
