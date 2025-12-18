@@ -19,6 +19,7 @@ class WheelWidget(QtWidgets.QGraphicsView):
         self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.setStyleSheet("QGraphicsView { background: transparent; border: none; }")
+        self.setMouseTracking(True)
         self.scene = QtWidgets.QGraphicsScene()
         self.setScene(self.scene)
 

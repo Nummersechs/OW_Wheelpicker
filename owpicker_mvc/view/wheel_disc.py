@@ -22,6 +22,11 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         self._cache_key = (tuple(self.names), self.radius, tuple(sorted(self.disabled_indices)))
         self._cached = None
         self.setTransformOriginPoint(0, 0)
+        self.setAcceptHoverEvents(True)
+        self._last_hover_idx: int | None = None
+        # Own hover overlay inside the scene (more reliable than native tooltips)
+        self._hover_item: QtWidgets.QGraphicsTextItem | None = None
+        self._hover_bg: QtWidgets.QGraphicsRectItem | None = None
 
 
     def set_radius(self, radius: int):
@@ -302,6 +307,88 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         self.update()
         self.segmentToggled.emit(idx, disabled, label)
         super().mousePressEvent(event)
+
+    def hoverMoveEvent(self, event: QtWidgets.QGraphicsSceneHoverEvent) -> None:
+        """Zeigt beim Hover den vollen Namen an der Maus, wenn das Segment aktiv ist."""
+        if not self.names:
+            self._hide_hover_overlay()
+            self._last_hover_idx = None
+            return
+        pos = event.pos()
+        x, y = pos.x(), pos.y()
+        angle = (math.degrees(math.atan2(-y, x)) + 360.0) % 360.0
+        n = len(self.names)
+        angle_step = 360.0 / float(n)
+        idx = int(angle // angle_step) % n
+        if idx in self.disabled_indices or not self.show_labels:
+            self._hide_hover_overlay()
+            self._last_hover_idx = None
+            return
+        # Tooltip bei jeder Bewegung neu setzen, damit er der Maus folgt
+        self._last_hover_idx = idx
+        self._show_hover_overlay(self.names[idx], event.scenePos())
+        super().hoverMoveEvent(event)
+
+    def hoverLeaveEvent(self, event: QtWidgets.QGraphicsSceneHoverEvent) -> None:
+        self._hide_hover_overlay()
+        self._last_hover_idx = None
+        super().hoverLeaveEvent(event)
+
+    def _current_view(self):
+        if self.scene() and self.scene().views():
+            return self.scene().views()[0]
+        return None
+
+    def _ensure_hover_overlay(self):
+        """Creates text + background items inside the scene for reliable hover display."""
+        if self._hover_item is None:
+            if not self.scene():
+                return None, None
+            txt = QtWidgets.QGraphicsTextItem()
+            txt.setDefaultTextColor(QtGui.QColor("#ffffff"))
+            txt.setZValue(2000)
+            bg = QtWidgets.QGraphicsRectItem()
+            bg.setBrush(QtGui.QBrush(QtGui.QColor(40, 40, 40, 220)))
+            bg.setPen(QtGui.QPen(QtGui.QColor(80, 80, 80), 1))
+            bg.setZValue(1999)
+            self.scene().addItem(bg)
+            self.scene().addItem(txt)
+            self._hover_item = txt
+            self._hover_bg = bg
+        return self._hover_item, self._hover_bg
+
+    def _show_hover_overlay(self, text: str, scene_pos: QtCore.QPointF):
+        if not text or not self.scene():
+            self._hide_hover_overlay()
+            return
+        txt, bg = self._ensure_hover_overlay()
+        if txt is None or bg is None:
+            return
+        txt.setPlainText(text)
+        txt.adjustSize()
+        padding = QtCore.QMarginsF(6, 4, 6, 4)
+        rect = txt.boundingRect().marginsAdded(padding)
+        offset = QtCore.QPointF(12, 12)
+        rect.moveTopLeft(scene_pos + offset)
+
+        # Clamp innerhalb des sichtbaren Bereichs, damit nichts abgeschnitten wird
+        view = self._current_view()
+        if view is not None:
+            scene_rect = view.mapToScene(view.viewport().rect()).boundingRect()
+            x = max(scene_rect.left(), min(rect.x(), scene_rect.right() - rect.width()))
+            y = max(scene_rect.top(), min(rect.y(), scene_rect.bottom() - rect.height()))
+            rect.moveTopLeft(QtCore.QPointF(x, y))
+
+        bg.setRect(rect)
+        txt.setPos(rect.topLeft() + QtCore.QPointF(padding.left(), padding.top()))
+        bg.show()
+        txt.show()
+
+    def _hide_hover_overlay(self):
+        if self._hover_item is not None:
+            self._hover_item.hide()
+        if self._hover_bg is not None:
+            self._hover_bg.hide()
     
     def set_show_labels(self, show: bool):
         """Ein-/Ausschalten der Namensanzeige auf dem Rad."""
