@@ -65,6 +65,15 @@ class WheelWidget(QtWidgets.QGraphicsView):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._refit_view()
+        if hasattr(self, "wheel") and hasattr(self.wheel, "_ensure_cache"):
+            self.wheel._ensure_cache(force=True)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Sobald der View sichtbar ist, Cache/Geometrie auf finale Größe bringen
+        self._refit_view()
+        if hasattr(self, "wheel") and hasattr(self.wheel, "_ensure_cache"):
+            self.wheel._ensure_cache(force=True)
 
     def _update_wheel_radius(self):
         if not hasattr(self, "wheel") or not hasattr(self, "scene"):
@@ -90,7 +99,7 @@ class WheelWidget(QtWidgets.QGraphicsView):
             self.pointer = self._make_pointer()
             self.scene.addItem(self.pointer)
 
-    # ----- API-Wrapper -----
+        # ----- API-Wrapper -----
     def set_names(self, names: List[str]):
         self.wheel.set_names(names)
 

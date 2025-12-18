@@ -17,6 +17,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         self.radius = radius if radius is not None else config.WHEEL_RADIUS
         self.names = [n.strip() for n in names if n.strip()]
         self.disabled_indices: set[int] = set()
+        self._tooltips_ready: bool = True
         # Flag, ob die Namens-Labels gezeichnet werden sollen
         self.show_labels = True
         self._cache_key = (tuple(self.names), self.radius, tuple(sorted(self.disabled_indices)))
@@ -44,9 +45,9 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         r = self.radius
         return QtCore.QRectF(-r, -r, 2 * r, 2 * r)
 
-    def _ensure_cache(self):
+    def _ensure_cache(self, force: bool = True):
         key = (tuple(self.names), self.radius, tuple(sorted(self.disabled_indices)))
-        if self._cached is not None and key == self._cache_key:
+        if not force and self._cached is not None and key == self._cache_key:
             return
         self._cache_key = key
 
@@ -336,12 +337,15 @@ class WheelDisc(QtWidgets.QGraphicsObject):
             self._hide_floating_label()
             self._last_hover_idx = None
             return
-        # Tooltip nur anzeigen, wenn der Label-Text im Segment abgeschnitten ist
-        self._ensure_cache()
-        is_truncated = (
-            0 <= idx < len(self._label_truncated)
-            and self._label_truncated[idx]
-        )
+        # Tooltip nur anzeigen, wenn der Label-Text im Segment abgeschnitten ist.
+        # Cache hier bewusst erzwingen, falls das Layout kurz zuvor geändert wurde
+        self._ensure_cache(force=True)
+        cached_truncated = False
+        if 0 <= idx < len(self._label_truncated):
+            cached_truncated = bool(self._label_truncated[idx])
+        # Fallback: Laufzeitprüfung, falls Cache gerade frisch ist, aber noch kein
+        # Label als gekürzt markiert wurde (z.B. bei minimalen Größenänderungen)
+        is_truncated = cached_truncated or self._needs_tooltip_runtime(idx, angle_step)
         if not is_truncated:
             self._hide_hover_overlay()
             self._hide_floating_label()
@@ -358,10 +362,64 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         self._last_hover_idx = None
         super().hoverLeaveEvent(event)
 
+    def set_tooltips_ready(self, ready: bool):
+        """Extern setzen, wenn das Layout fertig ist und echte Tooltips erlaubt sind."""
+        self._tooltips_ready = bool(ready)
+        if not ready:
+            self._hide_floating_label()
+
     def _current_view(self):
         if self.scene() and self.scene().views():
             return self.scene().views()[0]
         return None
+
+    def _needs_tooltip_runtime(self, idx: int, angle_step: float) -> bool:
+        """
+        Prüft zur Laufzeit mit aktueller Geometrie, ob das Label in das Segment passt.
+        Unabhängig vom Cache, damit Hover direkt nach dem Start zuverlässig ist.
+        """
+        if not (0 <= idx < len(self.names)):
+            return False
+        if angle_step <= 0 or self.radius <= 0:
+            return False
+        raw = self.names[idx]
+        base_font = QtGui.QFont()
+        base_size = float(getattr(config, "LABEL_FONT_SIZE", 10))
+        scale = float(self.radius) / float(getattr(config, "WHEEL_RADIUS", self.radius or 1))
+        eff_scale = max(0.5, min(1.3, scale))
+        scaled_size = max(6.0, min(64.0, base_size * eff_scale))
+        base_font.setPointSizeF(scaled_size)
+        base_font.setBold(bool(getattr(config, "LABEL_FONT_BOLD", True)))
+
+        def fmt(name: str) -> str:
+            if " + " in name:
+                a, b = [part.strip() for part in name.split(" + ", 1)]
+                fm_tmp = QtGui.QFontMetrics(base_font)
+                if fm_tmp.horizontalAdvance(a) < fm_tmp.horizontalAdvance(b):
+                    a, b = b, a
+                return f"{a}\n+\n{b}"
+            return name
+
+        r_txt = 0.65 * float(self.radius)
+        arc_len = 2.0 * math.pi * r_txt * (angle_step / 360.0)
+        max_w = min(130.0, arc_len * 0.8)
+        if max_w < 12.0:
+            return True  # extrem schmal → Tooltip
+        use_initials_only = max_w < 25.0
+        fm = QtGui.QFontMetrics(base_font)
+        line_h = fm.height()
+        rect_h = float(line_h * 3.2)
+
+        text = fmt(raw)
+        if use_initials_only:
+            return True  # wir würden ohnehin kürzen
+
+        br = fm.boundingRect(
+            QtCore.QRect(0, 0, int(max_w), 1000),
+            QtCore.Qt.AlignCenter | QtCore.Qt.TextWordWrap,
+            text,
+        )
+        return br.width() > max_w * 0.98 or br.height() > rect_h
 
     def _ensure_hover_overlay(self):
         """Creates text + background items inside the scene for reliable hover display."""

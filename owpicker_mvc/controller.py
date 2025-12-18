@@ -223,6 +223,12 @@ class MainWindow(QtWidgets.QMainWindow):
         
         self.online_mode = False  # Standard
         self.overlay.modeChosen.connect(self._on_mode_chosen)
+        # Tooltip-Caches nach dem ersten User-Klick aufwärmen
+        self._tooltip_warmed = False
+        self.installEventFilter(self)
+        app = QtWidgets.QApplication.instance()
+        if app:
+            app.installEventFilter(self)
 
         # Direkt beim Start Modus wählen lassen
         self._set_controls_enabled(False)
@@ -247,6 +253,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_spin_all_enabled()
         self._update_cancel_enabled()
         self._apply_mode_results(self._mode_key())
+        # Tooltips sofort erlauben (werden später noch einmal frisch berechnet)
+        self._set_tooltips_ready(True)
 
     def _on_overlay_closed(self):
         self._set_controls_enabled(True)
@@ -254,6 +262,18 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.hero_ban_active:
             self._hero_ban_override_role = None
             self._update_hero_ban_wheel()
+        # Tooltip/Truncation nach finalem Layout aktualisieren
+        QtCore.QTimer.singleShot(0, self._refresh_tooltip_caches)
+        QtCore.QTimer.singleShot(200, self._refresh_tooltip_caches)
+
+    def eventFilter(self, obj, event):
+        # Nach dem ersten Nutzer-Event (Klick/Bewegung) Tooltip-Caches erzwingen
+        if event.type() in (QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseMove) and not getattr(self, "_tooltip_warmed", False):
+            self._tooltip_warmed = True
+            QtCore.QTimer.singleShot(0, self._refresh_tooltip_caches)
+            QtCore.QTimer.singleShot(200, self._refresh_tooltip_caches)
+            QtCore.QTimer.singleShot(0, self._reset_hover_cache_under_cursor)
+        return super().eventFilter(obj, event)
 
     def _apply_theme(self):
         """
@@ -463,6 +483,52 @@ class MainWindow(QtWidgets.QMainWindow):
                 wheel.result.setText(snap.get(name, "–"))
                 if hasattr(wheel, "_update_clear_button_enabled"):
                     wheel._update_clear_button_enabled()
+
+    def _refresh_tooltip_caches(self):
+        """Baut die Label-/Tooltip-Caches nach finalem Layout neu auf und schaltet sie frei."""
+        wheels = [self.tank, self.dps, self.support]
+        if getattr(self, "map_main", None):
+            wheels.append(self.map_main)
+        for w in wheels:
+            wheel = getattr(getattr(w, "view", None), "wheel", None)
+            if wheel and hasattr(wheel, "_ensure_cache"):
+                try:
+                    wheel._cached = None
+                    wheel._ensure_cache(force=True)
+                except Exception:
+                    pass
+            if wheel and hasattr(wheel, "set_tooltips_ready"):
+                try:
+                    wheel.set_tooltips_ready(True)
+                except Exception:
+                    pass
+
+    def _reset_hover_cache_under_cursor(self):
+        """Simuliert einen Hover unter dem aktuellen Cursor, um Tooltip-Cache zu aktualisieren."""
+        for w in (self.tank, self.dps, self.support, getattr(self, "map_main", None)):
+            if not w:
+                continue
+            wheel = getattr(getattr(w, "view", None), "wheel", None)
+            if wheel and hasattr(wheel, "_ensure_cache") and hasattr(wheel, "_needs_tooltip_runtime"):
+                # Cache leeren und neu aufbauen
+                try:
+                    wheel._cached = None
+                    wheel._ensure_cache(force=True)
+                except Exception:
+                    pass
+
+    def _set_tooltips_ready(self, ready: bool = True):
+        """Setzt das Tooltip-Ready-Flag für alle Räder."""
+        wheels = [self.tank, self.dps, self.support]
+        if getattr(self, "map_main", None):
+            wheels.append(self.map_main)
+        for w in wheels:
+            wheel = getattr(getattr(w, "view", None), "wheel", None)
+            if wheel and hasattr(wheel, "set_tooltips_ready"):
+                try:
+                    wheel.set_tooltips_ready(bool(ready))
+                except Exception:
+                    pass
 
     def _set_hero_ban_visuals(self, active: bool):
         """Delegiert an den Mode-Manager und sperrt Breiten in Hero-Ban."""
@@ -1264,6 +1330,11 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_mode_chosen(self, online: bool):
         self.online_mode = online
         self._set_controls_enabled(True)
+        # Erste Benutzereingabe (Online/Offline) → Tooltip-Caches sofort aufwärmen
+        self._tooltip_warmed = True
+        self._refresh_tooltip_caches()
+        QtCore.QTimer.singleShot(150, self._refresh_tooltip_caches)
+        QtCore.QTimer.singleShot(0, self._reset_hover_cache_under_cursor)
 
         if self.online_mode:
             config.debug_print("Online-Modus aktiv.")
