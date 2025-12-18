@@ -75,21 +75,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self._on_volume_changed(self.volume_slider.value())
         self._last_volume_before_mute = self.volume_slider.value()
 
-        # Modus-Schalter (Spieler / Helden)
+        # Modus-Schalter (Spieler / Helden / Hero-Ban / Maps)
         self.btn_mode_players = QtWidgets.QPushButton("Spieler-Auswahl")
         self.btn_mode_players.setCheckable(True)
         self.btn_mode_heroes = QtWidgets.QPushButton("Helden-Auswahl")
         self.btn_mode_heroes.setCheckable(True)
         self.btn_mode_heroban = QtWidgets.QPushButton("Hero-Ban")
         self.btn_mode_heroban.setCheckable(True)
+        self.btn_mode_maps = QtWidgets.QPushButton("Map-Wahl/Ban")
+        self.btn_mode_maps.setCheckable(True)
         self.btn_mode_players.clicked.connect(lambda: self._on_mode_button_clicked("players"))
         self.btn_mode_heroes.clicked.connect(lambda: self._on_mode_button_clicked("heroes"))
         self.btn_mode_heroban.clicked.connect(lambda: self._on_mode_button_clicked("hero_ban"))
+        self.btn_mode_maps.clicked.connect(lambda: self._on_mode_button_clicked("maps"))
         mode_group = QtWidgets.QButtonGroup(self)
         mode_group.setExclusive(True)
         mode_group.addButton(self.btn_mode_players)
         mode_group.addButton(self.btn_mode_heroes)
         mode_group.addButton(self.btn_mode_heroban)
+        mode_group.addButton(self.btn_mode_maps)
         mode_row = QtWidgets.QHBoxLayout()
         mode_row.setContentsMargins(8, 0, 8, 4)
         mode_row.addStretch(1)
@@ -97,11 +101,15 @@ class MainWindow(QtWidgets.QMainWindow):
         mode_row.addWidget(self.btn_mode_players)
         mode_row.addWidget(self.btn_mode_heroes)
         mode_row.addWidget(self.btn_mode_heroban)
+        mode_row.addWidget(self.btn_mode_maps)
         mode_row.addStretch(1)
         root.addLayout(mode_row)
 
-        grid = QtWidgets.QGridLayout()
-        root.addLayout(grid, 1)
+        # ----- Rolle/Grid-Container (Players/Heroes/Hero-Ban) -----
+        role_container = QtWidgets.QWidget()
+        grid = QtWidgets.QGridLayout(role_container)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(12)
 
         # Startzustand pro Rolle (Spieler-Modus)
         active_states = self._state_store.get_mode_state(self.current_mode)
@@ -133,6 +141,16 @@ class MainWindow(QtWidgets.QMainWindow):
         grid.addWidget(self.tank, 0, 0)
         grid.addWidget(self.dps, 0, 1)
         grid.addWidget(self.support, 0, 2)
+
+        # ----- Map-Mode-Container -----
+        self._map_result_text = "–"
+        self.map_container = self._build_map_mode_ui()
+
+        # ----- Stacked Content -----
+        self.mode_stack = QtWidgets.QStackedLayout()
+        self.mode_stack.addWidget(role_container)  # index 0
+        self.mode_stack.addWidget(self.map_container)  # index 1
+        root.addLayout(self.mode_stack, 1)
 
         # Aktiven Modus vollständig anwenden (Einträge, Toggles etc.)
         self.btn_mode_players.setChecked(self.current_mode == "players")
@@ -177,6 +195,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._last_results_snapshot: dict | None = None
         for w in (self.tank, self.dps, self.support):
             w.spun.connect(self._wheel_finished)
+        if hasattr(self, "map_main"):
+            self.map_main.spun.connect(self._wheel_finished)
 
         self.overlay = ResultOverlay(parent=central)
         self.overlay.hide()
@@ -195,6 +215,11 @@ class MainWindow(QtWidgets.QMainWindow):
             w.btn_include_in_all.toggled.connect(self._update_spin_all_enabled)
             w.stateChanged.connect(self._on_wheel_state_changed)
             w.btn_include_in_all.toggled.connect(self._on_role_include_toggled)
+        if hasattr(self, "map_lists"):
+            for w in self.map_lists.values():
+                w.stateChanged.connect(self._save_state)
+                w.btn_include_in_all.toggled.connect(self._save_state)
+                w.btn_include_in_all.toggled.connect(self._update_spin_all_enabled)
 
         # jetzt darf gespeichert werden
         self._restoring_state = False
@@ -318,6 +343,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self.btn_spin_all.setEnabled(any_selected and has_candidates and self.pending == 0)
             self._update_cancel_enabled()
             return
+        if self.current_mode == "maps":
+            any_selected = any(w.btn_include_in_all.isChecked() for w in getattr(self, "map_lists", {}).values())
+            has_candidates = bool(getattr(self, "_map_combined", []))
+            self.btn_spin_all.setEnabled(any_selected and has_candidates and self.pending == 0)
+            self._update_cancel_enabled()
+            return
         any_selected = any(
             w.is_selected_for_global_spin()
             for w in (self.tank, self.dps, self.support)
@@ -331,12 +362,19 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _snapshot_mode_results(self):
         """Merkt Summary/Resultate für den aktuellen Modus (temp, nicht persistiert)."""
-        self._mode_results[self._mode_key()] = {
-            "summary": self.summary.text(),
-            "tank": self.tank.result.text(),
-            "dps": self.dps.result.text(),
-            "support": self.support.result.text(),
-        }
+        key = self._mode_key()
+        if self.current_mode == "maps":
+            self._mode_results[key] = {
+                "summary": self.summary.text(),
+                "map": getattr(self, "_map_result_text", "–"),
+            }
+        else:
+            self._mode_results[key] = {
+                "summary": self.summary.text(),
+                "tank": self.tank.result.text(),
+                "dps": self.dps.result.text(),
+                "support": self.support.result.text(),
+            }
 
     def _apply_mode_results(self, key: str):
         """Stellt Summary/Resultate für den gewünschten Modus wieder her."""
@@ -346,17 +384,23 @@ class MainWindow(QtWidgets.QMainWindow):
         if not snap:
             # Reset auf neutrale Anzeige
             self.summary.setText("")
-            for wheel in (self.tank, self.dps, self.support):
-                wheel.result.setText("–")
-                if hasattr(wheel, "_update_clear_button_enabled"):
-                    wheel._update_clear_button_enabled()
+            if self.current_mode == "maps":
+                self._map_result_text = "–"
+            else:
+                for wheel in (self.tank, self.dps, self.support):
+                    wheel.result.setText("–")
+                    if hasattr(wheel, "_update_clear_button_enabled"):
+                        wheel._update_clear_button_enabled()
             return
         self.summary.setText(snap.get("summary", ""))
-        mapping = [("tank", self.tank), ("dps", self.dps), ("support", self.support)]
-        for name, wheel in mapping:
-            wheel.result.setText(snap.get(name, "–"))
-            if hasattr(wheel, "_update_clear_button_enabled"):
-                wheel._update_clear_button_enabled()
+        if self.current_mode == "maps":
+            self._map_result_text = snap.get("map", "–")
+        else:
+            mapping = [("tank", self.tank), ("dps", self.dps), ("support", self.support)]
+            for name, wheel in mapping:
+                wheel.result.setText(snap.get(name, "–"))
+                if hasattr(wheel, "_update_clear_button_enabled"):
+                    wheel._update_clear_button_enabled()
 
     def _set_hero_ban_visuals(self, active: bool):
         """Delegiert an den Mode-Manager."""
@@ -368,6 +412,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.btn_spin_all.setEnabled(False)
         for w in (self.tank, self.dps, self.support):
             w.set_interactive_enabled(en)
+        if getattr(self, "current_mode", "") == "maps" and hasattr(self, "map_lists"):
+            for w in self.map_lists.values():
+                w.set_interactive_enabled(en)
+            if hasattr(self, "map_main"):
+                self.map_main.set_interactive_enabled(en)
         if not en:
             self._update_cancel_enabled()
         if self.hero_ban_active and en:
@@ -379,9 +428,69 @@ class MainWindow(QtWidgets.QMainWindow):
     
     def spin_all(self):
         """Dreht alle selektierten Räder auf faire Weise."""
-        spin_service.spin_all(self)
+        if self.current_mode == "maps":
+            self._spin_map_all()
+        else:
+            spin_service.spin_all(self)
     def _spin_single(self, wheel: WheelView, mult: float = 1.0, hero_ban_override: bool = True):
-        spin_service.spin_single(self, wheel, mult=mult, hero_ban_override=hero_ban_override)
+        if self.current_mode == "maps":
+            self._spin_map_single()
+        else:
+            spin_service.spin_single(self, wheel, mult=mult, hero_ban_override=hero_ban_override)
+
+    def _spin_map_all(self, subset: list[str] | None = None):
+        if self.pending > 0:
+            return
+        candidates = list(subset) if subset is not None else list(getattr(self, "_map_combined", []))
+        if not candidates:
+            self.summary.setText("Bitte Maps eintragen.")
+            return
+        self._snapshot_results()
+        self.sound.stop_ding()
+        self._stop_all_wheels()
+        self._set_controls_enabled(False)
+        self.summary.setText("")
+        self.pending = 0
+        self.overlay.hide()
+        self.sound.play_spin()
+        duration = int(self.duration.value())
+        self._pending_map_choice = None
+        if hasattr(self, "map_main"):
+            # Wähle Zielname gezielt, falls möglich
+            # Temporär override, falls subset vorgegeben
+            if subset is not None:
+                override_entries = [{"name": n, "subroles": [], "active": True} for n in candidates]
+                self.map_main.set_override_entries(override_entries)
+                self._map_temp_override = True
+            else:
+                self._map_temp_override = False
+            candidates = self.map_main.get_effective_wheel_names(include_disabled=False)
+            if candidates:
+                choice = random.choice(candidates)
+                self._pending_map_choice = choice
+                ok = self.map_main.spin_to_name(choice, duration_ms=duration)
+            else:
+                ok = self.map_main.spin(duration_ms=duration)
+        else:
+            ok = False
+        if ok:
+            self.pending = 1
+        else:
+            self.sound.stop_spin()
+            self._set_controls_enabled(True)
+            self.summary.setText("Bitte Maps eintragen.")
+        self._update_cancel_enabled()
+
+    def _spin_map_single(self):
+        # lokaler Spin im Map-Mode entspricht globalem Spin (nur ein Rad)
+        self._spin_map_all()
+
+    def _spin_map_category(self, category: str):
+        wheel = self.map_lists.get(category)
+        if wheel is None:
+            return
+        names = [e.get("name", "").strip() for e in wheel._active_entries() if e.get("name", "").strip()]
+        self._spin_map_all(subset=names)
 
     def _wheel_finished(self, _name: str):
         # Wenn laut State gar kein Spin aktiv ist, ignorieren wir alte/späte Signale,
@@ -405,6 +514,19 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.summary.setText(f"Hero-Ban: {d}")
                 self.overlay.show_message("Hero-Ban", [d, "", ""])
                 self._last_results_snapshot = None
+                self._update_cancel_enabled()
+                return
+            if self.current_mode == "maps":
+                choice = getattr(self, "_pending_map_choice", None) or getattr(self, "_map_result_text", "–")
+                self._map_result_text = choice
+                self.summary.setText(f"Map-Wahl: {choice}")
+                self.overlay.show_message("Map-Wahl", [choice, "", ""])
+                self._last_results_snapshot = None
+                self._snapshot_mode_results()
+                if getattr(self, "_map_temp_override", False):
+                    self._rebuild_map_wheel()
+                    self._map_temp_override = False
+                self._set_controls_enabled(True)
                 self._update_cancel_enabled()
                 return
             else:
@@ -439,25 +561,36 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _snapshot_results(self):
         """Merkt aktuelle Resultate & Summary, um sie bei Abbruch wiederherzustellen."""
-        self._last_results_snapshot = {
-            "summary": self.summary.text(),
-            "tank": self.tank.result.text(),
-            "dps": self.dps.result.text(),
-            "support": self.support.result.text(),
-        }
+        if self.current_mode == "maps":
+            self._last_results_snapshot = {
+                "summary": self.summary.text(),
+                "map": getattr(self, "_map_result_text", "–"),
+            }
+        else:
+            self._last_results_snapshot = {
+                "summary": self.summary.text(),
+                "tank": self.tank.result.text(),
+                "dps": self.dps.result.text(),
+                "support": self.support.result.text(),
+            }
 
     def _restore_results_snapshot(self):
         snap = getattr(self, "_last_results_snapshot", None)
         if not snap:
             return
         self.summary.setText(snap.get("summary", ""))
-        mapping = [("tank", self.tank), ("dps", self.dps), ("support", self.support)]
-        for key, wheel in mapping:
-            txt = snap.get(key, None)
+        if self.current_mode == "maps":
+            txt = snap.get("map", None)
             if txt is not None:
-                wheel.result.setText(txt)
-                if hasattr(wheel, "_update_clear_button_enabled"):
-                    wheel._update_clear_button_enabled()
+                self._map_result_text = txt
+        else:
+            mapping = [("tank", self.tank), ("dps", self.dps), ("support", self.support)]
+            for key, wheel in mapping:
+                txt = snap.get(key, None)
+                if txt is not None:
+                    wheel.result.setText(txt)
+                    if hasattr(wheel, "_update_clear_button_enabled"):
+                        wheel._update_clear_button_enabled()
         self._last_results_snapshot = None
 
     def _get_state_file(self) -> Path:
@@ -573,13 +706,404 @@ class MainWindow(QtWidgets.QMainWindow):
         # Modusabhängige Ergebnisse laden
         self._apply_mode_results(self._mode_key())
 
+    # ----- Map-Mode -----
+    def _build_map_mode_ui(self) -> QtWidgets.QWidget:
+        container = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self.map_categories = list(getattr(config, "MAP_CATEGORIES", [])) or list(config.DEFAULT_MAPS.keys())
+        map_state = self._state_store.get_mode_state("maps") or {}
+        self.map_lists: dict[str, WheelView] = {}
+        self._map_combined: list[str] = []
+        self._map_result_text = "–"
+
+        # --- Typen-Sidebar ---
+        sidebar = QtWidgets.QFrame()
+        sidebar.setStyleSheet("QFrame { background: rgba(245,245,245,0.9); border:1px solid #ddd; border-radius:8px; }")
+        sb_layout = QtWidgets.QVBoxLayout(sidebar)
+        sb_layout.setContentsMargins(8, 8, 8, 8)
+        sb_layout.setSpacing(6)
+        lbl = QtWidgets.QLabel("Map-Typen")
+        lbl.setStyleSheet("font-weight:600;")
+        sb_layout.addWidget(lbl)
+        self.map_type_checks: dict[str, QtWidgets.QCheckBox] = {}
+        self._map_type_list_layout = QtWidgets.QVBoxLayout()
+        self._map_type_list_layout.setSpacing(4)
+        sb_layout.addLayout(self._map_type_list_layout)
+        btn_edit_types = QtWidgets.QPushButton("Typen bearbeiten")
+        btn_edit_types.clicked.connect(lambda: self._show_map_type_editor(container))
+        sb_layout.addWidget(btn_edit_types, 0, QtCore.Qt.AlignLeft)
+        sb_layout.addStretch(1)
+
+        # --- Listen-Gitter rechts ---
+        self.map_grid_container = QtWidgets.QWidget()
+        self.map_grid = QtWidgets.QVBoxLayout(self.map_grid_container)
+        self.map_grid.setContentsMargins(4, 4, 4, 4)
+        self.map_grid.setSpacing(8)
+
+        # Scroll um viele Listen aufzunehmen
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self.map_grid_container)
+        # Gerahmtes Container mit abgerundeten Ecken für die Listen
+        map_lists_frame = QtWidgets.QFrame()
+        map_lists_frame.setObjectName("mapListsContainer")
+        map_lists_frame.setStyleSheet(
+            "#mapListsContainer { background: rgba(255,255,255,0.9); border:1px solid #dddddd; border-radius:12px; }"
+        )
+        lists_layout = QtWidgets.QVBoxLayout(map_lists_frame)
+        lists_layout.setContentsMargins(8, 8, 8, 8)
+        lists_layout.addWidget(scroll)
+        map_lists_frame.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+
+        # Listen initial erstellen
+        self._build_map_lists(map_state)
+
+        # zentrales Map-Rad zum Drehen
+        self.map_main = WheelView("Map-Rad", [], pair_mode=False, allow_pair_toggle=False)
+        self.map_main.set_header_controls_visible(False)
+        self.map_main.set_subrole_controls_visible(False)
+        self.map_main.set_show_names_visible(True)
+        self.map_main.btn_include_in_all.setVisible(False)
+        self.map_main.btn_local_spin.setText("🔁 Karte drehen")
+        self.map_main.request_spin.connect(self._spin_map_single)
+        self.map_main.spun.connect(self._wheel_finished)
+        # Nur Rad + „Namen anzeigen“ zeigen, rest ausblenden
+        self.map_main.names.setVisible(False)
+        self.map_main.names_hint.setVisible(False)
+        if hasattr(self.map_main, "btn_sort_names"):
+            self.map_main.btn_sort_names.setVisible(False)
+        self.map_main.result_widget.setVisible(False)
+        self.map_main.btn_local_spin.setVisible(False)
+        # Rad-Größe etwas anheben, damit es näher an den anderen Modi liegt
+        self.map_main.view.setMinimumSize(260, 260)
+        self.map_main.view.setMaximumSize(QtCore.QSize(16777215, 16777215))
+        self.map_main.view.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+
+        # Gesamt-Layout: Sidebar | Rad | Listen
+        row = QtWidgets.QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(10)
+        row.addWidget(sidebar, 0)
+        row.addWidget(self.map_main, 0, QtCore.Qt.AlignCenter)
+        row.addWidget(map_lists_frame, 1)
+        row.setStretch(0, 0)
+        row.setStretch(1, 1)
+        row.setStretch(2, 1)
+        layout.addLayout(row, 1)
+        layout.setStretchFactor(row, 1)
+        # Höhe begrenzen, orientiert an der Kartenhöhe eines normalen Rads
+        def _cap_heights():
+            ref_h = max(200, (self.tank.height() or self.tank.sizeHint().height()) - 25)
+            map_lists_frame.setMaximumHeight(ref_h)
+            self.map_main.setMaximumHeight(ref_h)
+        QtCore.QTimer.singleShot(0, _cap_heights)
+        QtCore.QTimer.singleShot(0, self._rebuild_map_wheel)
+        return container
+
+    def _on_map_list_changed(self, *args):
+        if self.current_mode != "maps":
+            return
+        self._rebuild_map_wheel()
+
+    def _build_map_lists(self, map_state: dict, include_map: dict | None = None):
+        self._map_rebuild_guard = True
+        # bestehende Einträge bereinigen
+        while self.map_grid.count():
+            item = self.map_grid.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+                widget.deleteLater()
+        self.map_lists.clear()
+        self.map_type_checks.clear()
+        # Layout für Typen-Checkboxen leeren
+        while self._map_type_list_layout.count():
+            item = self._map_type_list_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.setParent(None)
+                w.deleteLater()
+
+        for idx, cat in enumerate(self.map_categories):
+            role_state = map_state.get(cat) or {"entries": [], "pair_mode": False, "use_subroles": False}
+            include_checked = True if include_map is None else include_map.get(cat, True)
+            w = WheelView(cat, role_state.get("entries", []), pair_mode=False, allow_pair_toggle=False)
+            w.set_header_controls_visible(False)
+            w.set_subrole_controls_visible(False)
+            w.set_wheel_render_enabled(False)
+            w.set_show_names_visible(False)
+            w.view.setVisible(False)  # nur Liste zeigen
+            w.result_widget.setVisible(False)
+            w.btn_local_spin.setVisible(True)
+            w.btn_local_spin.setEnabled(True)
+            w.btn_local_spin.setText("🔁 Diese Kategorie")
+            w.btn_local_spin.clicked.connect(lambda _=None, c=cat: self._spin_map_category(c))
+            w.btn_include_in_all.setChecked(include_checked)
+            w.btn_include_in_all.toggled.connect(self._rebuild_map_wheel)
+            w.stateChanged.connect(self._on_map_list_changed)
+            w.set_interactive_enabled(True)
+            self.map_lists[cat] = w
+            self.map_grid.addWidget(w)
+
+            cb = QtWidgets.QCheckBox(cat)
+            cb.setChecked(include_checked)
+            cb.toggled.connect(lambda checked, c=cat: self._on_map_type_toggled(c, checked))
+            self.map_type_checks[cat] = cb
+            self._map_type_list_layout.addWidget(cb)
+
+        self._map_type_list_layout.addStretch(1)
+        self._map_rebuild_guard = False
+        self._rebuild_map_wheel()
+
+    def _on_map_type_toggled(self, category: str, checked: bool):
+        wheel = self.map_lists.get(category)
+        if wheel:
+            wheel.btn_include_in_all.setChecked(checked)
+            wheel.setVisible(checked)
+            wheel.set_interactive_enabled(checked)
+        self._rebuild_map_wheel()
+
+    def _show_map_type_editor(self, parent_widget: QtWidgets.QWidget):
+        if not hasattr(self, "_map_type_editor"):
+            self._map_type_editor = QtWidgets.QFrame(parent_widget)
+            self._map_type_editor.setStyleSheet(
+                "QFrame { background: white; border: 2px solid #444; border-radius: 10px; }"
+            )
+            self._map_type_editor.setFixedSize(360, 320)
+            layout = QtWidgets.QVBoxLayout(self._map_type_editor)
+            layout.setContentsMargins(10, 10, 10, 10)
+            layout.setSpacing(8)
+            title = QtWidgets.QLabel("Map-Typen bearbeiten")
+            title.setStyleSheet("font-weight:700; font-size:14px;")
+            layout.addWidget(title)
+
+            self._map_type_list_widget = QtWidgets.QListWidget()
+            self._map_type_list_widget.setEditTriggers(
+                QtWidgets.QAbstractItemView.SelectedClicked
+                | QtWidgets.QAbstractItemView.EditKeyPressed
+            )
+            self._map_type_list_widget.itemClicked.connect(self._start_map_type_edit)
+            layout.addWidget(self._map_type_list_widget, 1)
+
+            btn_grid = QtWidgets.QGridLayout()
+            btn_grid.setContentsMargins(16, 6, 16, 6)
+            btn_grid.setHorizontalSpacing(16)
+            btn_add = QtWidgets.QPushButton("+ Hinzufügen")
+            btn_del = QtWidgets.QPushButton("– Löschen")
+            common_btn_style = "QPushButton { padding:8px 12px; margin:2px; min-width:100px; border-radius:6px; }"
+            btn_add.setStyleSheet(common_btn_style)
+            btn_del.setStyleSheet(common_btn_style)
+            btn_add.clicked.connect(self._add_map_type_row)
+            btn_del.clicked.connect(self._del_map_type_row)
+            btn_grid.addWidget(btn_add, 0, 0, QtCore.Qt.AlignLeft)
+            btn_grid.addWidget(btn_del, 0, 1, QtCore.Qt.AlignRight)
+            btn_grid.setColumnStretch(0, 1)
+            btn_grid.setColumnStretch(1, 1)
+            layout.addLayout(btn_grid)
+
+            confirm_row = QtWidgets.QHBoxLayout()
+            confirm_row.setContentsMargins(16, 6, 16, 6)
+            btn_ok = QtWidgets.QPushButton("Übernehmen")
+            btn_cancel = QtWidgets.QPushButton("Abbrechen")
+            btn_ok.setStyleSheet("QPushButton { background:#2e7d32; color:white; padding:8px 12px; margin:2px; min-width:100px; border-radius:6px; }"
+                                  "QPushButton:hover { background:#388e3c; }")
+            btn_cancel.setStyleSheet("QPushButton { background:#c62828; color:white; padding:8px 12px; margin:2px; min-width:100px; border-radius:6px; }"
+                                      "QPushButton:hover { background:#d32f2f; }")
+            btn_ok.clicked.connect(self._confirm_map_types)
+            btn_cancel.clicked.connect(lambda: self._map_type_editor.hide())
+            confirm_row.addWidget(btn_ok, 0, QtCore.Qt.AlignLeft)
+            confirm_row.addWidget(btn_cancel, 0, QtCore.Qt.AlignRight)
+            layout.addLayout(confirm_row)
+
+        # Inhalte aktualisieren
+        self._map_type_list_widget.clear()
+        for cat in self.map_categories:
+            item = QtWidgets.QListWidgetItem(cat)
+            item.setFlags(item.flags() | QtCore.Qt.ItemIsEditable)
+            self._map_type_list_widget.addItem(item)
+
+        # Frame mittig im Parent platzieren
+        if parent_widget:
+            pw = parent_widget.width()
+            ph = parent_widget.height()
+            w = self._map_type_editor.width()
+            h = self._map_type_editor.height()
+            self._map_type_editor.move(max(0, (pw - w) // 2), max(0, (ph - h) // 2))
+        self._map_type_editor.show()
+        self._map_type_editor.raise_()
+
+    def _add_map_type_row(self):
+        if hasattr(self, "_map_type_list_widget"):
+            item = QtWidgets.QListWidgetItem("Neuer Typ")
+            item.setFlags(item.flags() | QtCore.Qt.ItemIsEditable)
+            self._map_type_list_widget.addItem(item)
+            self._map_type_list_widget.setCurrentItem(item)
+            self._start_map_type_edit(item)
+
+    def _del_map_type_row(self):
+        if hasattr(self, "_map_type_list_widget"):
+            row = self._map_type_list_widget.currentRow()
+            if row >= 0:
+                self._map_type_list_widget.takeItem(row)
+
+    def _confirm_map_types(self):
+        if not hasattr(self, "_map_type_list_widget"):
+            return
+        new_types = []
+        for i in range(self._map_type_list_widget.count()):
+            text = self._map_type_list_widget.item(i).text().strip()
+            if text and text not in new_types:
+                new_types.append(text)
+        if not new_types:
+            self._map_type_editor.hide()
+            return
+        QtCore.QTimer.singleShot(0, lambda: self._apply_map_types(new_types))
+        self._map_type_editor.hide()
+    def _start_map_type_edit(self, item: QtWidgets.QListWidgetItem):
+        """Sofort in den Edit-Modus mit Cursor am Ende springen."""
+        if not item:
+            return
+        self._map_type_list_widget.editItem(item)
+        QtCore.QTimer.singleShot(0, lambda: self._focus_editor_end())
+
+    def _focus_editor_end(self):
+        # Finde den aktiven Editor (QLineEdit) und setze Cursor ans Ende ohne Auswahl
+        editors = self._map_type_list_widget.findChildren(QtWidgets.QLineEdit)
+        if not editors:
+            return
+        editor = editors[-1]
+        editor.setFocus()
+        editor.deselect()
+        editor.setCursorPosition(len(editor.text()))
+
+    def _apply_map_types(self, new_types: list[str]):
+        # Aktuellen Zustand der Listen sichern, damit Einträge bei Umbenennung erhalten bleiben
+        current_states = {}
+        include_map = {}
+        for cat, wheel in getattr(self, "map_lists", {}).items():
+            current_states[cat] = {
+                "entries": wheel.get_current_entries(),
+                "pair_mode": False,
+                "use_subroles": False,
+            }
+            include_map[cat] = wheel.btn_include_in_all.isChecked()
+
+        # Fallback auf gespeicherten State
+        saved_state = self._state_store.get_mode_state("maps") or {}
+
+        new_state = {}
+        new_include_map = {}
+        old_categories = list(self.map_categories)
+        for idx, cat in enumerate(new_types):
+            if cat in current_states:
+                new_state[cat] = current_states[cat]
+                new_include_map[cat] = include_map.get(cat, True)
+            elif cat in saved_state:
+                new_state[cat] = saved_state[cat]
+                new_include_map[cat] = True
+            elif idx < len(old_categories):
+                # Rename auf gleicher Position -> alten State übernehmen
+                old_cat = old_categories[idx]
+                st = current_states.get(old_cat) or saved_state.get(old_cat)
+                if st:
+                    new_state[cat] = st
+                    new_include_map[cat] = include_map.get(old_cat, True)
+                else:
+                    new_state[cat] = {"entries": [], "pair_mode": False, "use_subroles": False}
+                    new_include_map[cat] = True
+            else:
+                # neuer Typ -> leere Liste
+                new_state[cat] = {"entries": [], "pair_mode": False, "use_subroles": False}
+                new_include_map[cat] = True
+
+        self.map_categories = list(new_types)
+        self._build_map_lists(new_state, include_map=new_include_map)
+
+    def _rebuild_map_wheel(self):
+        if getattr(self, "_map_rebuild_guard", False):
+            return
+        if self.current_mode != "maps":
+            return
+        combined: list[str] = []
+        for _cat, wheel in getattr(self, "map_lists", {}).items():
+            if not wheel.btn_include_in_all.isChecked():
+                continue
+            for entry in wheel._active_entries():
+                name = entry.get("name", "").strip()
+                if name:
+                    combined.append(name)
+        self._map_combined = combined
+        if hasattr(self, "map_main"):
+            # Override-Einträge nutzen, damit das zentrale Rad nur die kombinierten Maps zeigt
+            self.map_main.set_override_entries([{"name": n, "subroles": [], "active": True} for n in combined])
+        self._update_spin_all_enabled()
+
+    def _load_map_state(self):
+        if not hasattr(self, "map_lists"):
+            return
+        state = self._state_store.get_mode_state("maps") or {}
+        for cat, wheel in self.map_lists.items():
+            role_state = state.get(cat) or self._state_store.default_role_state(cat, "maps")
+            wheel.load_entries(role_state.get("entries", []))
+        self._rebuild_map_wheel()
+
+    def _capture_map_state(self):
+        if not hasattr(self, "map_lists"):
+            return
+        self._state_store.capture_mode_from_wheels("maps", self.map_lists)
+
+    def _activate_map_mode(self):
+        if hasattr(self, "mode_stack"):
+            self.mode_stack.setCurrentIndex(1)
+        self.hero_ban_active = False
+        self.dps.set_override_entries(None)
+        self.current_mode = "maps"
+        self.btn_mode_players.setChecked(False)
+        self.btn_mode_heroes.setChecked(False)
+        self.btn_mode_heroban.setChecked(False)
+        self.btn_mode_maps.setChecked(True)
+        self._load_map_state()
+        self._update_title()
+        self._apply_mode_results(self._mode_key())
+        self._update_spin_all_enabled()
+
+    def _activate_role_modes(self):
+        if hasattr(self, "mode_stack"):
+            self.mode_stack.setCurrentIndex(0)
+
+
     def _on_mode_button_clicked(self, target: str):
         # Aktuelle Ergebnisse für den Modus merken, bevor wir wechseln
         self._snapshot_mode_results()
+        if target == "maps":
+            if self.hero_ban_active:
+                self.hero_ban_active = False
+                self.dps.set_override_entries(None)
+                self._set_hero_ban_visuals(False)
+            # vorherige Zustände sichern
+            self._state_store.capture_mode_from_wheels(
+                self.current_mode,
+                {"Tank": self.tank, "Damage": self.dps, "Support": self.support},
+                hero_ban_active=self.hero_ban_active,
+            )
+            self._capture_map_state()
+            self._activate_map_mode()
+            return
+
+        # wenn wir aus dem Map-Mode zurückkommen, zuerst speichern
+        if self.current_mode == "maps":
+            self._capture_map_state()
+        self._activate_role_modes()
         mode_manager.on_mode_button_clicked(self, target)
 
     def _update_title(self):
-        self.title.setText("Overwatch 2 – Triple Wheel Picker")
+        if self.current_mode == "maps":
+            self.title.setText("Overwatch 2 – Map-Wahl")
+        else:
+            self.title.setText("Overwatch 2 – Triple Wheel Picker")
     def _load_saved_state(self) -> dict:
         """
         Lädt den gespeicherten Zustand aus saved_state.json, falls vorhanden.
@@ -599,11 +1123,16 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         Liest den aktuellen Zustand beider Modi aus.
         """
+        mode_to_capture = self.current_mode
+        if mode_to_capture == "maps":
+            mode_to_capture = getattr(self, "last_non_hero_mode", "players")
         self._state_store.capture_mode_from_wheels(
-            self.current_mode,
+            mode_to_capture,
             {"Tank": self.tank, "Damage": self.dps, "Support": self.support},
-            hero_ban_active=self.hero_ban_active,
+            hero_ban_active=self.hero_ban_active if mode_to_capture == "heroes" else False,
         )
+        if getattr(self, "map_lists", None):
+            self._capture_map_state()
         return self._state_store.to_saved(self.volume_slider.value())
 
     def _update_hero_ban_wheel(self):

@@ -48,9 +48,9 @@ class WheelWidget(QtWidgets.QGraphicsView):
         path = QtGui.QPainterPath()
         tri = QtGui.QPolygonF(
             [
-                QtCore.QPointF(-20, -r - 60),
-                QtCore.QPointF(20, -r - 60),
-                QtCore.QPointF(0, -r - 10),
+                QtCore.QPointF(-14, -r - 46),
+                QtCore.QPointF(14, -r - 46),
+                QtCore.QPointF(0, -r - 14),
             ]
         )
         path.addPolygon(tri)

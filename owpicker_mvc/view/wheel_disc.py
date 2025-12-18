@@ -326,11 +326,12 @@ class WheelDisc(QtWidgets.QGraphicsObject):
             return
         # Tooltip bei jeder Bewegung neu setzen, damit er der Maus folgt
         self._last_hover_idx = idx
-        self._show_hover_overlay(self.names[idx], event.scenePos())
+        name = self.names[idx]
+        self._show_floating_label(name, event.screenPos())
         super().hoverMoveEvent(event)
 
     def hoverLeaveEvent(self, event: QtWidgets.QGraphicsSceneHoverEvent) -> None:
-        self._hide_hover_overlay()
+        self._hide_floating_label()
         self._last_hover_idx = None
         super().hoverLeaveEvent(event)
 
@@ -389,6 +390,26 @@ class WheelDisc(QtWidgets.QGraphicsObject):
             self._hover_item.hide()
         if self._hover_bg is not None:
             self._hover_bg.hide()
+
+    # ---- Floating label (custom tooltip) ----
+    def _show_floating_label(self, text: str, screen_pos: QtCore.QPointF):
+        if not getattr(self, "_floating_label", None):
+            lbl = QtWidgets.QLabel()
+            lbl.setWindowFlags(QtCore.Qt.ToolTip)
+            lbl.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+            lbl.setStyleSheet("QLabel { background: #333; color: white; border:1px solid #666; border-radius:4px; padding:4px 6px; }")
+            self._floating_label = lbl
+        lbl = self._floating_label
+        lbl.setText(text)
+        lbl.adjustSize()
+        pt = QtCore.QPoint(int(screen_pos.x()) + 12, int(screen_pos.y()) + 12)
+        lbl.move(pt)
+        lbl.show()
+        lbl.raise_()
+
+    def _hide_floating_label(self):
+        if getattr(self, "_floating_label", None):
+            self._floating_label.hide()
     
     def set_show_labels(self, show: bool):
         """Ein-/Ausschalten der Namensanzeige auf dem Rad."""

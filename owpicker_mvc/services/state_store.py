@@ -10,7 +10,7 @@ import config
 
 class ModeStateStore:
     def __init__(self, mode_states: Dict[str, Dict[str, dict]] | None = None):
-        self._mode_states: Dict[str, Dict[str, dict]] = mode_states or {"players": {}, "heroes": {}}
+        self._mode_states: Dict[str, Dict[str, dict]] = mode_states or {"players": {}, "heroes": {}, "maps": {}}
 
     @classmethod
     def from_saved(cls, saved: dict) -> "ModeStateStore":
@@ -46,6 +46,8 @@ class ModeStateStore:
         pair_defaults = {"Tank": False, "Damage": True, "Support": True}
         if mode == "heroes":
             defaults = config.DEFAULT_HEROES.get(role, [])
+        elif mode == "maps":
+            defaults = config.DEFAULT_MAPS.get(role, [])
         else:
             defaults = config.DEFAULT_NAMES.get(role, [])
         return {
@@ -75,7 +77,8 @@ class ModeStateStore:
         roles = ("Tank", "Damage", "Support")
         players_saved = saved.get("players") if isinstance(saved, dict) else {}
         heroes_saved = saved.get("heroes") if isinstance(saved, dict) else {}
-        mode_states: Dict[str, Dict[str, dict]] = {"players": {}, "heroes": {}}
+        maps_saved = saved.get("maps") if isinstance(saved, dict) else {}
+        mode_states: Dict[str, Dict[str, dict]] = {"players": {}, "heroes": {}, "maps": {}}
         for role in roles:
             if isinstance(players_saved, dict) and role in players_saved:
                 players_src = players_saved.get(role, {})
@@ -85,6 +88,13 @@ class ModeStateStore:
 
             heroes_src = heroes_saved.get(role, {}) if isinstance(heroes_saved, dict) else {}
             mode_states["heroes"][role] = cls._role_state_from_saved(heroes_src, role, "heroes")
+
+        map_roles = list(getattr(config, "MAP_CATEGORIES", [])) or list(getattr(config, "DEFAULT_MAPS", {}).keys())
+        for role in map_roles:
+            role_state = {}
+            if isinstance(maps_saved, dict):
+                role_state = maps_saved.get(role, {})
+            mode_states["maps"][role] = cls._role_state_from_saved(role_state, role, "maps")
         return mode_states
 
     def get_mode_state(self, mode: str) -> Dict[str, dict]:
@@ -112,15 +122,15 @@ class ModeStateStore:
                 "use_subroles": base.get("use_subroles", getattr(w, "use_subrole_filter", False)),
             }
 
-        self._mode_states[mode] = {
-            "Tank": wheel_state(wheels["Tank"], "Tank"),
-            "Damage": wheel_state(wheels["Damage"], "Damage"),
-            "Support": wheel_state(wheels["Support"], "Support"),
-        }
+        new_state = {}
+        for role, wheel in wheels.items():
+            new_state[role] = wheel_state(wheel, role)
+        self._mode_states[mode] = new_state
 
     def to_saved(self, volume: int) -> Dict[str, Any]:
         return {
             "players": self._mode_states.get("players", {}),
             "heroes": self._mode_states.get("heroes", {}),
+            "maps": self._mode_states.get("maps", {}),
             "volume": volume,
         }

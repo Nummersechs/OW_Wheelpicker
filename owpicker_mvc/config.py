@@ -54,6 +54,28 @@ LABEL_BOX_BORDER=(255,255,255,200)
 LABEL_BOX_BORDER_WIDTH=1
 LABEL_TEXT_COLOR=(255,255,255,255)
 
+# ---------- Maps ----------
+MAP_CATEGORIES = [
+    "Control",
+    "Escort",
+    "Hybrid",
+    "Push",
+    "Flashpoint",
+    "Assault",
+    "Clash",
+]
+
+# Basis-Map-Pools pro Kategorie
+DEFAULT_MAPS = {
+    "Control": ["Antarctic Peninsula", "Busan", "Ilios", "Lijiang Tower", "Nepal", "Oasis", "Samoa"],
+    "Escort": ["Circuit Royal", "Dorado", "Havana", "Junkertown", "Rialto", "Route 66", "Shambali Monastery", "Watchpoint: Gibraltar"],
+    "Hybrid": ["Blizzard World", "Eichenwalde", "Hollywood", "King's Row", "Midtown", "Numbani", "Paraíso"],
+    "Push": ["Colosseo", "Esperança", "New Queen Street", "Runasapi"],
+    "Flashpoint": ["Aatlis", "New Junk City", "Suravasa"],
+    "Assault": ["Hanamura", "Horizon Lunar Colony", "Paris", "Temple of Anubis", "Volskaya Industries"],
+    "Clash": ["Hanaoka", "Throne of Anubis"],
+}
+
 # ---------- Server ----------
 #API_BASE_URL = "https://wddys-macbook-air.tail455d76.ts.net/" 
 API_BASE_URL = "http://localhost:5326"
