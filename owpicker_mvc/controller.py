@@ -30,6 +30,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._hero_ban_pending = False
         self._hero_ban_override_role: str | None = None
         self._state_store = state_store.ModeStateStore.from_saved(saved)
+        self._mode_results: dict[str, dict[str, str]] = {}
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
@@ -201,6 +202,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Buttons initial updaten (nutzt schon include_in_all)
         self._update_spin_all_enabled()
         self._update_cancel_enabled()
+        self._apply_mode_results(self._mode_key())
 
     def _on_overlay_closed(self):
         self._set_controls_enabled(True)
@@ -324,6 +326,38 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_spin_all.setEnabled(any_selected and self.pending == 0)
         self._update_cancel_enabled()
 
+    def _mode_key(self) -> str:
+        return "hero_ban" if self.hero_ban_active else self.current_mode
+
+    def _snapshot_mode_results(self):
+        """Merkt Summary/Resultate für den aktuellen Modus (temp, nicht persistiert)."""
+        self._mode_results[self._mode_key()] = {
+            "summary": self.summary.text(),
+            "tank": self.tank.result.text(),
+            "dps": self.dps.result.text(),
+            "support": self.support.result.text(),
+        }
+
+    def _apply_mode_results(self, key: str):
+        """Stellt Summary/Resultate für den gewünschten Modus wieder her."""
+        if not hasattr(self, "summary"):
+            return
+        snap = self._mode_results.get(key)
+        if not snap:
+            # Reset auf neutrale Anzeige
+            self.summary.setText("")
+            for wheel in (self.tank, self.dps, self.support):
+                wheel.result.setText("–")
+                if hasattr(wheel, "_update_clear_button_enabled"):
+                    wheel._update_clear_button_enabled()
+            return
+        self.summary.setText(snap.get("summary", ""))
+        mapping = [("tank", self.tank), ("dps", self.dps), ("support", self.support)]
+        for name, wheel in mapping:
+            wheel.result.setText(snap.get(name, "–"))
+            if hasattr(wheel, "_update_clear_button_enabled"):
+                wheel._update_clear_button_enabled()
+
     def _set_hero_ban_visuals(self, active: bool):
         """Delegiert an den Mode-Manager."""
         mode_manager.set_hero_ban_visuals(self, active)
@@ -384,6 +418,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 # Nur noch EIN Request pro abgeschlossenem Spin
                 self._send_spin_result_to_server(t, d, s)
             self._last_results_snapshot = None
+            # Ergebnisse für den aktuellen Modus merken
+            self._snapshot_mode_results()
         self._update_cancel_enabled()
 
     def _cancel_spin(self):
@@ -534,8 +570,12 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "btn_cancel_spin"):
             self._update_cancel_enabled()
         self._update_title()
+        # Modusabhängige Ergebnisse laden
+        self._apply_mode_results(self._mode_key())
 
     def _on_mode_button_clicked(self, target: str):
+        # Aktuelle Ergebnisse für den Modus merken, bevor wir wechseln
+        self._snapshot_mode_results()
         mode_manager.on_mode_button_clicked(self, target)
 
     def _update_title(self):
