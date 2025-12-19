@@ -417,8 +417,6 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         if hasattr(self, "overlay"):
             self.overlay.apply_theme(theme, tool_style)
-        # Map-spezifische Container sicher im aktuellen Theme einfärben
-        self._apply_map_styles(theme)
 
         # Größere Widget-Mengen in kleinen Paketen aktualisieren
         targets = []
@@ -442,31 +440,6 @@ class MainWindow(QtWidgets.QMainWindow):
         # Theme-Button wieder freigeben, falls er kurz deaktiviert wurde
         if hasattr(self, "btn_theme"):
             QtCore.QTimer.singleShot(total_delay + 40, lambda: self.btn_theme.setEnabled(True))
-
-    def _apply_map_styles(self, theme):
-        """
-        Erzwinge Theme-Farben auf Map-spezifische Container, falls die globale
-        Stylesheet-Anwendung nicht greift (z.B. bei neuem Viewport).
-        """
-        if hasattr(self, "map_sidebar"):
-            self.map_sidebar.setStyleSheet(
-                f"QFrame#mapSidebar {{ background: {theme.frame_bg}; border:1px solid {theme.frame_border}; border-radius:8px; color:{theme.text}; }}"
-            )
-        if hasattr(self, "map_grid_container"):
-            self.map_grid_container.setStyleSheet(
-                f"#mapGridContainer {{ background: {theme.base}; border: none; color:{theme.text}; }}"
-            )
-        if hasattr(self, "map_lists_frame"):
-            self.map_lists_frame.setStyleSheet(
-                "#mapListScroll { border: none; }"
-                f"#mapListScroll QWidget {{ background: {theme.base}; color:{theme.text}; }}"
-            )
-            if hasattr(self.map_lists_frame, "viewport"):
-                vp = self.map_lists_frame.viewport()
-                if vp:
-                    vp.setStyleSheet(f"background: {theme.base}; border: none; color:{theme.text};")
-        if hasattr(self, "map_lists_wrapper"):
-            self.map_lists_wrapper.setStyleSheet(f"#mapListsWrapper {{ background: {theme.base}; border: none; color:{theme.text}; }}")
 
     def _update_mode_button_styles(self, *_args):
         """

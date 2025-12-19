@@ -406,6 +406,16 @@ class WheelView(QtWidgets.QWidget):
                 f"QPushButton:pressed {{ background:{theme.primary_pressed}; }}"
                 f"QPushButton:disabled {{ background:{theme.disabled_bg}; color:{theme.disabled_text}; border:1px solid {theme.border}; }}"
             )
+        if hasattr(self, "btn_sort_names"):
+            self.btn_sort_names.setStyleSheet(
+                "QPushButton {"
+                f" color:{theme.button_text}; background:{theme.primary};"
+                " border-radius:12px; font-weight:600; padding:8px 18px;"
+                "}"
+                f"QPushButton:hover {{ background:{theme.primary_hover}; }}"
+                f"QPushButton:pressed {{ background:{theme.primary_pressed}; }}"
+                f"QPushButton:disabled {{ background:{theme.disabled_bg}; color:{theme.disabled_text}; border:1px solid {theme.border}; }}"
+            )
         if hasattr(self, "names"):
             self.names.setStyleSheet(
                 "QListWidget {"
