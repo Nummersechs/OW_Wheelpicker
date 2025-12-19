@@ -326,9 +326,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self._refresh_tooltip_caches()
             self._reset_hover_cache_under_cursor()
         _rebuild_tooltips()
-        QtCore.QTimer.singleShot(180, _rebuild_tooltips)
+        QtCore.QTimer.singleShot(220, _rebuild_tooltips)
+        QtCore.QTimer.singleShot(620, _rebuild_tooltips)
         # Mehr Luft lassen, damit der erste Klick nicht vor dem Tooltip-Warmup passiert
-        QtCore.QTimer.singleShot(1200, self._finish_warmup)
+        QtCore.QTimer.singleShot(2000, self._finish_warmup)
 
     def _finish_warmup(self):
         """Hebt den Warmup-Block auf; idempotent."""
@@ -339,6 +340,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.overlay.set_choice_enabled(True)
         self._set_tooltips_ready(True)
         self._set_language_buttons_enabled(True)
+        self._reset_hover_cache_under_cursor()
         if self._pending_mode_choice is not None:
             choice = self._pending_mode_choice
             self._pending_mode_choice = None
@@ -365,9 +367,15 @@ class MainWindow(QtWidgets.QMainWindow):
             QtCore.QEvent.WindowActivate,
             QtCore.QEvent.ApplicationActivate,
         ):
-            QtCore.QTimer.singleShot(0, self._refresh_tooltip_caches)
-            QtCore.QTimer.singleShot(150, self._refresh_tooltip_caches)
+            self._refresh_tooltips_after_focus()
         return super().eventFilter(obj, event)
+
+    def _refresh_tooltips_after_focus(self):
+        """Bringt Tooltip-Caches nach Fokuswechsel zurück, ohne zu blockieren."""
+        self._refresh_tooltip_caches_async(delay_step_ms=50)
+        QtCore.QTimer.singleShot(200, self._reset_hover_cache_under_cursor)
+        if not getattr(self, "_warmup_active", False):
+            self._set_tooltips_ready(True)
 
     def _apply_theme(self):
         """Apply the selected light/dark theme to the whole UI."""
