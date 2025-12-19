@@ -215,6 +215,27 @@ def global_stylesheet(theme: Theme) -> str:
             border-radius:12px;
             border:1px solid {theme.border};
         }}
+        /* Map-spezifische Container, damit sie immer korrekt einfärben */
+        QFrame#mapSidebar {{
+            background: {theme.frame_bg};
+            border:1px solid {theme.frame_border};
+            border-radius:8px;
+            color:{theme.text};
+        }}
+        QWidget#mapGridContainer {{
+            background: {theme.base};
+            border: none;
+            color:{theme.text};
+        }}
+        QWidget#mapListsWrapper {{
+            background: {theme.base};
+            border: none;
+            color:{theme.text};
+        }}
+        QScrollArea#mapListScroll QWidget {{
+            background: {theme.base};
+            color:{theme.text};
+        }}
 
         QCheckBox {{
             color:{theme.text};

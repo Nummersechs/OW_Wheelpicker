@@ -309,6 +309,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 w.stateChanged.connect(self._save_state)
                 w.btn_include_in_all.toggled.connect(self._save_state)
                 w.btn_include_in_all.toggled.connect(self._update_spin_all_enabled)
+                # Sicherstellen, dass Buttons aktiv bleiben (nicht wie disabled im UI aussehen)
+                w.btn_local_spin.setEnabled(True)
+                w.btn_include_in_all.setEnabled(True)
 
         # jetzt darf gespeichert werden
         self._restoring_state = False
@@ -403,31 +406,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_theme_button_label()
         if hasattr(self, "summary"):
             self.summary.setStyleSheet(f"font-size:15px; color:{theme.muted_text}; margin:10px 0 6px 0;")
-        if hasattr(self, "map_sidebar"):
-            self.map_sidebar.setStyleSheet(
-                f"QFrame {{ background: {theme.frame_bg}; border:1px solid {theme.frame_border}; border-radius:8px; }}"
+        if hasattr(self, "btn_cancel_spin"):
+            self.btn_cancel_spin.setStyleSheet(
+                "QPushButton { background:#c62828; color:white; border-radius:12px; padding:8px 18px; }"
+                f"QPushButton:disabled {{ background:{theme.disabled_bg}; color:{theme.disabled_text}; border:1px solid {theme.border}; }}"
             )
-        if hasattr(self, "map_grid_container"):
-            self.map_grid_container.setStyleSheet(
-                f"#mapGridContainer {{ background: {theme.frame_bg}; border: none; }}"
-            )
-        if hasattr(self, "map_lists_frame"):
-            self.map_lists_frame.setStyleSheet(
-                "#mapListScroll { border: none; }"
-                f"#mapListScroll QWidget {{ background: {theme.frame_bg}; }}"
-            )
-            if hasattr(self.map_lists_frame, "viewport"):
-                vp = self.map_lists_frame.viewport()
-                if vp:
-                    vp.setStyleSheet(f"background: {theme.frame_bg}; border: none;")
-        if hasattr(self, "map_lists_wrapper"):
-            self.map_lists_wrapper.setStyleSheet(f"#mapListsWrapper {{ background: {theme.frame_bg}; border: none; }}")
         if hasattr(self, "_map_type_editor"):
             self._map_type_editor.setStyleSheet(
                 f"QFrame {{ background: {theme.card_bg}; border: 2px solid {theme.card_border}; border-radius: 10px; }}"
             )
         if hasattr(self, "overlay"):
             self.overlay.apply_theme(theme, tool_style)
+        # Map-spezifische Container sicher im aktuellen Theme einfärben
+        self._apply_map_styles(theme)
 
         # Größere Widget-Mengen in kleinen Paketen aktualisieren
         targets = []
@@ -452,6 +443,31 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "btn_theme"):
             QtCore.QTimer.singleShot(total_delay + 40, lambda: self.btn_theme.setEnabled(True))
 
+    def _apply_map_styles(self, theme):
+        """
+        Erzwinge Theme-Farben auf Map-spezifische Container, falls die globale
+        Stylesheet-Anwendung nicht greift (z.B. bei neuem Viewport).
+        """
+        if hasattr(self, "map_sidebar"):
+            self.map_sidebar.setStyleSheet(
+                f"QFrame#mapSidebar {{ background: {theme.frame_bg}; border:1px solid {theme.frame_border}; border-radius:8px; color:{theme.text}; }}"
+            )
+        if hasattr(self, "map_grid_container"):
+            self.map_grid_container.setStyleSheet(
+                f"#mapGridContainer {{ background: {theme.base}; border: none; color:{theme.text}; }}"
+            )
+        if hasattr(self, "map_lists_frame"):
+            self.map_lists_frame.setStyleSheet(
+                "#mapListScroll { border: none; }"
+                f"#mapListScroll QWidget {{ background: {theme.base}; color:{theme.text}; }}"
+            )
+            if hasattr(self.map_lists_frame, "viewport"):
+                vp = self.map_lists_frame.viewport()
+                if vp:
+                    vp.setStyleSheet(f"background: {theme.base}; border: none; color:{theme.text};")
+        if hasattr(self, "map_lists_wrapper"):
+            self.map_lists_wrapper.setStyleSheet(f"#mapListsWrapper {{ background: {theme.base}; border: none; color:{theme.text}; }}")
+
     def _update_mode_button_styles(self, *_args):
         """
         Erzwingt ein Neupolishen der Mode-Buttons, damit die padding-Änderung
@@ -471,6 +487,14 @@ class MainWindow(QtWidgets.QMainWindow):
             w = widget.width() or widget.sizeHint().width()
             widths[name] = max(1, int(w))
         self._role_base_widths = widths
+
+    def _map_role_base_width(self) -> int:
+        """Maximale Basisbreite der Rollen-Karten als Referenz für Map-Rad."""
+        if not self._role_base_widths:
+            self._capture_role_base_widths()
+        if not self._role_base_widths:
+            return int(2 * getattr(config, "WHEEL_RADIUS", 136) + 80)
+        return max(self._role_base_widths.values())
 
     def _apply_role_width_lock(self, lock: bool):
         """
@@ -997,7 +1021,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # --- Typen-Sidebar ---
         sidebar = QtWidgets.QFrame()
-        sidebar.setStyleSheet("QFrame { background: rgba(245,245,245,0.9); border:1px solid #ddd; border-radius:8px; }")
+        sidebar.setObjectName("mapSidebar")
         sb_layout = QtWidgets.QVBoxLayout(sidebar)
         sb_layout.setContentsMargins(8, 8, 8, 8)
         sb_layout.setSpacing(6)
@@ -1063,6 +1087,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.map_main.view.setMinimumSize(base_canvas, base_canvas)
         self.map_main.view.setMaximumSize(QtCore.QSize(16777215, 16777215))
         self.map_main.view.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        # Sidebar bewusst schmal halten, damit die Breite nicht dominiert
+        self.map_sidebar.setFixedWidth(220)
 
         # Gesamt-Layout: Sidebar | Rad | Listen
         row = QtWidgets.QHBoxLayout()
@@ -1071,14 +1097,16 @@ class MainWindow(QtWidgets.QMainWindow):
         row.addWidget(sidebar, 0)
         row.addWidget(self.map_main, 0, QtCore.Qt.AlignCenter)
         row.addWidget(right_wrap, 1)
-        row.setStretch(0, 0)
-        row.setStretch(1, 1)
-        row.setStretch(2, 1)
+        # Verhältnis ca. 10% / 45% / 45%
+        row.setStretch(0, 1)
+        row.setStretch(1, 9)
+        row.setStretch(2, 9)
         layout.addLayout(row, 1)
         layout.setStretchFactor(row, 1)
         # Höhe/Breite des Map-Rads initial justieren
         def _cap_heights():
-            base_w = max(base_canvas, self.map_main.view.minimumWidth())
+            # Basisbreiten/Höhen der Rollen als Referenz
+            base_w = max(base_canvas, self.map_main.view.minimumWidth(), self._map_role_base_width())
             ref_h = max(
                 200,
                 self.tank.height() or self.tank.sizeHint().height(),
@@ -1088,17 +1116,24 @@ class MainWindow(QtWidgets.QMainWindow):
             ref_w = max(base_w, self.map_main.view.sizeHint().width() or 0)
             self.map_main.view.setMinimumHeight(ref_h)
             self.map_main.view.setMinimumWidth(ref_w)
+            self.map_main.view.setMaximumWidth(ref_w + 200)
+            self.map_main.view.setMaximumHeight(ref_h + 80)
             self.map_main.setMinimumHeight(ref_h)
             self.map_main.setMinimumWidth(ref_w)
+            self.map_main.setMaximumHeight(ref_h + 80)
+            self.map_main.setMaximumWidth(ref_w + 200)
             if hasattr(self, "map_lists_frame"):
                 adj = max(100, ref_h - 20)  # 20px weniger Höhe
                 self.map_lists_frame.setMinimumHeight(adj)
+                self.map_lists_frame.setMaximumHeight(ref_h + 80)
             if hasattr(self, "map_lists_wrapper"):
                 adj = max(100, ref_h - 20)
                 self.map_lists_wrapper.setMinimumHeight(adj)
+                self.map_lists_wrapper.setMaximumHeight(ref_h + 80)
             if hasattr(self, "map_sidebar"):
                 adj = max(100, ref_h - 20)
                 self.map_sidebar.setMinimumHeight(adj)
+                self.map_sidebar.setMaximumHeight(ref_h + 80)
         QtCore.QTimer.singleShot(0, _cap_heights)
         QtCore.QTimer.singleShot(0, self._rebuild_map_wheel)
         return container
@@ -1199,9 +1234,7 @@ class MainWindow(QtWidgets.QMainWindow):
             btn_grid.setHorizontalSpacing(16)
             self._map_type_btn_add = QtWidgets.QPushButton(i18n.t("map.editor.add"))
             self._map_type_btn_del = QtWidgets.QPushButton(i18n.t("map.editor.delete"))
-            common_btn_style = "QPushButton { padding:8px 12px; margin:2px; min-width:100px; border-radius:6px; }"
-            self._map_type_btn_add.setStyleSheet(common_btn_style)
-            self._map_type_btn_del.setStyleSheet(common_btn_style)
+            # Style über Global-Theme lassen, keine eigenen Farben überschreiben
             self._map_type_btn_add.clicked.connect(self._add_map_type_row)
             self._map_type_btn_del.clicked.connect(self._del_map_type_row)
             self._set_fixed_width_from_translations(
@@ -1219,10 +1252,7 @@ class MainWindow(QtWidgets.QMainWindow):
             confirm_row.setContentsMargins(16, 6, 16, 6)
             self._map_type_btn_ok = QtWidgets.QPushButton(i18n.t("map.editor.apply"))
             self._map_type_btn_cancel = QtWidgets.QPushButton(i18n.t("map.editor.cancel"))
-            self._map_type_btn_ok.setStyleSheet("QPushButton { background:#2e7d32; color:white; padding:8px 12px; margin:2px; min-width:100px; border-radius:6px; }"
-                                  "QPushButton:hover { background:#388e3c; }")
-            self._map_type_btn_cancel.setStyleSheet("QPushButton { background:#c62828; color:white; padding:8px 12px; margin:2px; min-width:100px; border-radius:6px; }"
-                                      "QPushButton:hover { background:#d32f2f; }")
+            # Keine hartcodierten Farben mehr, damit Dark-Mode korrekt greift
             self._map_type_btn_ok.clicked.connect(self._confirm_map_types)
             self._map_type_btn_cancel.clicked.connect(lambda: self._map_type_editor.hide())
             self._set_fixed_width_from_translations(

@@ -336,8 +336,85 @@ class WheelView(QtWidgets.QWidget):
             QListView::indicator:checked {{
                 background: {theme.primary};
             }}
+
+            /* Scrollbar-Farben im aktiven Theme halten */
+            QScrollBar:vertical {{
+                background:{theme.frame_bg};
+                width:12px;
+                margin:2px;
+                border-radius:6px;
+            }}
+            QScrollBar::handle:vertical {{
+                background:{theme.slider_handle};
+                min-height:24px;
+                border-radius:6px;
+            }}
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {{
+                height:0px;
+                background:transparent;
+            }}
+            QScrollBar::sub-page:vertical,
+            QScrollBar::add-page:vertical {{
+                background:{theme.slider_groove};
+                border-radius:6px;
+            }}
+            QScrollBar:horizontal {{
+                background:{theme.frame_bg};
+                height:12px;
+                margin:2px;
+                border-radius:6px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background:{theme.slider_handle};
+                min-width:24px;
+                border-radius:6px;
+            }}
+            QScrollBar::add-line:horizontal,
+            QScrollBar::sub-line:horizontal {{
+                width:0px;
+                background:transparent;
+            }}
+            QScrollBar::sub-page:horizontal,
+            QScrollBar::add-page:horizontal {{
+                background:{theme.slider_groove};
+                border-radius:6px;
+            }}
             """
         )
+        # Buttons explizit einfärben, damit Map-Listen dieselben Farben nutzen wie Rollen
+        if hasattr(self, "btn_local_spin"):
+            self.btn_local_spin.setStyleSheet(
+                "QPushButton {"
+                f" color:{theme.button_text}; background:{theme.primary};"
+                " border-radius:12px; font-weight:600; padding:8px 18px;"
+                "}"
+                f"QPushButton:hover {{ background:{theme.primary_hover}; }}"
+                f"QPushButton:pressed {{ background:{theme.primary_pressed}; }}"
+                f"QPushButton:disabled {{ background:{theme.disabled_bg}; color:{theme.disabled_text}; border:1px solid {theme.border}; }}"
+            )
+        if hasattr(self, "btn_include_in_all"):
+            self.btn_include_in_all.setStyleSheet(
+                "QPushButton {"
+                f" color:{theme.button_text}; background:{theme.primary};"
+                " border-radius:12px; font-weight:600; padding:8px 18px;"
+                "}"
+                f"QPushButton:checked {{ background:{theme.checked}; border:2px solid {theme.checked_border}; }}"
+                f"QPushButton:checked:hover {{ background:{theme.checked_hover}; }}"
+                f"QPushButton:checked:pressed {{ background:{theme.checked_pressed}; }}"
+                f"QPushButton:hover {{ background:{theme.primary_hover}; }}"
+                f"QPushButton:pressed {{ background:{theme.primary_pressed}; }}"
+                f"QPushButton:disabled {{ background:{theme.disabled_bg}; color:{theme.disabled_text}; border:1px solid {theme.border}; }}"
+            )
+        if hasattr(self, "names"):
+            self.names.setStyleSheet(
+                "QListWidget {"
+                f" background:{theme.base}; color:{theme.text};"
+                f" border:1px solid {theme.border}; border-radius:6px; "
+                "}"
+                f"QListWidget::item {{ color:{theme.text}; }}"
+                f"QListWidget::item:selected {{ background:{theme.alt_base}; color:{theme.text}; }}"
+            )
 
     def set_result_value(self, value: str):
         self._result_state = "value"
