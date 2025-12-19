@@ -395,6 +395,21 @@ class MainWindow(QtWidgets.QMainWindow):
             self.map_sidebar.setStyleSheet(
                 f"QFrame {{ background: {theme.frame_bg}; border:1px solid {theme.frame_border}; border-radius:8px; }}"
             )
+        if hasattr(self, "map_grid_container"):
+            self.map_grid_container.setStyleSheet(
+                f"#mapGridContainer {{ background: {theme.frame_bg}; border: none; }}"
+            )
+        if hasattr(self, "map_lists_frame"):
+            self.map_lists_frame.setStyleSheet(
+                "#mapListScroll { border: none; }"
+                f"#mapListScroll QWidget {{ background: {theme.frame_bg}; }}"
+            )
+            if hasattr(self.map_lists_frame, "viewport"):
+                vp = self.map_lists_frame.viewport()
+                if vp:
+                    vp.setStyleSheet(f"background: {theme.frame_bg}; border: none;")
+        if hasattr(self, "map_lists_wrapper"):
+            self.map_lists_wrapper.setStyleSheet(f"#mapListsWrapper {{ background: {theme.frame_bg}; border: none; }}")
         if hasattr(self, "_map_type_editor"):
             self._map_type_editor.setStyleSheet(
                 f"QFrame {{ background: {theme.card_bg}; border: 2px solid {theme.card_border}; border-radius: 10px; }}"
@@ -407,15 +422,13 @@ class MainWindow(QtWidgets.QMainWindow):
         for w in (getattr(self, "tank", None), getattr(self, "dps", None), getattr(self, "support", None)):
             if w and hasattr(w, "apply_theme"):
                 targets.append(w)
-
-        # Map-spezifische Widgets nur aufhübschen, wenn der Modus aktiv ist
-        if getattr(self, "current_mode", "") == "maps":
-            if hasattr(self, "map_main") and hasattr(self.map_main, "apply_theme"):
-                targets.append(self.map_main)
-            if hasattr(self, "map_lists"):
-                for wheel in self.map_lists.values():
-                    if hasattr(wheel, "apply_theme"):
-                        targets.append(wheel)
+        # Map-spezifische Widgets IMMER stylen, damit ein späterer Moduswechsel nicht den alten Theme-Stand zeigt
+        if hasattr(self, "map_main") and hasattr(self.map_main, "apply_theme"):
+            targets.append(self.map_main)
+        if hasattr(self, "map_lists"):
+            for wheel in self.map_lists.values():
+                if hasattr(wheel, "apply_theme"):
+                    targets.append(wheel)
 
         step_ms = 15
         for idx, w in enumerate(targets):
@@ -978,6 +991,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # --- Listen-Gitter rechts ---
         self.map_grid_container = QtWidgets.QWidget()
+        self.map_grid_container.setObjectName("mapGridContainer")
         self.map_grid = QtWidgets.QVBoxLayout(self.map_grid_container)
         self.map_grid.setContentsMargins(4, 4, 4, 4)
         self.map_grid.setSpacing(8)
@@ -987,13 +1001,11 @@ class MainWindow(QtWidgets.QMainWindow):
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.map_grid_container)
         scroll.setObjectName("mapListScroll")
-        scroll.setStyleSheet(
-            "#mapListScroll { border: none; background: transparent; }"
-        )
         self.map_lists_frame = scroll
         scroll.installEventFilter(self)
         # Wrapper, um den rechten Bereich gezielt zu verschieben
         right_wrap = QtWidgets.QWidget()
+        right_wrap.setObjectName("mapListsWrapper")
         right_wrap_layout = QtWidgets.QVBoxLayout(right_wrap)
         right_wrap_layout.setSpacing(0)
         right_wrap_layout.addWidget(scroll)
