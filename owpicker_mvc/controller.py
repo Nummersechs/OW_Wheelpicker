@@ -162,7 +162,8 @@ class MainWindow(QtWidgets.QMainWindow):
             "Tank",
             tank_state.get("entries", []),
             pair_mode=tank_state.get("pair_mode", False),
-            allow_pair_toggle=False,
+            allow_pair_toggle=True,
+            subrole_labels=["MT", "OT"],
         )
         self.dps = WheelView(
             "Damage",
