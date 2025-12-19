@@ -60,6 +60,10 @@ class ResultOverlay(QtWidgets.QWidget):
 
         self.btn_online.clicked.connect(self._choose_online)
         self.btn_offline.clicked.connect(self._choose_offline)
+        # Hover für Warmup blockierbar halten
+        self._block_hover = False
+        self.btn_online.installEventFilter(self)
+        self.btn_offline.installEventFilter(self)
 
         # Buttons in einer Zeile anordnen
         btn_row = QtWidgets.QHBoxLayout()
@@ -223,3 +227,20 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_language.setIcon(flag)
         self.btn_language.setText("")
         self.btn_language.setToolTip(tooltip)
+
+    # --- Hover-Steuerung für Warmup ---
+    def set_hover_blocked(self, blocked: bool):
+        """Deaktiviert Hover-Effekte der Online/Offline-Buttons temporär."""
+        self._block_hover = bool(blocked)
+
+    def eventFilter(self, obj, event):
+        if obj in (getattr(self, "btn_online", None), getattr(self, "btn_offline", None)):
+            if self._block_hover and event.type() in (
+                QtCore.QEvent.HoverEnter,
+                QtCore.QEvent.HoverLeave,
+                QtCore.QEvent.HoverMove,
+                QtCore.QEvent.Enter,
+                QtCore.QEvent.Leave,
+            ):
+                return True
+        return super().eventFilter(obj, event)

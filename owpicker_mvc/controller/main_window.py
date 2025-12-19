@@ -274,6 +274,7 @@ class MainWindow(QtWidgets.QMainWindow):
         
         self.online_mode = False  # Standard
         self.overlay.modeChosen.connect(self._on_mode_chosen)
+        self._warmup_active = False
         self.installEventFilter(self)
         app = QtWidgets.QApplication.instance()
         if app:
@@ -313,14 +314,25 @@ class MainWindow(QtWidgets.QMainWindow):
         """Initial Cache/Tooltips vorbereiten und Online/Offline-Buttons freigeben."""
         # Erst alles sperren, dann die Caches zweimal aufbauen, damit das Dark-Theme-Repolish
         # erledigt ist, bevor die Buttons anklickbar werden.
+        self._warmup_active = True
         self.overlay.set_choice_enabled(False)
+        self.overlay.set_hover_blocked(True)
         def _rebuild_tooltips():
             self._refresh_tooltip_caches()
             self._reset_hover_cache_under_cursor()
         _rebuild_tooltips()
         QtCore.QTimer.singleShot(180, _rebuild_tooltips)
         # Mehr Luft lassen, damit der erste Klick nicht vor dem Tooltip-Warmup passiert
-        QtCore.QTimer.singleShot(1200, lambda: self.overlay.set_choice_enabled(True))
+        QtCore.QTimer.singleShot(1200, self._finish_warmup)
+
+    def _finish_warmup(self):
+        """Hebt den Warmup-Block auf; idempotent."""
+        if not getattr(self, "_warmup_active", False):
+            return
+        self._warmup_active = False
+        self.overlay.set_hover_blocked(False)
+        self.overlay.set_choice_enabled(True)
+        self._set_tooltips_ready(True)
 
     def _on_overlay_closed(self):
         self._set_controls_enabled(True)
@@ -526,6 +538,29 @@ class MainWindow(QtWidgets.QMainWindow):
                     wheel.set_tooltips_ready(True)
                 except Exception:
                     pass
+    def _refresh_tooltip_caches_async(self, delay_step_ms: int = 80):
+        """
+        Baut die Tooltip-Caches in kleinen Scheiben (per Timer) neu auf,
+        damit der UI-Thread beim Online/Offline-Klick nicht blockiert.
+        """
+        wheels = [self.tank, self.dps, self.support]
+        if getattr(self, "map_main", None):
+            wheels.append(self.map_main)
+
+        def rebuild_single(w):
+            wheel = getattr(getattr(w, "view", None), "wheel", None)
+            if wheel and hasattr(wheel, "_ensure_cache"):
+                try:
+                    wheel._cached = None
+                    wheel._ensure_cache(force=True)
+                except Exception:
+                    pass
+
+        for idx, w in enumerate(wheels):
+            QtCore.QTimer.singleShot(idx * max(0, int(delay_step_ms)), lambda _w=w: rebuild_single(_w))
+        # Am Ende Tooltips freigeben und Hover-Cache setzen
+        total_delay = len(wheels) * max(0, int(delay_step_ms)) + 40
+        QtCore.QTimer.singleShot(total_delay, lambda: (self._set_tooltips_ready(True), self._reset_hover_cache_under_cursor()))
 
     def _reset_hover_cache_under_cursor(self):
         """Simuliert einen Hover unter dem aktuellen Cursor, um Tooltip-Cache zu aktualisieren."""
@@ -1321,6 +1356,17 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.language = lang
         self._apply_language()
+        # Wenn im Warmup die Sprache gewechselt wird, Warmup abschließen,
+        # damit die Buttons nicht dauerhaft gesperrt bleiben.
+        if getattr(self, "_warmup_active", False):
+            self._finish_warmup()
+        else:
+            # Falls das Online/Offline-Overlay offen ist und Warmup schon vorbei war,
+            # Aktivierung sicherstellen (Setzen der Sprache ruft show_online_choice erneut auf).
+            last_view = getattr(self.overlay, "_last_view", {}) or {}
+            if last_view.get("type") == "online_choice":
+                self.overlay.set_choice_enabled(True)
+                self.overlay.set_hover_blocked(False)
         if not getattr(self, "_restoring_state", False):
             self._save_state()
 
@@ -1495,12 +1541,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_mode_chosen(self, online: bool):
         self.online_mode = online
         self._set_controls_enabled(True)
-        # Tooltip-Rebuild asynchron anstoßen, damit der Klick nicht blockiert
-        def _rebuild_tooltips():
-            self._refresh_tooltip_caches()
-            self._reset_hover_cache_under_cursor()
-        QtCore.QTimer.singleShot(0, _rebuild_tooltips)
-        QtCore.QTimer.singleShot(250, _rebuild_tooltips)
+        # Tooltip-Caches ohne spürbare Blockade asynchron neu aufbauen
+        self._set_tooltips_ready(False)
+        self._refresh_tooltip_caches_async()
 
         if self.online_mode:
             config.debug_print("Online-Modus aktiv.")
