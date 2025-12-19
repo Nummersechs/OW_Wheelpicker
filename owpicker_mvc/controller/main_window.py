@@ -274,6 +274,8 @@ class MainWindow(QtWidgets.QMainWindow):
         
         self.online_mode = False  # Standard
         self.overlay.modeChosen.connect(self._on_mode_chosen)
+        self._pending_mode_choice: bool | None = None
+        self._pending_language_toggle: str | None = None
         self._warmup_active = False
         self.installEventFilter(self)
         app = QtWidgets.QApplication.instance()
@@ -315,8 +317,11 @@ class MainWindow(QtWidgets.QMainWindow):
         # Erst alles sperren, dann die Caches zweimal aufbauen, damit das Dark-Theme-Repolish
         # erledigt ist, bevor die Buttons anklickbar werden.
         self._warmup_active = True
+        self._pending_mode_choice = None
+        self._pending_language_toggle = None
         self.overlay.set_choice_enabled(False)
         self.overlay.set_hover_blocked(True)
+        self._set_language_buttons_enabled(False)
         def _rebuild_tooltips():
             self._refresh_tooltip_caches()
             self._reset_hover_cache_under_cursor()
@@ -333,6 +338,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.overlay.set_hover_blocked(False)
         self.overlay.set_choice_enabled(True)
         self._set_tooltips_ready(True)
+        self._set_language_buttons_enabled(True)
+        if self._pending_mode_choice is not None:
+            choice = self._pending_mode_choice
+            self._pending_mode_choice = None
+            self._apply_mode_choice(choice)
+        if self._pending_language_toggle:
+            lang = self._pending_language_toggle
+            self._pending_language_toggle = None
+            self._switch_language(lang)
 
     def _on_overlay_closed(self):
         self._set_controls_enabled(True)
@@ -1356,6 +1370,9 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.language = lang
         self._apply_language()
+        # Nach Sprachwechsel Label-Messungen aktualisieren, damit Tooltips weiter funktionieren
+        self._set_tooltips_ready(False)
+        self._refresh_tooltip_caches_async()
         # Wenn im Warmup die Sprache gewechselt wird, Warmup abschließen,
         # damit die Buttons nicht dauerhaft gesperrt bleiben.
         if getattr(self, "_warmup_active", False):
@@ -1373,7 +1390,19 @@ class MainWindow(QtWidgets.QMainWindow):
     def _toggle_language(self):
         """Toggle between German and English via the single flag button."""
         next_lang = "en" if self.language == "de" else "de"
+        # Wenn Warmup läuft, den Toggle vormerken und Buttons deaktivieren
+        if getattr(self, "_warmup_active", False):
+            self._pending_language_toggle = next_lang
+            self._set_language_buttons_enabled(False)
+            return
         self._switch_language(next_lang)
+
+    def _set_language_buttons_enabled(self, enabled: bool):
+        """Aktiviert/Deaktiviert sowohl das Haupt-Sprachicon als auch das Overlay-Icon."""
+        if hasattr(self, "btn_language"):
+            self.btn_language.setEnabled(enabled)
+        if hasattr(self, "overlay") and hasattr(self.overlay, "btn_language"):
+            self.overlay.btn_language.setEnabled(enabled)
 
     def _toggle_theme(self):
         """Switch between light and dark mode."""
@@ -1539,6 +1568,14 @@ class MainWindow(QtWidgets.QMainWindow):
     
     @QtCore.Slot(bool)
     def _on_mode_chosen(self, online: bool):
+        # Wenn Warmup noch läuft, Klick merken und nach Warmup ausführen
+        if getattr(self, "_warmup_active", False):
+            self._pending_mode_choice = online
+            self.overlay.set_choice_enabled(False)
+            return
+        self._apply_mode_choice(online)
+
+    def _apply_mode_choice(self, online: bool):
         self.online_mode = online
         self._set_controls_enabled(True)
         # Tooltip-Caches ohne spürbare Blockade asynchron neu aufbauen

@@ -163,6 +163,9 @@ class ResultOverlay(QtWidgets.QWidget):
 
     def set_language(self, lang: str):
         """Refresh labels while keeping current visibility."""
+        # Zustand merken, damit Online/Offline nicht erneut deaktiviert wird
+        prev_choice_enabled = self.btn_online.isEnabled() and self.btn_offline.isEnabled()
+        prev_hover_block = getattr(self, "_block_hover", False)
         i18n.set_language(lang)
         self._apply_button_labels()
         self._set_min_widths()
@@ -179,6 +182,9 @@ class ResultOverlay(QtWidgets.QWidget):
             self.show_message(title, lines)
         elif kind == "online_choice":
             self.show_online_choice()
+            if prev_choice_enabled:
+                self.set_choice_enabled(True)
+            self.set_hover_blocked(prev_hover_block)
 
     def apply_theme(self, theme: theme_util.Theme, tool_style: str | None = None) -> None:
         """Update overlay colors to match the active theme."""
