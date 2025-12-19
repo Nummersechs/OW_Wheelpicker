@@ -1,6 +1,7 @@
 from PySide6 import QtCore, QtGui, QtWidgets
 from html import escape
 import i18n
+from utils import flag_icons
 
 class ResultOverlay(QtWidgets.QWidget):
     closed = QtCore.Signal()
@@ -41,6 +42,7 @@ class ResultOverlay(QtWidgets.QWidget):
             "QToolButton:hover { background:rgba(0,0,0,0.06); }"
             "QToolButton:pressed { background:rgba(0,0,0,0.12); }"
         )
+        self.btn_language.setIconSize(QtCore.QSize(28, 20))
         self.btn_language.clicked.connect(self.languageToggleRequested.emit)
         top_row.addWidget(self.btn_language, 0, QtCore.Qt.AlignRight)
         v.addLayout(top_row)
@@ -143,6 +145,7 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_close.hide()
         self.btn_online.show()
         self.btn_offline.show()
+        self.set_choice_enabled(False)
 
         self._last_view = {"type": "online_choice"}
         self._show()
@@ -211,7 +214,8 @@ class ResultOverlay(QtWidgets.QWidget):
         """Aktualisiert Text/Tooltip des Sprache-Buttons."""
         if not hasattr(self, "btn_language"):
             return
-        flag = i18n.flag_for_language(i18n.get_language())
+        flag = flag_icons.icon_for_language(i18n.get_language())
         tooltip = i18n.t("language.tooltip.de") if i18n.get_language() == "de" else i18n.t("language.tooltip.en")
-        self.btn_language.setText(flag)
+        self.btn_language.setIcon(flag)
+        self.btn_language.setText("")
         self.btn_language.setToolTip(tooltip)

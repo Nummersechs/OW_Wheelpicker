@@ -11,6 +11,7 @@ import i18n
 from . import mode_manager, spin_service
 from services import hero_ban_merge, persistence, spin_planner, state_store, sync_service
 from services.sound import SoundManager
+from utils import flag_icons
 from view.overlay import ResultOverlay
 from view.wheel_view import WheelView
 
@@ -85,6 +86,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "QToolButton:hover { background:rgba(0,0,0,0.06); }"
             "QToolButton:pressed { background:rgba(0,0,0,0.12); }"
         )
+        self.btn_language.setIconSize(QtCore.QSize(28, 20))
         self.btn_language.clicked.connect(self._toggle_language)
         vol_row.addWidget(self.lbl_volume_icon, 0, QtCore.Qt.AlignVCenter)
         vol_row.addWidget(self.volume_slider, 0, QtCore.Qt.AlignVCenter)
@@ -270,8 +272,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Direkt beim Start Modus wählen lassen
         self._set_controls_enabled(False)
         self.overlay.show_online_choice()
-        # Buttons vorerst sperren, bis Caches einmal aufgebaut sind
-        self.overlay.set_choice_enabled(False)
+        # Buttons vorerst gesperrt lassen, erst nach Tooltip-Warmup freigeben
         QtCore.QTimer.singleShot(0, self._warmup_tooltips_initial)
 
         # JETZT: Save-Hooks anschließen
@@ -301,7 +302,8 @@ class MainWindow(QtWidgets.QMainWindow):
         """Initial Cache/Tooltips vorbereiten und Online/Offline-Buttons freigeben."""
         self._refresh_tooltip_caches()
         self._reset_hover_cache_under_cursor()
-        QtCore.QTimer.singleShot(180, lambda: self.overlay.set_choice_enabled(True))
+        # Etwas mehr Puffer, damit Tooltips und Caches sicher stehen
+        QtCore.QTimer.singleShot(750, lambda: self.overlay.set_choice_enabled(True))
 
     def _on_overlay_closed(self):
         self._set_controls_enabled(True)
@@ -1392,7 +1394,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _apply_language(self):
         i18n.set_language(self.language)
         if hasattr(self, "btn_language"):
-            self.btn_language.setText(i18n.flag_for_language(self.language))
+            self.btn_language.setIcon(flag_icons.icon_for_language(self.language))
+            self.btn_language.setText("")  # avoid emoji fallback on Windows
             tooltip = i18n.t("language.tooltip.de") if self.language == "de" else i18n.t("language.tooltip.en")
             self.btn_language.setToolTip(tooltip)
         self.lbl_mode.setText(i18n.t("label.mode"))
