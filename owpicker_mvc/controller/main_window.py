@@ -1602,6 +1602,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # Tooltip-Caches ohne spürbare Blockade asynchron neu aufbauen
         self._set_tooltips_ready(False)
         self._refresh_tooltip_caches_async()
+        # Nach dem Klick einen „Refokus“ durchführen, damit Hover/Tooltips sofort wieder greifen
+        QtCore.QTimer.singleShot(300, self._refresh_tooltips_after_focus)
 
         if self.online_mode:
             config.debug_print("Online-Modus aktiv.")
