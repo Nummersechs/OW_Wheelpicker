@@ -1,7 +1,5 @@
-"""
-Kapselt Moduswechsel und Hero-Ban-Visuals, damit controller.py schlanker bleibt.
-Alle Funktionen erwarten das MainWindow-Objekt als ersten Parameter.
-"""
+"""Mode switching + Hero-Ban visuals to keep controller.py slimmer.
+All helpers expect the MainWindow instance as the first parameter."""
 from __future__ import annotations
 
 from typing import List

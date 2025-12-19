@@ -1,6 +1,6 @@
 """
-Verwaltet die Mode-States (players/heroes) inklusive Defaults und Capture/Restore.
-Hält das Datenformat kompatibel zur bisherigen saved_state.json.
+Manages mode states (players/heroes/maps) including defaults and capture/restore.
+Keeps the data format compatible with saved_state.json.
 """
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ class ModeStateStore:
             defaults = config.DEFAULT_NAMES.get(role, [])
         return {
             "entries": cls._normalize_entries_for_state(defaults),
-            # Include-Status nicht mehr persistieren -> immer True
+            # include_in_all is not persisted anymore -> always True
             "include_in_all": True,
             "pair_mode": pair_defaults.get(role, False),
             "use_subroles": False,
@@ -65,8 +65,8 @@ class ModeStateStore:
             return base
         if "entries" in data:
             entries = cls._normalize_entries_for_state(data["entries"])
-            # Schutz: Falls versehentlich Hero-Default-Liste bei Spielern gelandet ist,
-            # setze auf Player-Defaults zurück (fix für überschriebenen Spieler-Tab).
+            # Guard: if hero defaults accidentally ended up in player data,
+            # reset to player defaults (fix for overwritten player tab).
             if mode == "players":
                 hero_defaults = set(config.DEFAULT_HEROES.get(role, []))
                 if hero_defaults and set(e["name"] for e in entries) == hero_defaults:
@@ -74,7 +74,7 @@ class ModeStateStore:
             base["entries"] = entries
         elif "names" in data:
             base["entries"] = cls._normalize_entries_for_state(data["names"])
-        # include_in_all wird nicht mehr aus saved_state übernommen (immer Default True)
+        # include_in_all is not taken from saved_state (always default True)
         base["pair_mode"] = bool(data.get("pair_mode", base["pair_mode"]))
         base["use_subroles"] = bool(data.get("use_subroles", base["use_subroles"]))
         return base
@@ -114,10 +114,7 @@ class ModeStateStore:
         return self._default_role_state(role, mode)
 
     def capture_mode_from_wheels(self, mode: str, wheels: Dict[str, Any], hero_ban_active: bool = False) -> None:
-        """
-        Aktualisiert den Mode-State basierend auf den aktuellen WheelViews.
-        wheels: dict role -> WheelView
-        """
+        """Update mode state based on current WheelViews (role -> WheelView)."""
         base_state = self._mode_states.get(mode, {}) if hero_ban_active else {}
 
         def wheel_state(w, role: str) -> dict:

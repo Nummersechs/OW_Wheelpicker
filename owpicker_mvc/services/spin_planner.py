@@ -1,7 +1,4 @@
-"""
-Enthält die konfliktfreie Rollen-Zuordnung (Backtracking).
-Wird vom Controller genutzt, um Kandidaten pro Rolle zuzuweisen.
-"""
+"""Backtracking helper to assign role candidates without conflicts."""
 from __future__ import annotations
 
 from typing import List, Tuple, Optional
@@ -12,8 +9,8 @@ Candidate = Tuple[str, list[str]]  # (label, [players])
 
 def plan_assignments(all_candidates_per_role: List[List[Candidate]]) -> Optional[List[str]]:
     """
-    all_candidates_per_role: Liste pro Rolle mit Kandidaten (label, player-list).
-    Rückgabe: Liste der gewählten Labels in gleicher Rollenreihenfolge oder None.
+    all_candidates_per_role: candidates per role as (label, player-list).
+    Returns: list of chosen labels in role order, or None if impossible.
     """
     if not all_candidates_per_role:
         return None
@@ -45,6 +42,6 @@ def plan_assignments(all_candidates_per_role: List[List[Candidate]]) -> Optional
         return False
 
     if backtrack(0, set()):
-        # assigned_for_role ist evtl. in role_indices-Reihenfolge. Wir wollen Index-Reihenfolge.
+        # assigned_for_role may be in shuffled order; restore role order via index.
         return assigned_for_role
     return None

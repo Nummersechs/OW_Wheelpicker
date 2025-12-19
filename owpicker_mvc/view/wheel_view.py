@@ -196,7 +196,7 @@ class WheelView(QtWidgets.QWidget):
         inner.addWidget(self.names)
         inner.addWidget(self.btn_sort_names, 0, QtCore.Qt.AlignRight)
         
-        # NEU: Checkbox-Styling
+        # Checkbox-Styling konsistent halten
         self.setStyleSheet("""
             QCheckBox::indicator,
             QListView::indicator {
@@ -213,7 +213,7 @@ class WheelView(QtWidgets.QWidget):
             }
         """)
 
-        # NEU: Startwert für Namensanzahl merken und UI initial justieren
+        # Startwert für Namensanzahl merken und UI initial justieren
         self._last_name_count = len(self._base_names())
         self._update_name_dependent_ui()
         self._apply_placeholder()

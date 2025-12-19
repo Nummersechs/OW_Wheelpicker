@@ -37,7 +37,7 @@ class SoundManager:
     def _load_effects(self, folder: Path, default_path: Path, volume: float) -> list[QSoundEffect]:
         effects: list[QSoundEffect] = []
 
-        # 1) Alle Dateien aus dem Ordner laden (falls vorhanden)
+        # 1) Load all files from the directory (if present)
         if folder.exists() and folder.is_dir():
             for entry in sorted(folder.iterdir()):
                 if entry.is_file() and entry.suffix.lower() in AUDIO_EXTENSIONS:
@@ -47,7 +47,7 @@ class SoundManager:
                     eff.setVolume(volume * self.master_volume)
                     effects.append(eff)
 
-        # 2) Fallback: einzelne Datei im Basisordner (spin.wav / ding.wav)
+        # 2) Fallback: single file in base dir (spin.wav / ding.wav)
         if not effects and default_path.exists():
             eff = QSoundEffect()
             eff.setSource(QUrl.fromLocalFile(str(default_path)))
@@ -57,7 +57,7 @@ class SoundManager:
 
         return effects
 
-    # --- Steuerung ---
+    # --- Control ---
 
     def play_spin(self):
         """Spielt einen zufälligen Spin-Sound oder Beep, falls nichts geladen."""
@@ -142,7 +142,7 @@ class SoundManager:
             duration = 0.25
             samples = int(sr * duration)
             freq = 660.0
-            amplitude = 0.22  # moderat, damit nicht lauter als vorhandene Sounds
+            amplitude = 0.22  # moderate so it does not exceed existing sounds
 
             data = bytearray()
             for n in range(samples):

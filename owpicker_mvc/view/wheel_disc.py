@@ -338,7 +338,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
             self._last_hover_idx = None
             return
         # Tooltip nur anzeigen, wenn der Label-Text im Segment abgeschnitten ist.
-        # Cache hier bewusst erzwingen, falls das Layout kurz zuvor geändert wurde
+        # Force cache rebuild if the layout changed shortly before
         self._ensure_cache(force=True)
         cached_truncated = False
         if 0 <= idx < len(self._label_truncated):

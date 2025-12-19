@@ -1,6 +1,4 @@
-"""
-Hilfsfunktionen für Hero-Ban: Rollen auswählen und zu einer zentralen Liste zusammenführen.
-"""
+"""Helpers for Hero-Ban: merge selected roles into a single list."""
 from __future__ import annotations
 
 from typing import Dict, List
@@ -8,9 +6,9 @@ from typing import Dict, List
 
 def merge_selected_roles(selected_roles: List[str], wheel_map: Dict[str, any]) -> List[dict]:
     """
-    selected_roles: Liste der Rollen-Namen (z.B. Tank/Damage/Support), die einfließen sollen.
-    wheel_map: role -> WheelView (muss get_current_entries bereitstellen).
-    Rückgabe: Liste von {"name": str, "subroles": [], "active": True} ohne Duplikate, nur aktive Einträge.
+    selected_roles: list of role names (e.g., Tank/Damage/Support) to include.
+    wheel_map: role -> WheelView (must provide get_current_entries).
+    Returns: [{"name": str, "subroles": [], "active": True}] unique and only active.
     """
     combined: List[dict] = []
     seen = set()

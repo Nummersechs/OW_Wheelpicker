@@ -1,4 +1,3 @@
-# (full, commented version was generated above — see next cell content if needed)
 from pathlib import Path
 import random
 import json
@@ -19,7 +18,7 @@ QWIDGETSIZE_MAX = getattr(QtWidgets, "QWIDGETSIZE_MAX", getattr(QtCore, "QWIDGET
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        # NEU: State-Datei & geladenen Zustand vorbereiten
+        # State-Datei ermitteln und gespeicherten Zustand laden
         self._state_file = self._get_state_file()
         saved = self._load_saved_state()
         default_lang = getattr(config, "DEFAULT_LANGUAGE", "en")

@@ -1,7 +1,5 @@
-"""
-Enthält Spin-Logik (globaler Spin & Einzel-Spin) ausgelagert aus dem MainWindow.
-Alle Methoden erwarten `mw` als MainWindow-Instanz.
-"""
+"""Spin logic (global and single) extracted from MainWindow.
+All functions expect `mw` to be the MainWindow instance."""
 from __future__ import annotations
 
 import random
