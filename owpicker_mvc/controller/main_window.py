@@ -464,7 +464,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def resizeEvent(self, e: QtGui.QResizeEvent):
         super().resizeEvent(e); 
         if self.overlay and self.centralWidget(): self.overlay.setGeometry(self.centralWidget().rect())
-        
+
     def _update_spin_all_enabled(self):
         """Aktiviere/Deaktiviere den 'Drehen'-Button je nach Auswahl."""
         if getattr(self, "hero_ban_active", False):
@@ -1020,6 +1020,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.map_main.btn_local_spin.setVisible(False)
         # Rad-Größe an den Standard-Rädern ausrichten (WHEEL_RADIUS*2 + Padding)
         base_canvas = max(200, int(2 * config.WHEEL_RADIUS + 80))
+        self._map_base_canvas = base_canvas
         self.map_main.view.setMinimumSize(base_canvas, base_canvas)
         self.map_main.view.setMaximumSize(QtCore.QSize(16777215, 16777215))
         self.map_main.view.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
@@ -1036,30 +1037,29 @@ class MainWindow(QtWidgets.QMainWindow):
         row.setStretch(2, 1)
         layout.addLayout(row, 1)
         layout.setStretchFactor(row, 1)
-        # Höhe des Map-Rads an die anderen Räder angleichen
+        # Höhe/Breite des Map-Rads initial justieren
         def _cap_heights():
+            base_w = max(base_canvas, self.map_main.view.minimumWidth())
             ref_h = max(
                 200,
                 self.tank.height() or self.tank.sizeHint().height(),
                 self.dps.height() or self.dps.sizeHint().height(),
                 self.support.height() or self.support.sizeHint().height(),
             )
+            ref_w = max(base_w, self.map_main.view.sizeHint().width() or 0)
             self.map_main.view.setMinimumHeight(ref_h)
-            self.map_main.view.setMaximumHeight(ref_h)
+            self.map_main.view.setMinimumWidth(ref_w)
             self.map_main.setMinimumHeight(ref_h)
-            self.map_main.setMaximumHeight(ref_h)
+            self.map_main.setMinimumWidth(ref_w)
             if hasattr(self, "map_lists_frame"):
                 adj = max(100, ref_h - 20)  # 20px weniger Höhe
                 self.map_lists_frame.setMinimumHeight(adj)
-                self.map_lists_frame.setMaximumHeight(adj)
             if hasattr(self, "map_lists_wrapper"):
                 adj = max(100, ref_h - 20)
                 self.map_lists_wrapper.setMinimumHeight(adj)
-                self.map_lists_wrapper.setMaximumHeight(adj)
             if hasattr(self, "map_sidebar"):
                 adj = max(100, ref_h - 20)
                 self.map_sidebar.setMinimumHeight(adj)
-                self.map_sidebar.setMaximumHeight(adj)
         QtCore.QTimer.singleShot(0, _cap_heights)
         QtCore.QTimer.singleShot(0, self._rebuild_map_wheel)
         return container
