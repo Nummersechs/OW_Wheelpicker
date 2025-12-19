@@ -378,20 +378,19 @@ class MainWindow(QtWidgets.QMainWindow):
             self._set_tooltips_ready(True)
 
     def _apply_theme(self):
-        """Apply the selected light/dark theme to the whole UI."""
+        """Apply the selected light/dark theme without freezing the UI."""
         theme = theme_util.get_theme(getattr(self, "theme", "light"))
-        theme_util.apply_app_theme(theme)
+        theme_util.apply_app_theme(theme)  # einmal zentral, danach in Scheiben
         tool_style = theme_util.tool_button_stylesheet(theme)
 
+        # Schnelle/kleine Updates sofort
         if hasattr(self, "btn_language"):
             self.btn_language.setStyleSheet(tool_style)
         if hasattr(self, "btn_theme"):
             self.btn_theme.setStyleSheet(tool_style)
         self._update_theme_button_label()
-
         if hasattr(self, "summary"):
             self.summary.setStyleSheet(f"font-size:15px; color:{theme.muted_text}; margin:10px 0 6px 0;")
-
         if hasattr(self, "map_sidebar"):
             self.map_sidebar.setStyleSheet(
                 f"QFrame {{ background: {theme.frame_bg}; border:1px solid {theme.frame_border}; border-radius:8px; }}"
@@ -400,21 +399,33 @@ class MainWindow(QtWidgets.QMainWindow):
             self._map_type_editor.setStyleSheet(
                 f"QFrame {{ background: {theme.card_bg}; border: 2px solid {theme.card_border}; border-radius: 10px; }}"
             )
-
-        for wheel in (getattr(self, "tank", None), getattr(self, "dps", None), getattr(self, "support", None)):
-            if hasattr(wheel, "apply_theme"):
-                wheel.apply_theme(theme)
-        if hasattr(self, "map_main") and hasattr(self.map_main, "apply_theme"):
-            self.map_main.apply_theme(theme)
-        if hasattr(self, "map_lists"):
-            for wheel in self.map_lists.values():
-                if hasattr(wheel, "apply_theme"):
-                    wheel.apply_theme(theme)
-
         if hasattr(self, "overlay"):
             self.overlay.apply_theme(theme, tool_style)
 
-        self._update_mode_button_styles()
+        # Größere Widget-Mengen in kleinen Paketen aktualisieren
+        targets = []
+        for w in (getattr(self, "tank", None), getattr(self, "dps", None), getattr(self, "support", None)):
+            if w and hasattr(w, "apply_theme"):
+                targets.append(w)
+
+        # Map-spezifische Widgets nur aufhübschen, wenn der Modus aktiv ist
+        if getattr(self, "current_mode", "") == "maps":
+            if hasattr(self, "map_main") and hasattr(self.map_main, "apply_theme"):
+                targets.append(self.map_main)
+            if hasattr(self, "map_lists"):
+                for wheel in self.map_lists.values():
+                    if hasattr(wheel, "apply_theme"):
+                        targets.append(wheel)
+
+        step_ms = 15
+        for idx, w in enumerate(targets):
+            QtCore.QTimer.singleShot(idx * step_ms, lambda _w=w: _w.apply_theme(theme))
+
+        total_delay = len(targets) * step_ms
+        QtCore.QTimer.singleShot(total_delay, self._update_mode_button_styles)
+        # Theme-Button wieder freigeben, falls er kurz deaktiviert wurde
+        if hasattr(self, "btn_theme"):
+            QtCore.QTimer.singleShot(total_delay + 40, lambda: self.btn_theme.setEnabled(True))
 
     def _update_mode_button_styles(self, *_args):
         """
@@ -1414,6 +1425,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _toggle_theme(self):
         """Switch between light and dark mode."""
+        if hasattr(self, "btn_theme"):
+            self.btn_theme.setEnabled(False)
         self.theme = "dark" if getattr(self, "theme", "light") == "light" else "light"
         self._apply_theme()
         if not getattr(self, "_restoring_state", False):
