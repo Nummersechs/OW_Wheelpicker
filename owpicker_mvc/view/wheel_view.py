@@ -40,8 +40,9 @@ class WheelView(QtWidgets.QWidget):
 
         self.label = QtWidgets.QLabel()
         self.label.setAlignment(QtCore.Qt.AlignCenter)
+        # Deutlicher sichtbarer Titel über jedem Rad
         self.label.setStyleSheet(
-            "font-size:16px; font-weight:600;"
+            "font-size:18px; font-weight:800; letter-spacing:0.3px;"
         )
         self._apply_title()
 

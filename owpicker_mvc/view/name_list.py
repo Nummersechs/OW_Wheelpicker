@@ -197,12 +197,16 @@ class NameRowWidget(QtWidgets.QWidget):
 
         self.edit = NameLineEdit()
         self.edit.setText(item.text())
+        self.edit.setMinimumWidth(220)
+        self.edit.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
         self.edit.textChanged.connect(self._on_text_changed)
         self.edit.deleteEmptyRequested.connect(self._delete_self_if_empty)
         self.edit.moveUpRequested.connect(self._focus_prev)
         self.edit.moveDownRequested.connect(self._focus_next)
         self.edit.newRowRequested.connect(self._insert_new_row)
-        layout.addWidget(self.edit, 1)
+        layout.addWidget(self.edit, 2)
+        # Platz schaffen, damit Subrollen nach rechts rücken
+        layout.addStretch(1)
 
         self.subrole_checks: list[QtWidgets.QCheckBox] = []
         for lbl in subrole_labels:
