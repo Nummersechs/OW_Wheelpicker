@@ -3,14 +3,16 @@ import random
 import json
 import os
 import sys
+
 from PySide6 import QtCore, QtGui, QtWidgets
-from view.wheel_view import WheelView
-from view.overlay import ResultOverlay
-from services.sound import SoundManager
-from services import persistence, state_store
+
 import config
-from services import sync_service, spin_planner, hero_ban_merge, spin_service, mode_manager
 import i18n
+from . import mode_manager, spin_service
+from services import hero_ban_merge, persistence, spin_planner, state_store, sync_service
+from services.sound import SoundManager
+from view.overlay import ResultOverlay
+from view.wheel_view import WheelView
 
 # Fallback für "unbegrenzt" bei Widgetbreiten/Höhen (PySide6 exportiert QWIDGETSIZE_MAX nicht immer)
 QWIDGETSIZE_MAX = getattr(QtWidgets, "QWIDGETSIZE_MAX", getattr(QtCore, "QWIDGETSIZE_MAX", 16777215))
@@ -18,7 +20,8 @@ QWIDGETSIZE_MAX = getattr(QtWidgets, "QWIDGETSIZE_MAX", getattr(QtCore, "QWIDGET
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        # State-Datei ermitteln und gespeicherten Zustand laden
+        # Basisverzeichnis bestimmen, State-Datei ermitteln und gespeicherten Zustand laden
+        self._base_dir = self._app_base_dir()
         self._state_file = self._get_state_file()
         saved = self._load_saved_state()
         default_lang = getattr(config, "DEFAULT_LANGUAGE", "en")
@@ -27,7 +30,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.setWindowTitle(i18n.t("app.title.main"))
         self.resize(1200, 650)
-        self.sound = SoundManager(base_dir=Path(__file__).resolve().parent)
+        self.sound = SoundManager(base_dir=self._base_dir)
 
         self._restoring_state = True   # während des Aufbaus nicht speichern
         self.current_mode = "players"  # immer mit Spieler-Auswahl starten
@@ -788,20 +791,20 @@ class MainWindow(QtWidgets.QMainWindow):
             self._update_summary_from_results()
         self._last_results_snapshot = None
 
-    def _get_state_file(self) -> Path:
+    def _app_base_dir(self) -> Path:
         """
-        Gibt den Pfad zur saved_state.json zurück.
-        - Im normalen Python-Run: neben controller.py
+        Liefert das Basisverzeichnis für Assets, Sounds und saved_state.json.
+        - Im Script-Run: Projektstamm (eine Ebene über controller/)
         - In der PyInstaller-onefile-EXE: neben der .exe
         """
         if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-            # PyInstaller-EXE: sys.executable ist die .exe
-            base_dir = Path(sys.executable).resolve().parent
-        else:
-            # Normaler Script-Run
-            base_dir = Path(__file__).resolve().parent
+            return Path(sys.executable).resolve().parent
+        return Path(__file__).resolve().parent.parent
 
-        return persistence.state_file(base_dir)
+    def _get_state_file(self) -> Path:
+        """Gibt den Pfad zur saved_state.json zurück."""
+        return persistence.state_file(self._base_dir)
+
     def _on_volume_changed(self, value: int):
         factor = max(0.0, min(1.0, value / 100.0))
         self.sound.set_master_volume(factor)

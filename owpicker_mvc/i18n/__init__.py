@@ -1,13 +1,11 @@
-"""
-Lightweight translation helper for the UI.
-Sources per language live in i18n_de.py / i18n_en.py to keep strings organized.
-"""
+"""Lightweight translation helper for the UI.
+Sources per language live in i18n/de.py / i18n/en.py to keep strings organized."""
 from __future__ import annotations
 
 from typing import Dict
 
-import i18n_de
-import i18n_en
+from . import de as i18n_de
+from . import en as i18n_en
 
 # Map language code -> flat key/value dictionary
 LANG_SOURCES: Dict[str, Dict[str, str]] = {

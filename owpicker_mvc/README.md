@@ -11,12 +11,15 @@ python3 main.py
   - `wheel_widget.py` (Rad/Pointer/Animation)  
   - `name_list.py` (Namensliste + Zeilen)  
   - `overlay.py` (Result/Info)
-- `controller.py`: MainWindow/Wiring, delegiert an Services
+- `controller/`: MainWindow/Wiring + Controller-Helper  
+  - `main_window.py` (UI/Wiring)  
+  - `mode_manager.py`, `spin_service.py` (Modus/Spins)
 - `services/`: Logik/Helper  
   - `state_store.py`, `persistence.py` (State/Save)  
-  - `spin_service.py`, `spin_planner.py` (Spin-Logik)  
-  - `mode_manager.py`, `hero_ban_merge.py` (Modes/Hero-Ban)  
+  - `spin_planner.py` (Spin-Logik)  
+  - `hero_ban_merge.py` (Modes/Hero-Ban)  
   - `sync_service.py` (HTTP), `sound.py`
+- `i18n/`: Übersetzungen (`__init__.py`, `de.py`, `en.py`)
 - `config.py`: Defaults/Styles/API
 - `model/`: Zustandsmodelle (`state_models.py`, `roles.py`)
 - `tests/`: Unit-Tests für Services (`spin_planner`, `hero_ban_merge`, `state_store`)

@@ -1,4 +1,4 @@
-"""Mode switching + Hero-Ban visuals to keep controller.py slimmer.
+"""Mode switching + Hero-Ban visuals to keep main_window.py slimmer.
 All helpers expect the MainWindow instance as the first parameter."""
 from __future__ import annotations
 

@@ -1,13 +1,15 @@
-# Architektur-Übersicht (Zielbild)
+# Architektur-Übersicht
 
 - `view/` – reine UI-Komponenten
   - `wheel_view.py` (Rad + Namensliste + Buttons)
   - `overlay.py` (Ergebnis/Info)
   - `wheel_widget.py` (Rad/Pointer/Animation)
   - `name_list.py` (Namensliste + Zeilen)
-  - **Ziel**: ggf. noch `wheel_panel.py` für Buttons/Result separat
-- `controller.py` – aktuelles MainWindow, wird perspektivisch entschlackt
-  - **Ziel**: in `controller/main_window.py`, `controller/mode_manager.py`, `controller/spin_service.py` aufsplitten
+  - Optional: `wheel_panel.py` für Buttons/Result separat
+- `controller/` – MainWindow + Controller-Helper
+  - `main_window.py` (UI/Wiring)
+  - `mode_manager.py` (Modus-Wechsel, Hero-Ban-Visuals/Update)
+  - `spin_service.py` (Spin-All/Single, Snapshot/Restore)
 - `model/` – Zustandsmodelle
   - `roles.py` (bestehend)
   - `state_models.py` (neu: Entry/Role/Mode-Snapshot)
@@ -18,11 +20,11 @@
   - `sync_service.py` (HTTP für Spin-Result & Rollen-Sync)
   - `spin_planner.py` (Backtracking-Zuordnung für Spins)
   - `hero_ban_merge.py` (Hero-Ban: Rollen-Auswahl zusammenführen)
-  - `spin_service.py` (Spin-All/Single, Snapshot/Restore)
-  - `mode_manager.py` (Modus-Wechsel, Hero-Ban-Visuals/Update)
+- `i18n/` – Übersetzungen
+  - `__init__.py` (Helper), `de.py`, `en.py`
 - `config.py` – Konstanten, Defaults, API-Endpoints
 
 Nächste sinnvolle Schritte:
-1) Controller weiter aufsplitten (UI/MainWindow, Mode-Manager, Spin-Service).
+1) Controller-Methoden weiter entschlacken (UI-spezifische Wiring weiter auslagern).
 2) `wheel_view.py` weiter in Panel/Button-Layer trennen (optional).
 3) Tests erweitern (UI-freie Komponenten).
