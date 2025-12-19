@@ -79,6 +79,17 @@ DEFAULT_MAPS = {
     "Assault": ["Hanamura", "Horizon Lunar Colony", "Paris", "Temple of Anubis", "Volskaya Industries"],
     "Clash": ["Hanaoka", "Throne of Anubis"],
 }
+# Welche Map-Kategorien beim Start aktiviert sein sollen.
+# Wenn ein Eintrag fehlt, gilt er als deaktiviert.
+MAP_INCLUDE_DEFAULTS = [
+    "Control",
+    "Escort",
+    "Hybrid",
+    "Push",
+    "Flashpoint",
+    # "Assault",  # bewusst aus
+    # "Clash",    # bewusst aus
+]
 
 # ---------- Server ----------
 #API_BASE_URL = "https://wddys-macbook-air.tail455d76.ts.net/" 

@@ -1129,7 +1129,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         for idx, cat in enumerate(self.map_categories):
             role_state = map_state.get(cat) or {"entries": [], "pair_mode": False, "use_subroles": False}
-            include_checked = True if include_map is None else include_map.get(cat, True)
+            if include_map is None:
+                include_checked = bool(role_state.get("include_in_all", True))
+            else:
+                include_checked = include_map.get(cat, True)
             w = WheelView(cat, role_state.get("entries", []), pair_mode=False, allow_pair_toggle=False)
             w.set_header_controls_visible(False)
             w.set_subrole_controls_visible(False)
@@ -1144,7 +1147,8 @@ class MainWindow(QtWidgets.QMainWindow):
             w.btn_include_in_all.setChecked(include_checked)
             w.btn_include_in_all.toggled.connect(self._rebuild_map_wheel)
             w.stateChanged.connect(self._on_map_list_changed)
-            w.set_interactive_enabled(True)
+            w.set_interactive_enabled(include_checked)
+            w.setVisible(include_checked)
             self.map_lists[cat] = w
             self.map_grid.addWidget(w)
 
