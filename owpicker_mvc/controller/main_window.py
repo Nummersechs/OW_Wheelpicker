@@ -1381,8 +1381,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _apply_language(self):
         i18n.set_language(self.language)
         if hasattr(self, "btn_language"):
-            flag = "🇩🇪" if self.language == "de" else "🇬🇧"
-            self.btn_language.setText(flag)
+            self.btn_language.setText(i18n.flag_for_language(self.language))
             tooltip = i18n.t("language.tooltip.de") if self.language == "de" else i18n.t("language.tooltip.en")
             self.btn_language.setToolTip(tooltip)
         self.lbl_mode.setText(i18n.t("label.mode"))

@@ -211,7 +211,7 @@ class ResultOverlay(QtWidgets.QWidget):
         """Aktualisiert Text/Tooltip des Sprache-Buttons."""
         if not hasattr(self, "btn_language"):
             return
-        flag = "🇩🇪" if i18n.get_language() == "de" else "🇬🇧"
+        flag = i18n.flag_for_language(i18n.get_language())
         tooltip = i18n.t("language.tooltip.de") if i18n.get_language() == "de" else i18n.t("language.tooltip.en")
         self.btn_language.setText(flag)
         self.btn_language.setToolTip(tooltip)
