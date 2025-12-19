@@ -5,8 +5,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 import threading
-import requests
 import config
+
+try:
+    import requests  # type: ignore
+except Exception:
+    requests = None  # type: ignore
 
 
 def send_spin_result(tank: str, damage: str, support: str, pair_modes: Dict[str, bool]) -> None:
@@ -30,6 +34,9 @@ def send_spin_result(tank: str, damage: str, support: str, pair_modes: Dict[str,
         return parts[0], " + ".join(parts[1:])
 
     def _worker():
+        if requests is None:
+            config.debug_print("Requests not available – spin result not sent.")
+            return
         try:
             tank1, tank2 = split_pair(tank, pair_modes.get("Tank", False))
             dps1, dps2 = split_pair(damage, pair_modes.get("Damage", False))
@@ -65,6 +72,9 @@ def sync_roles(roles: List[Dict[str, Any]]) -> None:
     """
 
     def _worker():
+        if requests is None:
+            config.debug_print("Requests not available – roles not synced.")
+            return
         try:
             payload = {"roles": roles}
             base = config.API_BASE_URL
