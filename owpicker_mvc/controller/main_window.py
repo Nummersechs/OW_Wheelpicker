@@ -79,7 +79,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_language.setAutoRaise(True)
         self.btn_language.setCursor(QtCore.Qt.PointingHandCursor)
         self.btn_language.setFixedSize(40, 32)
-        self.btn_language.setStyleSheet("font-size:18px; padding:2px; background:transparent;")
+        self.btn_language.setStyleSheet(
+            "QToolButton { font-size:18px; padding:2px; background:transparent; border:none; border-radius:6px; }"
+            "QToolButton:hover { background:rgba(0,0,0,0.06); }"
+            "QToolButton:pressed { background:rgba(0,0,0,0.12); }"
+        )
         self.btn_language.clicked.connect(self._toggle_language)
         vol_row.addWidget(self.lbl_volume_icon, 0, QtCore.Qt.AlignVCenter)
         vol_row.addWidget(self.volume_slider, 0, QtCore.Qt.AlignVCenter)

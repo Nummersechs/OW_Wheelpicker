@@ -36,7 +36,11 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_language.setAutoRaise(True)
         self.btn_language.setCursor(QtCore.Qt.PointingHandCursor)
         self.btn_language.setFixedSize(40, 32)
-        self.btn_language.setStyleSheet("font-size:18px; padding:2px; background:transparent;")
+        self.btn_language.setStyleSheet(
+            "QToolButton { font-size:18px; padding:2px; background:transparent; border:none; border-radius:6px; }"
+            "QToolButton:hover { background:rgba(0,0,0,0.06); }"
+            "QToolButton:pressed { background:rgba(0,0,0,0.12); }"
+        )
         self.btn_language.clicked.connect(self.languageToggleRequested.emit)
         top_row.addWidget(self.btn_language, 0, QtCore.Qt.AlignRight)
         v.addLayout(top_row)
