@@ -136,6 +136,49 @@ def global_stylesheet(theme: Theme) -> str:
         QGraphicsView {{
             background:transparent;
         }}
+        /* Scrollbars besser sichtbar in beiden Themes */
+        QScrollBar:vertical {{
+            background:{theme.alt_base};
+            width:12px;
+            margin:2px;
+            border-radius:6px;
+        }}
+        QScrollBar::handle:vertical {{
+            background:{theme.slider_handle};
+            min-height:24px;
+            border-radius:6px;
+        }}
+        QScrollBar::add-line:vertical,
+        QScrollBar::sub-line:vertical {{
+            height:0px;
+            background:transparent;
+        }}
+        QScrollBar::sub-page:vertical,
+        QScrollBar::add-page:vertical {{
+            background:{theme.slider_groove};
+            border-radius:6px;
+        }}
+        QScrollBar:horizontal {{
+            background:{theme.alt_base};
+            height:12px;
+            margin:2px;
+            border-radius:6px;
+        }}
+        QScrollBar::handle:horizontal {{
+            background:{theme.slider_handle};
+            min-width:24px;
+            border-radius:6px;
+        }}
+        QScrollBar::add-line:horizontal,
+        QScrollBar::sub-line:horizontal {{
+            width:0px;
+            background:transparent;
+        }}
+        QScrollBar::sub-page:horizontal,
+        QScrollBar::add-page:horizontal {{
+            background:{theme.slider_groove};
+            border-radius:6px;
+        }}
         QPushButton {{
             color:{theme.button_text};
             background:{theme.primary};

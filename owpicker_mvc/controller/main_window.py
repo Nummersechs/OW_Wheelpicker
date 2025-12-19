@@ -47,6 +47,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self._role_base_widths: dict[str, int] = {}
         self._state_store = state_store.ModeStateStore.from_saved(saved)
         self._mode_results: dict[str, dict[str, str]] = {}
+        self._pending_sync_payload: list[dict] | None = None
+
+        # Timer für sanftere Sync-/Tooltip-Operationen
+        self._sync_timer = QtCore.QTimer(self)
+        self._sync_timer.setSingleShot(True)
+        self._sync_timer.timeout.connect(self._flush_role_sync)
+        self._tooltip_refresh_timer = QtCore.QTimer(self)
+        self._tooltip_refresh_timer.setSingleShot(True)
+        self._tooltip_refresh_timer.timeout.connect(self._run_tooltip_cache_refresh)
+        self._tooltip_refresh_step = 80
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
@@ -588,7 +598,21 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         Baut die Tooltip-Caches in kleinen Scheiben (per Timer) neu auf,
         damit der UI-Thread beim Online/Offline-Klick nicht blockiert.
+        Mehrfachaufrufe werden kurz gesammelt, um die Render-Last zu drosseln.
         """
+        step = max(0, int(delay_step_ms))
+        self._tooltip_refresh_step = step
+        timer = getattr(self, "_tooltip_refresh_timer", None)
+        if timer is None:
+            timer = QtCore.QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._run_tooltip_cache_refresh)
+            self._tooltip_refresh_timer = timer
+        # Timer neu starten -> debounce
+        timer.start(60)
+
+    def _run_tooltip_cache_refresh(self):
+        """Führt den eigentlichen Cache-Rebuild sequenziell aus."""
         wheels = [self.tank, self.dps, self.support]
         if getattr(self, "map_main", None):
             wheels.append(self.map_main)
@@ -602,10 +626,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 except Exception:
                     pass
 
+        step_ms = max(0, int(getattr(self, "_tooltip_refresh_step", 80)))
         for idx, w in enumerate(wheels):
-            QtCore.QTimer.singleShot(idx * max(0, int(delay_step_ms)), lambda _w=w: rebuild_single(_w))
+            QtCore.QTimer.singleShot(idx * step_ms, lambda _w=w: rebuild_single(_w))
         # Am Ende Tooltips freigeben und Hover-Cache setzen
-        total_delay = len(wheels) * max(0, int(delay_step_ms)) + 40
+        total_delay = len(wheels) * step_ms + 40
         QtCore.QTimer.singleShot(total_delay, lambda: (self._set_tooltips_ready(True), self._reset_hover_cache_under_cursor()))
 
     def _reset_hover_cache_under_cursor(self):
@@ -1329,10 +1354,15 @@ class MainWindow(QtWidgets.QMainWindow):
     def _load_map_state(self):
         if not hasattr(self, "map_lists"):
             return
-        state = self._state_store.get_mode_state("maps") or {}
-        for cat, wheel in self.map_lists.items():
-            role_state = state.get(cat) or self._state_store.default_role_state(cat, "maps")
-            wheel.load_entries(role_state.get("entries", []))
+        prev_restoring = getattr(self, "_restoring_state", False)
+        self._restoring_state = True
+        try:
+            state = self._state_store.get_mode_state("maps") or {}
+            for cat, wheel in self.map_lists.items():
+                role_state = state.get(cat) or self._state_store.default_role_state(cat, "maps")
+                wheel.load_entries(role_state.get("entries", []))
+        finally:
+            self._restoring_state = prev_restoring
         self._rebuild_map_wheel()
 
     def _capture_map_state(self):
@@ -1619,9 +1649,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if self.online_mode:
             config.debug_print("Online-Modus aktiv.")
-            self._sync_all_roles_to_server()
         else:
             config.debug_print("Offline-Modus aktiv.")
+        # Sync ggf. neu einplanen oder abbrechen
+        self._sync_all_roles_to_server()
             
     def _send_spin_result_to_server(self, tank: str, damage: str, support: str):
         # Offline? → gar nicht erst versuchen zu senden
@@ -1638,10 +1669,28 @@ class MainWindow(QtWidgets.QMainWindow):
     def _sync_all_roles_to_server(self):
         if not getattr(self, "online_mode", False):
             config.debug_print("Sync übersprungen: Offline-Modus.")
+            self._pending_sync_payload = None
+            if hasattr(self, "_sync_timer") and self._sync_timer.isActive():
+                self._sync_timer.stop()
             return
         payload = [
             {"role": "Tank", "names": self.tank.get_current_names()},
             {"role": "Damage", "names": self.dps.get_current_names()},
             {"role": "Support", "names": self.support.get_current_names()},
         ]
-        sync_service.sync_roles(payload)
+        self._pending_sync_payload = payload
+        if hasattr(self, "_sync_timer") and self._sync_timer is not None:
+            # kurze Verzögerung, um schnelle State-Änderungen zu bündeln
+            self._sync_timer.start(200)
+        else:
+            sync_service.sync_roles(payload)
+
+    def _flush_role_sync(self):
+        """Sendet den letzten vorbereiteten Sync-Payload (debounced)."""
+        if not getattr(self, "online_mode", False):
+            self._pending_sync_payload = None
+            return
+        payload = getattr(self, "_pending_sync_payload", None)
+        self._pending_sync_payload = None
+        if payload:
+            sync_service.sync_roles(payload)
