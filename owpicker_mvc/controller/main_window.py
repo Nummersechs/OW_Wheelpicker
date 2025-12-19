@@ -332,6 +332,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.overlay.set_choice_enabled(False)
         self.overlay.set_hover_blocked(True)
         self._set_language_buttons_enabled(False)
+        # Während des Warmups keine Hover-Tooltips zulassen
+        self._set_tooltips_ready(False)
         def _rebuild_tooltips():
             self._refresh_tooltip_caches()
             self._reset_hover_cache_under_cursor()
