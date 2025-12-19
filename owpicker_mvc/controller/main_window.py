@@ -311,10 +311,16 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _warmup_tooltips_initial(self):
         """Initial Cache/Tooltips vorbereiten und Online/Offline-Buttons freigeben."""
-        self._refresh_tooltip_caches()
-        self._reset_hover_cache_under_cursor()
-        # Etwas mehr Puffer, damit Tooltips und Caches sicher stehen
-        QtCore.QTimer.singleShot(750, lambda: self.overlay.set_choice_enabled(True))
+        # Erst alles sperren, dann die Caches zweimal aufbauen, damit das Dark-Theme-Repolish
+        # erledigt ist, bevor die Buttons anklickbar werden.
+        self.overlay.set_choice_enabled(False)
+        def _rebuild_tooltips():
+            self._refresh_tooltip_caches()
+            self._reset_hover_cache_under_cursor()
+        _rebuild_tooltips()
+        QtCore.QTimer.singleShot(180, _rebuild_tooltips)
+        # Mehr Luft lassen, damit der erste Klick nicht vor dem Tooltip-Warmup passiert
+        QtCore.QTimer.singleShot(1200, lambda: self.overlay.set_choice_enabled(True))
 
     def _on_overlay_closed(self):
         self._set_controls_enabled(True)
@@ -1489,9 +1495,12 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_mode_chosen(self, online: bool):
         self.online_mode = online
         self._set_controls_enabled(True)
-        self._refresh_tooltip_caches()
-        QtCore.QTimer.singleShot(150, self._refresh_tooltip_caches)
-        QtCore.QTimer.singleShot(0, self._reset_hover_cache_under_cursor)
+        # Tooltip-Rebuild asynchron anstoßen, damit der Klick nicht blockiert
+        def _rebuild_tooltips():
+            self._refresh_tooltip_caches()
+            self._reset_hover_cache_under_cursor()
+        QtCore.QTimer.singleShot(0, _rebuild_tooltips)
+        QtCore.QTimer.singleShot(250, _rebuild_tooltips)
 
         if self.online_mode:
             config.debug_print("Online-Modus aktiv.")
