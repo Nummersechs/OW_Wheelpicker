@@ -20,8 +20,9 @@ QWIDGETSIZE_MAX = getattr(QtWidgets, "QWIDGETSIZE_MAX", getattr(QtCore, "QWIDGET
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        # Basisverzeichnis bestimmen, State-Datei ermitteln und gespeicherten Zustand laden
-        self._base_dir = self._app_base_dir()
+        # Basisverzeichnisse bestimmen (Assets vs. writable state) und gespeicherten Zustand laden
+        self._asset_dir = self._asset_base_dir()
+        self._state_dir = self._state_base_dir()
         self._state_file = self._get_state_file()
         saved = self._load_saved_state()
         default_lang = getattr(config, "DEFAULT_LANGUAGE", "en")
@@ -30,7 +31,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.setWindowTitle(i18n.t("app.title.main"))
         self.resize(1200, 650)
-        self.sound = SoundManager(base_dir=self._base_dir)
+        self.sound = SoundManager(base_dir=self._asset_dir)
 
         self._restoring_state = True   # während des Aufbaus nicht speichern
         self.current_mode = "players"  # immer mit Spieler-Auswahl starten
@@ -795,19 +796,29 @@ class MainWindow(QtWidgets.QMainWindow):
             self._update_summary_from_results()
         self._last_results_snapshot = None
 
-    def _app_base_dir(self) -> Path:
+    def _asset_base_dir(self) -> Path:
         """
-        Liefert das Basisverzeichnis für Assets, Sounds und saved_state.json.
+        Liefert das Basisverzeichnis für Assets/Sounds.
         - Im Script-Run: Projektstamm (eine Ebene über controller/)
-        - In der PyInstaller-onefile-EXE: neben der .exe
+        - In der PyInstaller-onefile-EXE: entpacktes _MEIPASS (enthält add-data)
         """
         if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+            return Path(sys._MEIPASS)  # type: ignore[attr-defined]
+        return Path(__file__).resolve().parent.parent
+
+    def _state_base_dir(self) -> Path:
+        """
+        Schreibbares Verzeichnis für saved_state.json.
+        - Im Script-Run: Projektstamm (eine Ebene über controller/)
+        - In der PyInstaller-onefile-EXE: neben der .exe (nicht im temporären _MEIPASS)
+        """
+        if getattr(sys, "frozen", False):
             return Path(sys.executable).resolve().parent
         return Path(__file__).resolve().parent.parent
 
     def _get_state_file(self) -> Path:
         """Gibt den Pfad zur saved_state.json zurück."""
-        return persistence.state_file(self._base_dir)
+        return persistence.state_file(self._state_dir)
 
     def _on_volume_changed(self, value: int):
         factor = max(0.0, min(1.0, value / 100.0))
