@@ -149,15 +149,20 @@ class NamesList(QtWidgets.QListWidget):
         entries.sort(key=lambda e: (not e[0].strip(), e[0].lower()))
 
         # Bestehende Widgets sauber lösen, dann neu aufbauen
-        self.blockSignals(True)
-        while self.count():
-            it = self.takeItem(0)
-            widget = self.itemWidget(it)
-            if widget:
-                widget.setParent(None)
-        for name, active, subroles in entries:
-            self.add_name(name, subroles=subroles, active=active)
-        self.blockSignals(False)
+        blockers = [
+            QtCore.QSignalBlocker(self),
+            QtCore.QSignalBlocker(self.model()),
+        ]
+        try:
+            while self.count():
+                it = self.takeItem(0)
+                widget = self.itemWidget(it)
+                if widget:
+                    widget.setParent(None)
+            for name, active, subroles in entries:
+                self.add_name(name, subroles=subroles, active=active)
+        finally:
+            del blockers
         self.metaChanged.emit()
 
     def _show_context_menu(self, pos: QtCore.QPoint):
