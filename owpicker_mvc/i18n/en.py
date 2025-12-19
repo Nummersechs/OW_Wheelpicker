@@ -76,6 +76,9 @@ TRANSLATIONS_EN = {
     "overlay.team_impossible_title": "Team cannot be formed",
     "overlay.team_impossible_line1": "At least one role cannot be filled without conflicts.",
     "overlay.team_impossible_line2": "Add more distinct names or disable roles.",
+    # Theme
+    "theme.toggle.to_dark": "Switch to dark mode",
+    "theme.toggle.to_light": "Switch to light mode",
     # Language switcher
     "language.de": "German",
     "language.en": "English",

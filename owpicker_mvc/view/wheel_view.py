@@ -6,6 +6,7 @@ from view.wheel_widget import WheelWidget
 from view.name_list import NamesList, NameRowWidget
 import config
 import i18n
+from utils import theme as theme_util
 
 class WheelView(QtWidgets.QWidget):
     spun = QtCore.Signal(str)
@@ -178,15 +179,15 @@ class WheelView(QtWidgets.QWidget):
         btn_row.addWidget(self.btn_include_in_all, 0)
 
         # ---------- Karte / Card-Layout ----------
-        card = QtWidgets.QFrame()
-        card.setObjectName("card")
-        card.setStyleSheet(
+        self.card = QtWidgets.QFrame()
+        self.card.setObjectName("card")
+        self.card.setStyleSheet(
             "#card { "
             "background: rgba(255,255,255,0.75); "
             "border:1px solid #e6e6e6; border-radius:16px; }"
         )
 
-        inner = QtWidgets.QVBoxLayout(card)
+        inner = QtWidgets.QVBoxLayout(self.card)
         inner.setContentsMargins(16, 12, 16, 12)
         inner.addLayout(header)
         inner.addWidget(self.view, 1)
@@ -220,7 +221,9 @@ class WheelView(QtWidgets.QWidget):
         self._apply_result_state()
 
         outer = QtWidgets.QVBoxLayout(self)
-        outer.addWidget(card)
+        outer.addWidget(self.card)
+        # Default theme; main window reapplies the persisted choice.
+        self.apply_theme(theme_util.get_theme("light"))
         QtCore.QTimer.singleShot(0, self._refit_view)
     def _apply_title(self):
         text = self._title_fallback
@@ -303,6 +306,38 @@ class WheelView(QtWidgets.QWidget):
             set_min(self.chk_subroles, ["wheel.subroles_toggle"], padding=30)
         if self.chk_show_names:
             set_min(self.chk_show_names, ["wheel.show_names"], padding=30)
+
+    def apply_theme(self, theme: theme_util.Theme) -> None:
+        """Apply color palette for the active theme to this wheel."""
+        self.card.setStyleSheet(
+            "#card { "
+            f"background: {theme.card_bg}; "
+            f"border:1px solid {theme.card_border}; border-radius:16px; }}"
+        )
+        self.label.setStyleSheet(
+            "font-size:18px; font-weight:800; letter-spacing:0.3px; "
+            f"color:{theme.text};"
+        )
+        self.result.setStyleSheet(f"font-size:14px; color:{theme.muted_text}; margin-top:6px;")
+        self.names_hint.setStyleSheet(f"color:{theme.muted_text}; font-size:12px; padding:2px;")
+        # Indicator styling stays aligned with the active theme colors.
+        self.setStyleSheet(
+            f"""
+            QCheckBox::indicator,
+            QListView::indicator {{
+                width: 6px;
+                height: 6px;
+                border: 2px solid {theme.text};
+                border-radius: 3px;
+                background: {theme.base};
+            }}
+
+            QCheckBox::indicator:checked,
+            QListView::indicator:checked {{
+                background: {theme.primary};
+            }}
+            """
+        )
 
     def set_result_value(self, value: str):
         self._result_state = "value"

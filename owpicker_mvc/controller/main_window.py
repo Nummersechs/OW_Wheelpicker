@@ -11,7 +11,7 @@ import i18n
 from . import mode_manager, spin_service
 from services import hero_ban_merge, persistence, spin_planner, state_store, sync_service
 from services.sound import SoundManager
-from utils import flag_icons
+from utils import flag_icons, theme as theme_util
 from view.overlay import ResultOverlay
 from view.wheel_view import WheelView
 
@@ -29,6 +29,9 @@ class MainWindow(QtWidgets.QMainWindow):
         default_lang = getattr(config, "DEFAULT_LANGUAGE", "en")
         self.language = saved.get("language", default_lang) if isinstance(saved, dict) else default_lang
         i18n.set_language(self.language)
+        self.theme = saved.get("theme", "light") if isinstance(saved, dict) else "light"
+        if self.theme not in theme_util.THEMES:
+            self.theme = "light"
 
         self.setWindowTitle(i18n.t("app.title.main"))
         self.resize(1200, 650)
@@ -47,7 +50,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
-        self._apply_theme()
         root = QtWidgets.QVBoxLayout(central)
 
         self.title = QtWidgets.QLabel("")
@@ -88,10 +90,18 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.btn_language.setIconSize(QtCore.QSize(28, 20))
         self.btn_language.clicked.connect(self._toggle_language)
+        self.btn_theme = QtWidgets.QToolButton()
+        self.btn_theme.setAutoRaise(True)
+        self.btn_theme.setCursor(QtCore.Qt.PointingHandCursor)
+        self.btn_theme.setFixedSize(40, 32)
+        self.btn_theme.setIconSize(QtCore.QSize(24, 24))
+        self.btn_theme.clicked.connect(self._toggle_theme)
         vol_row.addWidget(self.lbl_volume_icon, 0, QtCore.Qt.AlignVCenter)
         vol_row.addWidget(self.volume_slider, 0, QtCore.Qt.AlignVCenter)
         vol_row.addSpacing(6)
         vol_row.addWidget(self.btn_language, 0, QtCore.Qt.AlignVCenter)
+        vol_row.addSpacing(4)
+        vol_row.addWidget(self.btn_theme, 0, QtCore.Qt.AlignVCenter)
         vol_row.addStretch(0)
         root.addLayout(vol_row)
         saved_volume = saved.get("volume", 100)
@@ -294,6 +304,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_spin_all_enabled()
         self._update_cancel_enabled()
         self._apply_mode_results(self._mode_key())
+        self._apply_theme()
         self._apply_language()
         # Tooltips sofort erlauben (werden später noch einmal frisch berechnet)
         self._set_tooltips_ready(True)
@@ -327,107 +338,43 @@ class MainWindow(QtWidgets.QMainWindow):
         return super().eventFilter(obj, event)
 
     def _apply_theme(self):
-        """
-        Helles, gut lesbares Theme erzwingen – unabhängig vom System-Darkmode.
-        """
-        from PySide6 import QtWidgets, QtGui
+        """Apply the selected light/dark theme to the whole UI."""
+        theme = theme_util.get_theme(getattr(self, "theme", "light"))
+        theme_util.apply_app_theme(theme)
+        tool_style = theme_util.tool_button_stylesheet(theme)
 
-        QtWidgets.QApplication.setStyle("Fusion")
+        if hasattr(self, "btn_language"):
+            self.btn_language.setStyleSheet(tool_style)
+        if hasattr(self, "btn_theme"):
+            self.btn_theme.setStyleSheet(tool_style)
+        self._update_theme_button_label()
 
-        pal = QtGui.QPalette()
+        if hasattr(self, "summary"):
+            self.summary.setStyleSheet(f"font-size:15px; color:{theme.muted_text}; margin:10px 0 6px 0;")
 
-        # Hintergründe
-        pal.setColor(QtGui.QPalette.Window, QtGui.QColor(245, 246, 248))   # App-Hintergrund
-        pal.setColor(QtGui.QPalette.Base, QtGui.QColor(255, 255, 255))     # Eingabefelder
-        pal.setColor(QtGui.QPalette.AlternateBase, QtGui.QColor(240, 240, 240))
-        pal.setColor(QtGui.QPalette.ToolTipBase, QtGui.QColor(255, 255, 255))
-        pal.setColor(QtGui.QPalette.ToolTipText, QtGui.QColor(32, 33, 36))
+        if hasattr(self, "map_sidebar"):
+            self.map_sidebar.setStyleSheet(
+                f"QFrame {{ background: {theme.frame_bg}; border:1px solid {theme.frame_border}; border-radius:8px; }}"
+            )
+        if hasattr(self, "_map_type_editor"):
+            self._map_type_editor.setStyleSheet(
+                f"QFrame {{ background: {theme.card_bg}; border: 2px solid {theme.card_border}; border-radius: 10px; }}"
+            )
 
-        # Texte (dunkel auf hell)
-        pal.setColor(QtGui.QPalette.Text, QtGui.QColor(32, 33, 36))
-        pal.setColor(QtGui.QPalette.WindowText, QtGui.QColor(32, 33, 36))
-        pal.setColor(QtGui.QPalette.ButtonText, QtGui.QColor(32, 33, 36))
+        for wheel in (getattr(self, "tank", None), getattr(self, "dps", None), getattr(self, "support", None)):
+            if hasattr(wheel, "apply_theme"):
+                wheel.apply_theme(theme)
+        if hasattr(self, "map_main") and hasattr(self.map_main, "apply_theme"):
+            self.map_main.apply_theme(theme)
+        if hasattr(self, "map_lists"):
+            for wheel in self.map_lists.values():
+                if hasattr(wheel, "apply_theme"):
+                    wheel.apply_theme(theme)
 
-        # Buttons/Highlights
-        pal.setColor(QtGui.QPalette.Button, QtGui.QColor(255, 255, 255))
-        pal.setColor(QtGui.QPalette.Highlight, QtGui.QColor(0, 120, 215))
-        pal.setColor(QtGui.QPalette.HighlightedText, QtGui.QColor(255, 255, 255))
+        if hasattr(self, "overlay"):
+            self.overlay.apply_theme(theme, tool_style)
 
-        QtWidgets.QApplication.setPalette(pal)
-
-        # Einheitliche, gut lesbare Typo & Kontraste
-        self.setStyleSheet("""
-            QLabel { color:#202124; }
-            QPlainTextEdit {
-                background:#ffffff; color:#202124;
-                border:1px solid #e6e6e6; border-radius:10px; padding:6px;
-                font-size:13px;
-            }
-            QSlider::groove:horizontal {
-                height:6px; background:#e0e0e0; border-radius:3px;
-            }
-            QSlider::handle:horizontal {
-                width:14px; background:#0078d4; border-radius:7px; margin:-5px 0;
-            }
-            QGraphicsView {
-                background:transparent;
-            }
-            QPushButton {
-                color:#ffffff;
-                background:#0b57d0;
-                border-radius:12px;
-                font-weight:600;
-                padding:8px 18px;
-            }
-            QPushButton[modeButton="true"] {
-                padding:6px 14px;
-                font-size:13px;
-                min-width:120px;
-            }
-            QPushButton[modeButton="true"]:checked {
-                padding:10px 18px;
-                font-size:14px;
-            }
-            QPushButton:hover { background:#0a4fc0; }
-            QPushButton:pressed { background:#0946ab; }
-
-            /* CHECKED: für deinen Bei-Alle-drehen-Button */
-            QPushButton:checked {
-                background:#188038;
-                border:2px solid #0f5f26;
-            }
-            QPushButton:checked:hover {
-                background:#176b34;
-            }
-            QPushButton:checked:pressed {
-                background:#14592b;
-            }
-
-            /* DISABLED: sichtbar ausgegrauter Zustand (z.B. Alle 3 drehen) */
-            QPushButton:disabled {
-                background:#c7c7c7;
-                color:#777777;
-                border-radius:12px;
-                border:1px solid #b0b0b0;
-            }
-
-            QCheckBox {
-                color:#202124;
-                font-size:13px;
-            }
-
-            QCheckBox::indicator {
-                width: 8px;
-                height: 8px;
-                border: 2px solid black;      /* dicker schwarzer Rand */
-                border-radius: 3px;           /* optional */
-                background: white;            /* Hintergrund */
-            }
-
-            QCheckBox::indicator:checked {
-                background: black;            /* Hakenfarbe */
-            }
-        """)
+        self._update_mode_button_styles()
 
     def _update_mode_button_styles(self, *_args):
         """
@@ -1109,8 +1056,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def _show_map_type_editor(self, parent_widget: QtWidgets.QWidget):
         if not hasattr(self, "_map_type_editor"):
             self._map_type_editor = QtWidgets.QFrame(parent_widget)
+            theme = theme_util.get_theme(getattr(self, "theme", "light"))
             self._map_type_editor.setStyleSheet(
-                "QFrame { background: white; border: 2px solid #444; border-radius: 10px; }"
+                f"QFrame {{ background: {theme.card_bg}; border: 2px solid {theme.card_border}; border-radius: 10px; }}"
             )
             self._map_type_editor.setFixedSize(360, 320)
             layout = QtWidgets.QVBoxLayout(self._map_type_editor)
@@ -1375,6 +1323,22 @@ class MainWindow(QtWidgets.QMainWindow):
         next_lang = "en" if self.language == "de" else "de"
         self._switch_language(next_lang)
 
+    def _toggle_theme(self):
+        """Switch between light and dark mode."""
+        self.theme = "dark" if getattr(self, "theme", "light") == "light" else "light"
+        self._apply_theme()
+        if not getattr(self, "_restoring_state", False):
+            self._save_state()
+
+    def _update_theme_button_label(self):
+        """Update text/tooltip of the theme toggle."""
+        if not hasattr(self, "btn_theme"):
+            return
+        is_dark = getattr(self, "theme", "light") == "dark"
+        self.btn_theme.setText("☀️" if is_dark else "🌙")
+        tooltip = i18n.t("theme.toggle.to_light") if is_dark else i18n.t("theme.toggle.to_dark")
+        self.btn_theme.setToolTip(tooltip)
+
     def _retranslate_map_ui(self):
         if hasattr(self, "lbl_map_types"):
             self.lbl_map_types.setText(i18n.t("map.types"))
@@ -1424,6 +1388,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.overlay.set_language(self.language)
             # Flag auf dem Overlay aktualisieren
             self.overlay._apply_flag()
+        self._update_theme_button_label()
         self._update_summary_from_results()
 
     def _set_fixed_width_from_translations(self, widgets, keys, padding: int = 20, prefixes: list[str] | None = None):
@@ -1458,7 +1423,8 @@ class MainWindow(QtWidgets.QMainWindow):
           "heroes":  {"Tank": {...}, "Damage": {...}, "Support": {...}},
           "maps": {...},
           "volume": int,
-          "language": "de" | "en"   # fallback ist Englisch
+          "language": "de" | "en",   # fallback ist Englisch
+          "theme": "light" | "dark"
         }
         """
         data = persistence.load_state(self._state_file)
@@ -1484,6 +1450,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._capture_map_state()
         state = self._state_store.to_saved(self.volume_slider.value())
         state["language"] = self.language
+        state["theme"] = self.theme
         return state
 
     def _update_hero_ban_wheel(self):

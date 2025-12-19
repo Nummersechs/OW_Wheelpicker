@@ -1,7 +1,7 @@
 from PySide6 import QtCore, QtGui, QtWidgets
 from html import escape
 import i18n
-from utils import flag_icons
+from utils import flag_icons, theme as theme_util
 
 class ResultOverlay(QtWidgets.QWidget):
     closed = QtCore.Signal()
@@ -16,13 +16,6 @@ class ResultOverlay(QtWidgets.QWidget):
 
         self.card = QtWidgets.QFrame(self)
         self.card.setObjectName("resultCard")
-        self.card.setStyleSheet(
-            "#resultCard { "
-            "background: rgba(255,255,255,0.96); "
-            "border-radius: 16px; "
-            "border: 1px solid rgba(0,0,0,0.08); "
-            "}"
-        )
 
         v = QtWidgets.QVBoxLayout(self.card)
         v.setContentsMargins(26, 22, 26, 22)
@@ -37,11 +30,6 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_language.setAutoRaise(True)
         self.btn_language.setCursor(QtCore.Qt.PointingHandCursor)
         self.btn_language.setFixedSize(40, 32)
-        self.btn_language.setStyleSheet(
-            "QToolButton { font-size:18px; padding:2px; background:transparent; border:none; border-radius:6px; }"
-            "QToolButton:hover { background:rgba(0,0,0,0.06); }"
-            "QToolButton:pressed { background:rgba(0,0,0,0.12); }"
-        )
         self.btn_language.setIconSize(QtCore.QSize(28, 20))
         self.btn_language.clicked.connect(self.languageToggleRequested.emit)
         top_row.addWidget(self.btn_language, 0, QtCore.Qt.AlignRight)
@@ -49,7 +37,6 @@ class ResultOverlay(QtWidgets.QWidget):
 
         self.title = QtWidgets.QLabel(i18n.t("overlay.title_result"))
         self.title.setAlignment(QtCore.Qt.AlignCenter)
-        self.title.setStyleSheet("font-size:22px; font-weight:800; margin-bottom:8px;")
         v.addWidget(self.title)
 
         self.lab_tank = QtWidgets.QLabel("")
@@ -58,7 +45,6 @@ class ResultOverlay(QtWidgets.QWidget):
         for lab in (self.lab_tank, self.lab_dps, self.lab_sup):
             lab.setAlignment(QtCore.Qt.AlignCenter)
             lab.setWordWrap(True)
-            lab.setStyleSheet("font-size:17px; margin:4px 0;")
             v.addWidget(lab)
 
         self.btn_close = QtWidgets.QPushButton(i18n.t("overlay.button_ok"))
@@ -86,6 +72,9 @@ class ResultOverlay(QtWidgets.QWidget):
 
         self.hide()
         self._last_view: dict | None = None
+        # Default to light; caller reapplies with the persisted theme.
+        default_theme = theme_util.get_theme("light")
+        self.apply_theme(default_theme, theme_util.tool_button_stylesheet(default_theme))
 
     def paintEvent(self, e):
         p = QtGui.QPainter(self)
@@ -186,6 +175,21 @@ class ResultOverlay(QtWidgets.QWidget):
             self.show_message(title, lines)
         elif kind == "online_choice":
             self.show_online_choice()
+
+    def apply_theme(self, theme: theme_util.Theme, tool_style: str | None = None) -> None:
+        """Update overlay colors to match the active theme."""
+        self.card.setStyleSheet(
+            "#resultCard { "
+            f"background: {theme.card_bg}; "
+            "border-radius: 16px; "
+            f"border: 1px solid {theme.card_border}; "
+            "}"
+        )
+        self.title.setStyleSheet(f"font-size:22px; font-weight:800; margin-bottom:8px; color:{theme.text};")
+        for lab in (self.lab_tank, self.lab_dps, self.lab_sup):
+            lab.setStyleSheet(f"font-size:17px; margin:4px 0; color:{theme.text};")
+        if tool_style:
+            self.btn_language.setStyleSheet(tool_style)
 
     def _apply_button_labels(self):
         self.btn_close.setText(i18n.t("overlay.button_ok"))

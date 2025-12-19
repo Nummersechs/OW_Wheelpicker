@@ -76,6 +76,9 @@ TRANSLATIONS_DE = {
     "overlay.team_impossible_title": "Team kann nicht gebildet werden",
     "overlay.team_impossible_line1": "Mindestens eine Rolle kann nicht konfliktfrei besetzt werden.",
     "overlay.team_impossible_line2": "Bitte mehr unterschiedliche Namen eintragen oder Rollen deaktivieren.",
+    # Theme
+    "theme.toggle.to_dark": "Dark Mode aktivieren",
+    "theme.toggle.to_light": "Light Mode aktivieren",
     # Language switcher
     "language.de": "Deutsch",
     "language.en": "Englisch",
