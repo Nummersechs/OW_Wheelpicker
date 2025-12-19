@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 from PySide6 import QtCore, QtGui, QtWidgets
+import i18n
 
 
 class _NoPaintDelegate(QtWidgets.QStyledItemDelegate):
@@ -166,8 +167,8 @@ class NamesList(QtWidgets.QListWidget):
             item.setSelected(True)
 
         menu = QtWidgets.QMenu(self)
-        act_new = menu.addAction("Neuer Name")
-        act_del = menu.addAction("Ausgewählte löschen")
+        act_new = menu.addAction(i18n.t("names.context_new"))
+        act_del = menu.addAction(i18n.t("names.context_delete"))
         if not self.selectedItems():
             act_del.setEnabled(False)
         action = menu.exec_(self.mapToGlobal(pos))
@@ -208,7 +209,7 @@ class NameRowWidget(QtWidgets.QWidget):
             cb = QtWidgets.QCheckBox(lbl)
             cb.setChecked(lbl in self._current_subroles())
             cb.toggled.connect(self._on_subrole_changed)
-            cb.setToolTip(f"Subrolle {lbl}")
+            cb.setToolTip(i18n.t("names.subrole_tooltip", label=lbl))
             self.subrole_checks.append(cb)
             layout.addWidget(cb, 0, QtCore.Qt.AlignVCenter)
 

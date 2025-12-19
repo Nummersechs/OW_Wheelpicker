@@ -1,9 +1,11 @@
 from PySide6 import QtCore, QtGui, QtWidgets
 from html import escape
+import i18n
 
 class ResultOverlay(QtWidgets.QWidget):
     closed = QtCore.Signal()
     modeChosen = QtCore.Signal(bool)
+    languageToggleRequested = QtCore.Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -25,7 +27,21 @@ class ResultOverlay(QtWidgets.QWidget):
         v.setContentsMargins(26, 22, 26, 22)
         v.setSpacing(10)
 
-        self.title = QtWidgets.QLabel("Ergebnis")
+        # Top-Bar mit Sprache-Button rechts
+        top_row = QtWidgets.QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(6)
+        top_row.addStretch(1)
+        self.btn_language = QtWidgets.QToolButton()
+        self.btn_language.setAutoRaise(True)
+        self.btn_language.setCursor(QtCore.Qt.PointingHandCursor)
+        self.btn_language.setFixedSize(40, 32)
+        self.btn_language.setStyleSheet("font-size:18px; padding:2px; background:transparent;")
+        self.btn_language.clicked.connect(self.languageToggleRequested.emit)
+        top_row.addWidget(self.btn_language, 0, QtCore.Qt.AlignRight)
+        v.addLayout(top_row)
+
+        self.title = QtWidgets.QLabel(i18n.t("overlay.title_result"))
         self.title.setAlignment(QtCore.Qt.AlignCenter)
         self.title.setStyleSheet("font-size:22px; font-weight:800; margin-bottom:8px;")
         v.addWidget(self.title)
@@ -39,14 +55,16 @@ class ResultOverlay(QtWidgets.QWidget):
             lab.setStyleSheet("font-size:17px; margin:4px 0;")
             v.addWidget(lab)
 
-        self.btn_close = QtWidgets.QPushButton("OK")
+        self.btn_close = QtWidgets.QPushButton(i18n.t("overlay.button_ok"))
         self.btn_close.setFixedHeight(40)
         self.btn_close.clicked.connect(self._close)
         
-        self.btn_online = QtWidgets.QPushButton("Online")
+        self.btn_online = QtWidgets.QPushButton(i18n.t("overlay.button_online"))
         self.btn_online.setFixedHeight(40)
-        self.btn_offline = QtWidgets.QPushButton("Offline")
+        self.btn_offline = QtWidgets.QPushButton(i18n.t("overlay.button_offline"))
         self.btn_offline.setFixedHeight(40)
+        self._apply_button_labels()
+        self._set_min_widths()
 
         self.btn_online.clicked.connect(self._choose_online)
         self.btn_offline.clicked.connect(self._choose_offline)
@@ -61,6 +79,7 @@ class ResultOverlay(QtWidgets.QWidget):
         v.addLayout(btn_row)
 
         self.hide()
+        self._last_view: dict | None = None
 
     def paintEvent(self, e):
         p = QtGui.QPainter(self)
@@ -82,16 +101,19 @@ class ResultOverlay(QtWidgets.QWidget):
         self.activateWindow()
 
     def show_result(self, tank, dps, sup):
-        self.title.setText("Ergebnis")
+        self._apply_button_labels()
+        self.title.setText(i18n.t("overlay.title_result"))
         self.lab_tank.setText(f"Tank: <b>{escape(tank)}</b>")
         self.lab_dps.setText(f"Damage: <b>{escape(dps)}</b>")
         self.lab_sup.setText(f"Support: <b>{escape(sup)}</b>")
         self.btn_close.show()
         self.btn_online.hide()
         self.btn_offline.hide()
+        self._last_view = {"type": "result", "data": (tank, dps, sup)}
         self._show()
 
     def show_message(self, title, lines):
+        self._apply_button_labels()
         self.title.setText(escape(title))
         texts = list(lines) + ["", "", ""]
         self.lab_tank.setText(escape(texts[0]))
@@ -100,26 +122,25 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_close.show()
         self.btn_online.hide()
         self.btn_offline.hide()
+        self._last_view = {"type": "message", "data": (title, list(lines))}
         self._show()
 
     def show_online_choice(self):
         """Overlay zur Wahl von Online/Offline anzeigen."""
-        self.title.setText("Verbindungsmodus wählen")
+        self._apply_button_labels()
+        self.title.setText(i18n.t("overlay.mode_title"))
 
         # Deine drei Zeilen im bekannten Stil
-        self.lab_tank.setText("Online- oder Offline-Modus wählen?")
-        self.lab_dps.setText(
-            "Online: Spins und Spielernamen werden mit dem Server synchronisiert."
-        )
-        self.lab_sup.setText(
-            "Offline: Alles bleibt lokal auf diesem Rechner."
-        )
+        self.lab_tank.setText(i18n.t("overlay.mode_line1"))
+        self.lab_dps.setText(i18n.t("overlay.mode_line2"))
+        self.lab_sup.setText(i18n.t("overlay.mode_line3"))
 
         # Online/Offline-Buttons anzeigen, OK ausblenden
         self.btn_close.hide()
         self.btn_online.show()
         self.btn_offline.show()
 
+        self._last_view = {"type": "online_choice"}
         self._show()
 
     def set_choice_enabled(self, enabled: bool):
@@ -139,3 +160,54 @@ class ResultOverlay(QtWidgets.QWidget):
     def _close(self):
         self.hide()
         self.closed.emit()
+
+    def set_language(self, lang: str):
+        """Refresh labels while keeping current visibility."""
+        i18n.set_language(lang)
+        self._apply_button_labels()
+        self._set_min_widths()
+        self._apply_flag()
+        # Re-render current view if something is shown
+        if not self.isVisible() or not self._last_view:
+            return
+        kind = self._last_view.get("type")
+        data = self._last_view.get("data") or ()
+        if kind == "result" and len(data) == 3:
+            self.show_result(*data)
+        elif kind == "message" and len(data) == 2:
+            title, lines = data
+            self.show_message(title, lines)
+        elif kind == "online_choice":
+            self.show_online_choice()
+
+    def _apply_button_labels(self):
+        self.btn_close.setText(i18n.t("overlay.button_ok"))
+        self.btn_online.setText(i18n.t("overlay.button_online"))
+        self.btn_offline.setText(i18n.t("overlay.button_offline"))
+
+    def _set_min_widths(self):
+        """Fix widths so language switch doesn't move layout."""
+        buttons = [self.btn_close, self.btn_online, self.btn_offline]
+        font = self.btn_close.font()
+        fm = QtGui.QFontMetrics(font)
+        max_w = 0
+        for key in ("overlay.button_ok", "overlay.button_online", "overlay.button_offline"):
+            entry = i18n.TRANSLATIONS.get(key, {})
+            texts = entry.values() if isinstance(entry, dict) else [entry]
+            for txt in texts:
+                if txt is None:
+                    continue
+                max_w = max(max_w, fm.horizontalAdvance(str(txt)))
+        for btn in buttons:
+            width = max_w + 48
+            btn.setMinimumWidth(width)
+            btn.setMaximumWidth(width)
+
+    def _apply_flag(self):
+        """Aktualisiert Text/Tooltip des Sprache-Buttons."""
+        if not hasattr(self, "btn_language"):
+            return
+        flag = "🇩🇪" if i18n.get_language() == "de" else "🇬🇧"
+        tooltip = i18n.t("language.tooltip.de") if i18n.get_language() == "de" else i18n.t("language.tooltip.en")
+        self.btn_language.setText(flag)
+        self.btn_language.setToolTip(tooltip)

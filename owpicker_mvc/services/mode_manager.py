@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import List
 from services import hero_ban_merge
 from PySide6 import QtWidgets, QtCore
+import i18n
 
 
 def set_hero_ban_visuals(mw, active: bool):
@@ -24,7 +25,7 @@ def set_hero_ban_visuals(mw, active: bool):
                 wheel.set_interactive_enabled(True)
                 wheel.btn_local_spin.setEnabled(True)
                 wheel.set_force_spin_enabled(True)
-                wheel.set_spin_button_text("🔁 Diese Rolle drehen")
+                wheel.set_spin_button_text(i18n.t("wheel.spin_role"))
                 wheel.btn_include_in_all.setEnabled(True)
                 wheel.names.setEnabled(True)
             else:

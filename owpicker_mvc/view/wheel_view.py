@@ -5,12 +5,13 @@ from logic.spin_engine import plan_spin
 from view.wheel_widget import WheelWidget
 from view.name_list import NamesList, NameRowWidget
 import config
+import i18n
 
 class WheelView(QtWidgets.QWidget):
     spun = QtCore.Signal(str)
     request_spin = QtCore.Signal()
     stateChanged = QtCore.Signal()
-    def __init__(self, title: str, defaults: List[str], pair_mode=False, allow_pair_toggle=False, subrole_labels: Optional[List[str]] = None):
+    def __init__(self, title: str, defaults: List[str], pair_mode=False, allow_pair_toggle=False, subrole_labels: Optional[List[str]] = None, title_key: Optional[str] = None):
         super().__init__()
         self.pair_mode = pair_mode; self.allow_pair_toggle = allow_pair_toggle; self._is_spinning = False
         self.subrole_labels = subrole_labels or []
@@ -22,6 +23,8 @@ class WheelView(QtWidgets.QWidget):
         self._subrole_controls_visible = True
         self._header_controls_visible = True
         self._show_names_visible = True
+        self._title_key = title_key
+        self._title_fallback = title
         self.view = WheelWidget(self._effective_names_from(defaults))
         self.view.segmentToggled.connect(self._on_segment_toggled)
         self.wheel = self.view.wheel
@@ -29,15 +32,18 @@ class WheelView(QtWidgets.QWidget):
         self._disabled_indices: set[int] = set()
         self._disabled_labels: set[str] = set()
         self._last_wheel_names: List[str] = list(self.wheel.names)
+        self._result_state: str = "empty"  # empty | value | too_few
+        self._result_value: Optional[str] = None
 
         header = QtWidgets.QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
 
-        self.label = QtWidgets.QLabel(title)
+        self.label = QtWidgets.QLabel()
         self.label.setAlignment(QtCore.Qt.AlignCenter)
         self.label.setStyleSheet(
             "font-size:16px; font-weight:600;"
         )
+        self._apply_title()
 
         header.addStretch(1)
         header.addWidget(self.label)
@@ -45,25 +51,29 @@ class WheelView(QtWidgets.QWidget):
 
         self.toggle = None
         if allow_pair_toggle:
-            self.toggle = QtWidgets.QCheckBox("Paare bilden")
+            self.toggle = QtWidgets.QCheckBox(i18n.t("wheel.pairs_toggle"))
             self.toggle.setChecked(self.pair_mode)
             self.toggle.stateChanged.connect(self._on_toggle_pair_mode)
             header.setSpacing(12)
             header.addWidget(self.toggle, 0, QtCore.Qt.AlignVCenter)
         self.chk_subroles = None
         if self.subrole_labels and allow_pair_toggle:
-            self.chk_subroles = QtWidgets.QCheckBox("Subrollen")
+            self.chk_subroles = QtWidgets.QCheckBox(i18n.t("wheel.subroles_toggle"))
             self.chk_subroles.setChecked(False)
-            hint = "Paare nur mit klaren Subrollen bilden"
+            hint = i18n.t("wheel.subroles_hint_generic")
             if len(self.subrole_labels) >= 2:
-                hint = f"Paare nur {self.subrole_labels[0]} + {self.subrole_labels[1]} zulassen"
+                hint = i18n.t(
+                    "wheel.subroles_hint_labels",
+                    a=self.subrole_labels[0],
+                    b=self.subrole_labels[1],
+                )
             self.chk_subroles.setToolTip(hint)
             self.chk_subroles.setEnabled(self.pair_mode)
             self.chk_subroles.stateChanged.connect(self._on_toggle_subroles)
             header.addWidget(self.chk_subroles, 0, QtCore.Qt.AlignVCenter)
 
         # Optional: Checkbox "Namen anzeigen" im Header
-        self.chk_show_names = QtWidgets.QCheckBox("Namen anzeigen")
+        self.chk_show_names = QtWidgets.QCheckBox(i18n.t("wheel.show_names"))
         self.chk_show_names.setChecked(True)
         self.chk_show_names.stateChanged.connect(self._on_toggle_show_names)
         header.addWidget(self.chk_show_names, 0, QtCore.Qt.AlignVCenter)
@@ -78,7 +88,7 @@ class WheelView(QtWidgets.QWidget):
 
         self.btn_clear_result = QtWidgets.QToolButton()
         self.btn_clear_result.setText("✖")
-        self.btn_clear_result.setToolTip("Ergebnis löschen")
+        self.btn_clear_result.setToolTip(i18n.t("wheel.clear_result_tooltip"))
         self.btn_clear_result.setAutoRaise(True)  # kein blauer Button, nur Icon
         self.btn_clear_result.setCursor(QtCore.Qt.PointingHandCursor)
         self.btn_clear_result.setStyleSheet("""
@@ -111,14 +121,11 @@ class WheelView(QtWidgets.QWidget):
         # ---------- Namensliste mit integrierten Checkboxen ----------
         # Eine Liste, in der jede Zeile ein Name mit Häkchen ist.
                 # Hinweislabel für die Checkboxen
-        self.names_hint = QtWidgets.QLabel(
-            "Aktive Namen zählen. Segment-Klick schließt aus.\n"
-            "Jeder Name nur einmal pro Spin."
-        )
+        self.names_hint = QtWidgets.QLabel("")
         self.names_hint.setStyleSheet("color:#444; font-size:12px; padding:2px;")
-        self.btn_sort_names = QtWidgets.QPushButton("A→Z sortieren")
+        self.btn_sort_names = QtWidgets.QPushButton(i18n.t("wheel.sort_names"))
         self.btn_sort_names.setFixedHeight(28)
-        self.btn_sort_names.setToolTip("Liste alphabetisch sortieren")
+        self.btn_sort_names.setToolTip(i18n.t("wheel.sort_names_tooltip"))
         self.btn_sort_names.clicked.connect(self._on_sort_names_clicked)
         self.names = NamesList(subrole_labels=self.subrole_labels)
 
@@ -142,24 +149,25 @@ class WheelView(QtWidgets.QWidget):
         # Neue Zeilen sollen sofort die korrekte Sichtbarkeit der Subrollen übernehmen
         self.names.model().rowsInserted.connect(lambda *_: self._apply_subrole_visibility())
 # ---------- Buttons unter dem Rad ----------
-        self._default_spin_label = "🔁 Diese Rolle drehen"
+        self._default_spin_label = i18n.t("wheel.spin_role")
         self.btn_local_spin = QtWidgets.QPushButton(self._default_spin_label)
         self.btn_local_spin.setFixedHeight(36)
         self.btn_local_spin.clicked.connect(self.request_spin.emit)
+        self._custom_spin_label: Optional[str] = None
 
         # Toggle-Button statt Checkbox, optisch wie ein weiterer Button
         self.btn_include_in_all = QtWidgets.QPushButton()
         self.btn_include_in_all.setCheckable(True)
         self.btn_include_in_all.setChecked(True)
         self.btn_include_in_all.setFixedHeight(36)
-        self.btn_include_in_all.setToolTip(
-            "Wenn aktiv, wird dieses Rad beim Button »Drehen« mitgedreht."
-        )
+        self.btn_include_in_all.setToolTip(i18n.t("wheel.include_tooltip"))
 
         # Initialen Text mit Symbol setzen
         self._on_include_in_all_toggled(self.btn_include_in_all.isChecked())
         # Bei jedem Umschalten Text aktualisieren
         self.btn_include_in_all.toggled.connect(self._on_include_in_all_toggled)
+        # Fixe Breite, damit Sprache das Layout nicht verschiebt
+        self._apply_fixed_min_widths()
 
 
         # Buttonzeile: Spin + "Bei Drehen" nebeneinander
@@ -207,14 +215,127 @@ class WheelView(QtWidgets.QWidget):
         # NEU: Startwert für Namensanzahl merken und UI initial justieren
         self._last_name_count = len(self._base_names())
         self._update_name_dependent_ui()
+        self._apply_placeholder()
+        self._apply_result_state()
 
         outer = QtWidgets.QVBoxLayout(self)
         outer.addWidget(card)
         QtCore.QTimer.singleShot(0, self._refit_view)
+    def _apply_title(self):
+        text = self._title_fallback
+        if self._title_key:
+            text = i18n.t(self._title_key)
+        self.label.setText(text)
+
+    def set_language(self, lang: str):
+        """Reapply translated labels for the current wheel."""
+        i18n.set_language(lang)
+        self._default_spin_label = i18n.t("wheel.spin_role")
+        self._apply_title()
+        if self.toggle:
+            self.toggle.setText(i18n.t("wheel.pairs_toggle"))
+        if self.chk_subroles:
+            self.chk_subroles.setText(i18n.t("wheel.subroles_toggle"))
+            hint = i18n.t("wheel.subroles_hint_generic")
+            if len(self.subrole_labels) >= 2:
+                hint = i18n.t(
+                    "wheel.subroles_hint_labels",
+                    a=self.subrole_labels[0],
+                    b=self.subrole_labels[1],
+                )
+            self.chk_subroles.setToolTip(hint)
+        if self.chk_show_names:
+            self.chk_show_names.setText(i18n.t("wheel.show_names"))
+        self.btn_clear_result.setToolTip(i18n.t("wheel.clear_result_tooltip"))
+        self.btn_sort_names.setText(i18n.t("wheel.sort_names"))
+        self.btn_sort_names.setToolTip(i18n.t("wheel.sort_names_tooltip"))
+        self.btn_include_in_all.setToolTip(i18n.t("wheel.include_tooltip"))
+        self._on_include_in_all_toggled(self.btn_include_in_all.isChecked())
+        if self._custom_spin_label is None:
+            self.set_spin_button_text(None)
+        self._apply_placeholder()
+        self._apply_result_state()
+        self._apply_fixed_min_widths()
+
     def _refit_view(self):
         """Reicht Größenanpassung an das WheelWidget weiter."""
         if hasattr(self, "view") and hasattr(self.view, "_refit_view"):
             self.view._refit_view()
+
+    def _apply_result_state(self):
+        """Render the current result state with translated labels."""
+        if self._result_state == "value" and self._result_value is not None:
+            self.result.setText(i18n.t("wheel.result_prefix", result=self._result_value))
+        elif self._result_state == "too_few":
+            self.result.setText(i18n.t("wheel.result_too_few"))
+        else:
+            self.result.setText("–")
+        self._update_clear_button_enabled()
+
+    def _apply_fixed_min_widths(self):
+        """Set fixed widths based on max translation to avoid layout jumps."""
+        def set_min(widget, keys, padding=20, prefixes=None):
+            if widget is None:
+                return
+            prefixes_local = prefixes or [""]
+            font = widget.font()
+            fm = QtGui.QFontMetrics(font)
+            max_w = 0
+            for key in keys:
+                entry = i18n.TRANSLATIONS.get(key, {})
+                texts = entry.values() if isinstance(entry, dict) else [entry]
+                for txt in texts:
+                    if txt is None:
+                        continue
+                    for pre in prefixes_local:
+                        max_w = max(max_w, fm.horizontalAdvance(f"{pre}{txt}"))
+            width = max_w + padding
+            widget.setMinimumWidth(width)
+            widget.setMaximumWidth(width)
+
+        set_min(self.btn_local_spin, ["wheel.spin_role", "wheel.spin_map", "wheel.spin_single_map"], padding=44)
+        set_min(self.btn_include_in_all, ["wheel.include_prefix"], padding=42, prefixes=["☑ ", "☐ "])
+        set_min(self.btn_sort_names, ["wheel.sort_names"], padding=44)
+        if self.toggle:
+            set_min(self.toggle, ["wheel.pairs_toggle"], padding=30)
+        if self.chk_subroles:
+            set_min(self.chk_subroles, ["wheel.subroles_toggle"], padding=30)
+        if self.chk_show_names:
+            set_min(self.chk_show_names, ["wheel.show_names"], padding=30)
+
+    def set_result_value(self, value: str):
+        self._result_state = "value"
+        self._result_value = value
+        self._apply_result_state()
+
+    def set_result_too_few(self):
+        self._result_state = "too_few"
+        self._result_value = None
+        self._apply_result_state()
+
+    def clear_result(self):
+        self._result_state = "empty"
+        self._result_value = None
+        self._apply_result_state()
+
+    def get_result_value(self) -> Optional[str]:
+        return self._result_value if self._result_state == "value" else None
+
+    def get_result_payload(self) -> dict:
+        return {"state": self._result_state, "value": self._result_value}
+
+    def apply_result_payload(self, payload: Optional[dict]):
+        if not payload:
+            self.clear_result()
+            return
+        state = payload.get("state")
+        value = payload.get("value")
+        if state == "value" and isinstance(value, str):
+            self.set_result_value(value)
+        elif state == "too_few":
+            self.set_result_too_few()
+        else:
+            self.clear_result()
         
     def _on_sort_names_clicked(self):
         """Sortiert die Namensliste alphabetisch und aktualisiert das Rad."""
@@ -222,25 +343,22 @@ class WheelView(QtWidgets.QWidget):
         self._on_names_list_changed()
 
     def _apply_placeholder(self):
-        self.result.setToolTip(
-            f"Aktuell: {'Paare' if self.pair_mode else 'Einzelnamen'}"
-        )
+        tooltip_key = "wheel.tooltip_pairs" if self.pair_mode else "wheel.tooltip_single"
+        self.result.setToolTip(i18n.t(tooltip_key))
 
         if self.pair_mode:
             if self.use_subrole_filter and len(self.subrole_labels) >= 2:
                 self.names_hint.setText(
-                    f"Paare: {self.subrole_labels[0]} + {self.subrole_labels[1]}. Segment-Klick schließt aus."
+                    i18n.t(
+                        "wheel.names_hint_pairs_subroles",
+                        a=self.subrole_labels[0],
+                        b=self.subrole_labels[1],
+                    )
                 )
             else:
-                self.names_hint.setText(
-                    "Paare entstehen automatisch. Segment-Klick schließt aus.\n"
-                    "Jeder Name nur einmal pro Spin."
-                )
+                self.names_hint.setText(i18n.t("wheel.names_hint_pairs"))
         else:
-            self.names_hint.setText(
-                "Aktive Namen zählen. Segment-Klick schließt aus.\n"
-                "Jeder Name nur einmal pro Spin."
-            )
+            self.names_hint.setText(i18n.t("wheel.names_hint_single"))
 
     def get_current_names(self) -> list[str]:
         """Liefert alle aktuell eingetragenen Namen (ohne Leerzeilen)."""
@@ -496,7 +614,7 @@ class WheelView(QtWidgets.QWidget):
                 self.btn_include_in_all.setEnabled(False)
     def _on_include_in_all_toggled(self, checked: bool):
         prefix = "☑" if checked else "☐"
-        self.btn_include_in_all.setText(f"{prefix} Bei »Drehen«")
+        self.btn_include_in_all.setText(f"{prefix} {i18n.t('wheel.include_prefix')}")
         self.stateChanged.emit()
 
     def is_selected_for_global_spin(self) -> bool:
@@ -516,14 +634,13 @@ class WheelView(QtWidgets.QWidget):
             return None
         
         # Sobald ein neues Spin startet, alte Auswahl löschen
-        self.result.setText("–")
-        self._update_clear_button_enabled()
+        self.clear_result()
 
         base_entries = self._entries_for_spin()
         names = self._effective_names_from(base_entries, include_disabled=True)
         enabled_indices = [i for i in range(len(names)) if i not in self._disabled_indices]
         if (self.pair_mode and len(base_entries) < 2) or not enabled_indices:
-            self.result.setText("(zu wenige Namen)")
+            self.set_result_too_few()
             return None
         duration_ms = max(1, int(duration_ms))
 
@@ -567,14 +684,13 @@ class WheelView(QtWidgets.QWidget):
             return None
 
         # Sobald ein neues Spin startet, alte Auswahl löschen
-        self.result.setText("–")
-        self._update_clear_button_enabled()
+        self.clear_result()
 
         base_entries = self._entries_for_spin()
         names = self._effective_names_from(base_entries, include_disabled=True)
         enabled_indices = [i for i in range(len(names)) if i not in self._disabled_indices]
         if (self.pair_mode and len(base_entries) < 2) or not enabled_indices:
-            self.result.setText("(zu wenige Namen)")
+            self.set_result_too_few()
             return None
         duration_ms = max(1, int(duration_ms))
 
@@ -617,11 +733,9 @@ class WheelView(QtWidgets.QWidget):
 
     def _emit_result(self):
         if hasattr(self, "_pending_result"):
-            self.result.setText(f"Ergebnis: {self._pending_result}")
+            self.set_result_value(str(self._pending_result))
             self.spun.emit(self._pending_result)
             delattr(self, "_pending_result")
-
-        self._update_clear_button_enabled()
 
         if hasattr(self, "anim"):
             self.anim.deleteLater()
@@ -693,17 +807,16 @@ class WheelView(QtWidgets.QWidget):
         """
         Blendet das Löschen-Symbol nur ein, wenn ein echtes Ergebnis da ist.
         """
-        txt = self.result.text().strip()
-        has_result = bool(txt) and txt != "–" and not txt.startswith("(zu wenige Namen)")
-        self.btn_clear_result.setVisible(has_result)
+        self.btn_clear_result.setVisible(self._result_state == "value")
     def _clear_result(self):
-        self.result.setText("–")
-        self._update_clear_button_enabled()
+        self.clear_result()
     def set_spin_button_text(self, text: Optional[str]):
         """Setzt den Text des lokalen Spin-Buttons (None → Default)."""
         if text:
+            self._custom_spin_label = text
             self.btn_local_spin.setText(text)
         else:
+            self._custom_spin_label = None
             self.btn_local_spin.setText(self._default_spin_label)
     def set_force_spin_enabled(self, enabled: bool):
         """Erzwingt, dass der lokale Spin-Button aktiv bleibt (Hero-Ban)."""

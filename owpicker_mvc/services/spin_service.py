@@ -7,6 +7,7 @@ from __future__ import annotations
 import random
 from services import spin_planner
 import config
+import i18n
 
 
 def spin_all(mw):
@@ -34,9 +35,7 @@ def spin_all(mw):
 
     mw._snapshot_results()
     for _role, wheel in active:
-        wheel.result.setText("–")
-        if hasattr(wheel, "_update_clear_button_enabled"):
-            wheel._update_clear_button_enabled()
+        wheel.clear_result()
 
     all_candidates_per_role = []
     for role, wheel in active:
@@ -54,7 +53,7 @@ def spin_all(mw):
         all_candidates_per_role.append(role_candidates)
 
     if all(not cands for cands in all_candidates_per_role):
-        mw.summary.setText("Bitte Namen für die Rollen eintragen.")
+        mw.summary.setText(i18n.t("summary.roles_prompt"))
         return
 
     assigned_for_role = spin_planner.plan_assignments(all_candidates_per_role)
@@ -64,12 +63,12 @@ def spin_all(mw):
         mw._set_controls_enabled(True)
         mw.pending = 0
 
-        mw.summary.setText("Team kann nicht gebildet werden.")
+        mw.summary.setText(i18n.t("summary.team_impossible"))
         mw.overlay.show_message(
-            "Team kann nicht gebildet werden",
+            i18n.t("overlay.team_impossible_title"),
             [
-                "Mindestens eine Rolle kann nicht konfliktfrei besetzt werden.",
-                "Bitte mehr unterschiedliche Namen eintragen oder Rollen deaktivieren.",
+                i18n.t("overlay.team_impossible_line1"),
+                i18n.t("overlay.team_impossible_line2"),
                 "",
             ],
         )
@@ -101,7 +100,7 @@ def spin_all(mw):
     if mw.pending == 0:
         mw.sound.stop_spin()
         mw._set_controls_enabled(True)
-        mw.summary.setText("Bitte Namen für die Rollen eintragen.")
+        mw.summary.setText(i18n.t("summary.roles_prompt"))
     mw._update_cancel_enabled()
 
 
@@ -130,5 +129,5 @@ def spin_single(mw, wheel, mult: float = 1.0, hero_ban_override: bool = True):
     else:
         mw.sound.stop_spin()
         mw._set_controls_enabled(True)
-        mw.summary.setText("Bitte Namen für dieses Rad eintragen.")
+        mw.summary.setText(i18n.t("summary.wheel_prompt"))
     mw._update_cancel_enabled()

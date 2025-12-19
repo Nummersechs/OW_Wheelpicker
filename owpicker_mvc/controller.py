@@ -11,6 +11,7 @@ from services.sound import SoundManager
 from services import persistence, state_store
 import config
 from services import sync_service, spin_planner, hero_ban_merge, spin_service, mode_manager
+import i18n
 
 # Fallback für "unbegrenzt" bei Widgetbreiten/Höhen (PySide6 exportiert QWIDGETSIZE_MAX nicht immer)
 QWIDGETSIZE_MAX = getattr(QtWidgets, "QWIDGETSIZE_MAX", getattr(QtCore, "QWIDGETSIZE_MAX", 16777215))
@@ -18,13 +19,17 @@ QWIDGETSIZE_MAX = getattr(QtWidgets, "QWIDGETSIZE_MAX", getattr(QtCore, "QWIDGET
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Overwatch 2 – Triple Wheel Picker")
-        self.resize(1200, 650)
-        self.sound = SoundManager(base_dir=Path(__file__).resolve().parent)
-
         # NEU: State-Datei & geladenen Zustand vorbereiten
         self._state_file = self._get_state_file()
         saved = self._load_saved_state()
+        default_lang = getattr(config, "DEFAULT_LANGUAGE", "en")
+        self.language = saved.get("language", default_lang) if isinstance(saved, dict) else default_lang
+        i18n.set_language(self.language)
+
+        self.setWindowTitle(i18n.t("app.title.main"))
+        self.resize(1200, 650)
+        self.sound = SoundManager(base_dir=Path(__file__).resolve().parent)
+
         self._restoring_state = True   # während des Aufbaus nicht speichern
         self.current_mode = "players"  # immer mit Spieler-Auswahl starten
         self.last_non_hero_mode = "players"
@@ -56,19 +61,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_volume_icon = QtWidgets.QToolButton()
         self.lbl_volume_icon.setText("🔊")
         self.lbl_volume_icon.setCursor(QtCore.Qt.PointingHandCursor)
-        self.lbl_volume_icon.setToolTip("Lautstärke für Soundeffekte")
+        self.lbl_volume_icon.setToolTip(i18n.t("volume.icon_tooltip"))
         self.lbl_volume_icon.setStyleSheet("font-size:18px; padding:0 4px; background:transparent; border:none;")
         self.lbl_volume_icon.clicked.connect(self._on_volume_icon_clicked)
         self.volume_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(100)
         self.volume_slider.setFixedWidth(120)
-        self.volume_slider.setToolTip("Soundeffekte-Lautstärke")
+        self.volume_slider.setToolTip(i18n.t("volume.slider_tooltip"))
         self.volume_slider.valueChanged.connect(self._on_volume_changed)
         self.volume_slider.sliderReleased.connect(self._play_volume_preview)
         self.volume_slider.sliderPressed.connect(self._play_volume_preview)
+        self.btn_language = QtWidgets.QToolButton()
+        self.btn_language.setAutoRaise(True)
+        self.btn_language.setCursor(QtCore.Qt.PointingHandCursor)
+        self.btn_language.setFixedSize(40, 32)
+        self.btn_language.setStyleSheet("font-size:18px; padding:2px; background:transparent;")
+        self.btn_language.clicked.connect(self._toggle_language)
         vol_row.addWidget(self.lbl_volume_icon, 0, QtCore.Qt.AlignVCenter)
         vol_row.addWidget(self.volume_slider, 0, QtCore.Qt.AlignVCenter)
+        vol_row.addSpacing(6)
+        vol_row.addWidget(self.btn_language, 0, QtCore.Qt.AlignVCenter)
         vol_row.addStretch(0)
         root.addLayout(vol_row)
         saved_volume = saved.get("volume", 100)
@@ -80,14 +93,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self._last_volume_before_mute = self.volume_slider.value()
 
         # Modus-Schalter (Spieler / Helden / Hero-Ban / Maps)
-        self.btn_mode_players = QtWidgets.QPushButton("Spieler-Auswahl")
+        self.btn_mode_players = QtWidgets.QPushButton(i18n.t("mode.players"))
         self.btn_mode_players.setCheckable(True)
-        self.btn_mode_heroes = QtWidgets.QPushButton("Helden-Auswahl")
+        self.btn_mode_heroes = QtWidgets.QPushButton(i18n.t("mode.heroes"))
         self.btn_mode_heroes.setCheckable(True)
-        self.btn_mode_heroban = QtWidgets.QPushButton("Hero-Ban")
+        self.btn_mode_heroban = QtWidgets.QPushButton(i18n.t("mode.hero_ban"))
         self.btn_mode_heroban.setCheckable(True)
-        self.btn_mode_maps = QtWidgets.QPushButton("Map-Wahl/Ban")
+        self.btn_mode_maps = QtWidgets.QPushButton(i18n.t("mode.maps"))
         self.btn_mode_maps.setCheckable(True)
+        # Fixe Breiten, damit Sprache die Buttons nicht springen lässt
+        self._set_fixed_width_from_translations(
+            [
+                self.btn_mode_players,
+                self.btn_mode_heroes,
+                self.btn_mode_heroban,
+                self.btn_mode_maps,
+            ],
+            ["mode.players", "mode.heroes", "mode.hero_ban", "mode.maps"],
+            padding=48,
+        )
         self._mode_buttons = [
             self.btn_mode_players,
             self.btn_mode_heroes,
@@ -110,7 +134,8 @@ class MainWindow(QtWidgets.QMainWindow):
         mode_row = QtWidgets.QHBoxLayout()
         mode_row.setContentsMargins(8, 0, 8, 4)
         mode_row.addStretch(1)
-        mode_row.addWidget(QtWidgets.QLabel("Modus:"))
+        self.lbl_mode = QtWidgets.QLabel(i18n.t("label.mode"))
+        mode_row.addWidget(self.lbl_mode)
         mode_row.addWidget(self.btn_mode_players)
         mode_row.addWidget(self.btn_mode_heroes)
         mode_row.addWidget(self.btn_mode_heroban)
@@ -188,15 +213,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.duration = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         self.duration.setRange(config.MIN_DURATION_MS, config.MAX_DURATION_MS)
         self.duration.setValue(config.DEFAULT_DURATION_MS)
-        self.duration.setToolTip("Dauer der Animation (ms)")
-        self.btn_spin_all = QtWidgets.QPushButton("🎰 Drehen")
+        self.duration.setToolTip(i18n.t("controls.anim_duration_tooltip"))
+        self.btn_spin_all = QtWidgets.QPushButton(i18n.t("controls.spin_all"))
+        self._set_fixed_width_from_translations([self.btn_spin_all], ["controls.spin_all"], padding=40)
         self.btn_spin_all.setFixedHeight(44)
         self.btn_spin_all.clicked.connect(self.spin_all)
         controls.addStretch(1)
-        controls.addWidget(QtWidgets.QLabel("Animationsdauer:"))
+        self.lbl_anim_duration = QtWidgets.QLabel(i18n.t("controls.anim_duration"))
+        controls.addWidget(self.lbl_anim_duration)
         controls.addWidget(self.duration)
         controls.addWidget(self.btn_spin_all)
-        self.btn_cancel_spin = QtWidgets.QPushButton("✖ Abbrechen")
+        self.btn_cancel_spin = QtWidgets.QPushButton(i18n.t("controls.cancel_spin"))
+        self._set_fixed_width_from_translations([self.btn_cancel_spin], ["controls.cancel_spin"], padding=40)
         self.btn_cancel_spin.setFixedHeight(44)
         self.btn_cancel_spin.setEnabled(False)
         self.btn_cancel_spin.setStyleSheet("QPushButton { background:#c62828; color:white; } QPushButton:disabled { background:#c7c7c7; color:#777; }")
@@ -220,6 +248,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.overlay = ResultOverlay(parent=central)
         self.overlay.hide()
         self.overlay.closed.connect(self._on_overlay_closed)
+        self.overlay.languageToggleRequested.connect(self._toggle_language)
         
         self.online_mode = False  # Standard
         self.overlay.modeChosen.connect(self._on_mode_chosen)
@@ -254,6 +283,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_spin_all_enabled()
         self._update_cancel_enabled()
         self._apply_mode_results(self._mode_key())
+        self._apply_language()
         # Tooltips sofort erlauben (werden später noch einmal frisch berechnet)
         self._set_tooltips_ready(True)
 
@@ -456,15 +486,15 @@ class MainWindow(QtWidgets.QMainWindow):
         key = self._mode_key()
         if self.current_mode == "maps":
             self._mode_results[key] = {
-                "summary": self.summary.text(),
                 "map": getattr(self, "_map_result_text", "–"),
             }
         else:
             self._mode_results[key] = {
-                "summary": self.summary.text(),
-                "tank": self.tank.result.text(),
-                "dps": self.dps.result.text(),
-                "support": self.support.result.text(),
+                "wheels": {
+                    "tank": self.tank.get_result_payload(),
+                    "dps": self.dps.get_result_payload(),
+                    "support": self.support.get_result_payload(),
+                }
             }
 
     def _apply_mode_results(self, key: str):
@@ -474,24 +504,44 @@ class MainWindow(QtWidgets.QMainWindow):
         snap = self._mode_results.get(key)
         if not snap:
             # Reset auf neutrale Anzeige
-            self.summary.setText("")
             if self.current_mode == "maps":
                 self._map_result_text = "–"
             else:
                 for wheel in (self.tank, self.dps, self.support):
-                    wheel.result.setText("–")
-                    if hasattr(wheel, "_update_clear_button_enabled"):
-                        wheel._update_clear_button_enabled()
+                    wheel.clear_result()
+            self.summary.setText("")
             return
-        self.summary.setText(snap.get("summary", ""))
+        self.summary.setText("")
         if self.current_mode == "maps":
             self._map_result_text = snap.get("map", "–")
+            self._update_summary_from_results()
         else:
             mapping = [("tank", self.tank), ("dps", self.dps), ("support", self.support)]
+            wheel_payloads = snap.get("wheels", {})
             for name, wheel in mapping:
-                wheel.result.setText(snap.get(name, "–"))
-                if hasattr(wheel, "_update_clear_button_enabled"):
-                    wheel._update_clear_button_enabled()
+                wheel.apply_result_payload(wheel_payloads.get(name))
+            self._update_summary_from_results()
+
+    def _update_summary_from_results(self):
+        """Erzeugt die Summary basierend auf den aktuellen Resultaten und Modus."""
+        if self.current_mode == "maps":
+            choice = getattr(self, "_map_result_text", "–")
+            if choice and choice != "–":
+                self.summary.setText(i18n.t("map.summary.choice", choice=choice))
+            else:
+                self.summary.setText("")
+            return
+        if self.hero_ban_active:
+            pick = self.dps.get_result_value()
+            self.summary.setText(i18n.t("summary.hero_ban", pick=pick or "–") if pick else "")
+            return
+        t = self.tank.get_result_value()
+        d = self.dps.get_result_value()
+        s = self.support.get_result_value()
+        if t or d or s:
+            self.summary.setText(i18n.t("summary.team", tank=t or "–", dps=d or "–", sup=s or "–"))
+        else:
+            self.summary.setText("")
 
     def _refresh_tooltip_caches(self):
         """Baut die Label-/Tooltip-Caches nach finalem Layout neu auf und schaltet sie frei."""
@@ -583,7 +633,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._result_sent_this_spin = False
         candidates = list(subset) if subset is not None else list(getattr(self, "_map_combined", []))
         if not candidates:
-            self.summary.setText("Bitte Maps eintragen.")
+            self.summary.setText(i18n.t("map.summary.prompt"))
             return
         self._snapshot_results()
         self.sound.stop_ding()
@@ -618,7 +668,7 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.sound.stop_spin()
             self._set_controls_enabled(True)
-            self.summary.setText("Bitte Maps eintragen.")
+            self.summary.setText(i18n.t("map.summary.prompt"))
         self._update_cancel_enabled()
 
     def _spin_map_single(self):
@@ -650,17 +700,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self.sound.play_ding()
 
             if self.hero_ban_active:
-                d = self.dps.result.text().replace("Ergebnis: ", "")
-                self.summary.setText(f"Hero-Ban: {d}")
-                self.overlay.show_message("Hero-Ban", [d, "", ""])
+                d = self.dps.get_result_value() or "–"
+                self.summary.setText(i18n.t("summary.hero_ban", pick=d))
+                self.overlay.show_message(i18n.t("overlay.hero_ban_title"), [d, "", ""])
                 self._last_results_snapshot = None
                 self._update_cancel_enabled()
                 return
             if self.current_mode == "maps":
                 choice = getattr(self, "_pending_map_choice", None) or getattr(self, "_map_result_text", "–")
                 self._map_result_text = choice
-                self.summary.setText(f"Map-Wahl: {choice}")
-                self.overlay.show_message("Map-Wahl", [choice, "", ""])
+                self._update_summary_from_results()
+                self.overlay.show_message(i18n.t("overlay.map_title"), [choice, "", ""])
                 self._last_results_snapshot = None
                 self._snapshot_mode_results()
                 if getattr(self, "_map_temp_override", False):
@@ -670,11 +720,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._update_cancel_enabled()
                 return
             else:
-                t = self.tank.result.text().replace("Ergebnis: ", "")
-                d = self.dps.result.text().replace("Ergebnis: ", "")
-                s = self.support.result.text().replace("Ergebnis: ", "")
+                t = self.tank.get_result_value() or "–"
+                d = self.dps.get_result_value() or "–"
+                s = self.support.get_result_value() or "–"
 
-                self.summary.setText(f"Auswahl → Tank: {t} | Damage: {d} | Support: {s}")
+                self.summary.setText(i18n.t("summary.team", tank=t, dps=d, sup=s))
                 self.overlay.show_result(t, d, s)
 
                 # Nur noch EIN Request pro abgeschlossenem Spin
@@ -695,7 +745,10 @@ class MainWindow(QtWidgets.QMainWindow):
         # Ergebnisse wiederherstellen, falls Snapshot vorhanden
         self._restore_results_snapshot()
         # Hinweis anzeigen, Ergebnisse/Summary beibehalten
-        self.overlay.show_message("Spin abgebrochen", ["Aktueller Spin wurde gestoppt.", "Letzte Ergebnisse bleiben erhalten.", ""])
+        self.overlay.show_message(
+            i18n.t("overlay.spin_cancelled_title"),
+            [i18n.t("overlay.spin_cancelled_line1"), i18n.t("overlay.spin_cancelled_line2"), ""],
+        )
         self._set_controls_enabled(True)
         self._update_cancel_enabled()
 
@@ -703,34 +756,34 @@ class MainWindow(QtWidgets.QMainWindow):
         """Merkt aktuelle Resultate & Summary, um sie bei Abbruch wiederherzustellen."""
         if self.current_mode == "maps":
             self._last_results_snapshot = {
-                "summary": self.summary.text(),
+                "mode": "maps",
                 "map": getattr(self, "_map_result_text", "–"),
             }
         else:
             self._last_results_snapshot = {
-                "summary": self.summary.text(),
-                "tank": self.tank.result.text(),
-                "dps": self.dps.result.text(),
-                "support": self.support.result.text(),
+                "mode": self._mode_key(),
+                "wheels": {
+                    "tank": self.tank.get_result_payload(),
+                    "dps": self.dps.get_result_payload(),
+                    "support": self.support.get_result_payload(),
+                },
             }
 
     def _restore_results_snapshot(self):
         snap = getattr(self, "_last_results_snapshot", None)
         if not snap:
             return
-        self.summary.setText(snap.get("summary", ""))
-        if self.current_mode == "maps":
+        if snap.get("mode") == "maps":
             txt = snap.get("map", None)
             if txt is not None:
                 self._map_result_text = txt
+            self._update_summary_from_results()
         else:
             mapping = [("tank", self.tank), ("dps", self.dps), ("support", self.support)]
+            wheel_payloads = snap.get("wheels", {})
             for key, wheel in mapping:
-                txt = snap.get(key, None)
-                if txt is not None:
-                    wheel.result.setText(txt)
-                    if hasattr(wheel, "_update_clear_button_enabled"):
-                        wheel._update_clear_button_enabled()
+                wheel.apply_result_payload(wheel_payloads.get(key))
+            self._update_summary_from_results()
         self._last_results_snapshot = None
 
     def _get_state_file(self) -> Path:
@@ -865,16 +918,18 @@ class MainWindow(QtWidgets.QMainWindow):
         sb_layout = QtWidgets.QVBoxLayout(sidebar)
         sb_layout.setContentsMargins(8, 8, 8, 8)
         sb_layout.setSpacing(6)
-        lbl = QtWidgets.QLabel("Map-Typen")
-        lbl.setStyleSheet("font-weight:600;")
-        sb_layout.addWidget(lbl)
+        self.lbl_map_types = QtWidgets.QLabel(i18n.t("map.types"))
+        self.lbl_map_types.setStyleSheet("font-weight:600;")
+        self._set_fixed_width_from_translations([self.lbl_map_types], ["map.types"], padding=30)
+        sb_layout.addWidget(self.lbl_map_types)
         self.map_type_checks: dict[str, QtWidgets.QCheckBox] = {}
         self._map_type_list_layout = QtWidgets.QVBoxLayout()
         self._map_type_list_layout.setSpacing(4)
         sb_layout.addLayout(self._map_type_list_layout)
-        btn_edit_types = QtWidgets.QPushButton("Typen bearbeiten")
-        btn_edit_types.clicked.connect(lambda: self._show_map_type_editor(container))
-        sb_layout.addWidget(btn_edit_types, 0, QtCore.Qt.AlignLeft)
+        self.btn_edit_map_types = QtWidgets.QPushButton(i18n.t("map.edit_types"))
+        self._set_fixed_width_from_translations([self.btn_edit_map_types], ["map.edit_types"], padding=48)
+        self.btn_edit_map_types.clicked.connect(lambda: self._show_map_type_editor(container))
+        sb_layout.addWidget(self.btn_edit_map_types, 0, QtCore.Qt.AlignLeft)
         sb_layout.addStretch(1)
         self.map_sidebar = sidebar
 
@@ -905,12 +960,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_map_lists(map_state)
 
         # zentrales Map-Rad zum Drehen
-        self.map_main = WheelView("Map-Rad", [], pair_mode=False, allow_pair_toggle=False)
+        self.map_main = WheelView("Map-Rad", [], pair_mode=False, allow_pair_toggle=False, title_key="map.wheel_title")
         self.map_main.set_header_controls_visible(False)
         self.map_main.set_subrole_controls_visible(False)
         self.map_main.set_show_names_visible(True)
         self.map_main.btn_include_in_all.setVisible(False)
-        self.map_main.btn_local_spin.setText("🔁 Karte drehen")
+        self.map_main.btn_local_spin.setText(i18n.t("wheel.spin_map"))
         self.map_main.request_spin.connect(self._spin_map_single)
         self.map_main.spun.connect(self._wheel_finished)
         # Nur Rad + „Namen anzeigen“ zeigen, rest ausblenden
@@ -1002,7 +1057,7 @@ class MainWindow(QtWidgets.QMainWindow):
             w.result_widget.setVisible(False)
             w.btn_local_spin.setVisible(True)
             w.btn_local_spin.setEnabled(True)
-            w.btn_local_spin.setText("🔁 Diese Map drehen")
+            w.btn_local_spin.setText(i18n.t("wheel.spin_single_map"))
             w.btn_local_spin.clicked.connect(lambda _=None, c=cat: self._spin_map_category(c))
             w.btn_include_in_all.setChecked(include_checked)
             w.btn_include_in_all.toggled.connect(self._rebuild_map_wheel)
@@ -1039,9 +1094,10 @@ class MainWindow(QtWidgets.QMainWindow):
             layout = QtWidgets.QVBoxLayout(self._map_type_editor)
             layout.setContentsMargins(10, 10, 10, 10)
             layout.setSpacing(8)
-            title = QtWidgets.QLabel("Map-Typen bearbeiten")
-            title.setStyleSheet("font-weight:700; font-size:14px;")
-            layout.addWidget(title)
+            self._map_type_editor_title = QtWidgets.QLabel(i18n.t("map.editor.title"))
+            self._map_type_editor_title.setStyleSheet("font-weight:700; font-size:14px;")
+            self._set_fixed_width_from_translations([self._map_type_editor_title], ["map.editor.title"], padding=28)
+            layout.addWidget(self._map_type_editor_title)
 
             self._map_type_list_widget = QtWidgets.QListWidget()
             self._map_type_list_widget.setEditTriggers(
@@ -1054,31 +1110,41 @@ class MainWindow(QtWidgets.QMainWindow):
             btn_grid = QtWidgets.QGridLayout()
             btn_grid.setContentsMargins(16, 6, 16, 6)
             btn_grid.setHorizontalSpacing(16)
-            btn_add = QtWidgets.QPushButton("+ Hinzufügen")
-            btn_del = QtWidgets.QPushButton("– Löschen")
+            self._map_type_btn_add = QtWidgets.QPushButton(i18n.t("map.editor.add"))
+            self._map_type_btn_del = QtWidgets.QPushButton(i18n.t("map.editor.delete"))
             common_btn_style = "QPushButton { padding:8px 12px; margin:2px; min-width:100px; border-radius:6px; }"
-            btn_add.setStyleSheet(common_btn_style)
-            btn_del.setStyleSheet(common_btn_style)
-            btn_add.clicked.connect(self._add_map_type_row)
-            btn_del.clicked.connect(self._del_map_type_row)
-            btn_grid.addWidget(btn_add, 0, 0, QtCore.Qt.AlignLeft)
-            btn_grid.addWidget(btn_del, 0, 1, QtCore.Qt.AlignRight)
+            self._map_type_btn_add.setStyleSheet(common_btn_style)
+            self._map_type_btn_del.setStyleSheet(common_btn_style)
+            self._map_type_btn_add.clicked.connect(self._add_map_type_row)
+            self._map_type_btn_del.clicked.connect(self._del_map_type_row)
+            self._set_fixed_width_from_translations(
+                [self._map_type_btn_add, self._map_type_btn_del],
+                ["map.editor.add", "map.editor.delete"],
+                padding=40,
+            )
+            btn_grid.addWidget(self._map_type_btn_add, 0, 0, QtCore.Qt.AlignLeft)
+            btn_grid.addWidget(self._map_type_btn_del, 0, 1, QtCore.Qt.AlignRight)
             btn_grid.setColumnStretch(0, 1)
             btn_grid.setColumnStretch(1, 1)
             layout.addLayout(btn_grid)
 
             confirm_row = QtWidgets.QHBoxLayout()
             confirm_row.setContentsMargins(16, 6, 16, 6)
-            btn_ok = QtWidgets.QPushButton("Übernehmen")
-            btn_cancel = QtWidgets.QPushButton("Abbrechen")
-            btn_ok.setStyleSheet("QPushButton { background:#2e7d32; color:white; padding:8px 12px; margin:2px; min-width:100px; border-radius:6px; }"
+            self._map_type_btn_ok = QtWidgets.QPushButton(i18n.t("map.editor.apply"))
+            self._map_type_btn_cancel = QtWidgets.QPushButton(i18n.t("map.editor.cancel"))
+            self._map_type_btn_ok.setStyleSheet("QPushButton { background:#2e7d32; color:white; padding:8px 12px; margin:2px; min-width:100px; border-radius:6px; }"
                                   "QPushButton:hover { background:#388e3c; }")
-            btn_cancel.setStyleSheet("QPushButton { background:#c62828; color:white; padding:8px 12px; margin:2px; min-width:100px; border-radius:6px; }"
+            self._map_type_btn_cancel.setStyleSheet("QPushButton { background:#c62828; color:white; padding:8px 12px; margin:2px; min-width:100px; border-radius:6px; }"
                                       "QPushButton:hover { background:#d32f2f; }")
-            btn_ok.clicked.connect(self._confirm_map_types)
-            btn_cancel.clicked.connect(lambda: self._map_type_editor.hide())
-            confirm_row.addWidget(btn_ok, 0, QtCore.Qt.AlignLeft)
-            confirm_row.addWidget(btn_cancel, 0, QtCore.Qt.AlignRight)
+            self._map_type_btn_ok.clicked.connect(self._confirm_map_types)
+            self._map_type_btn_cancel.clicked.connect(lambda: self._map_type_editor.hide())
+            self._set_fixed_width_from_translations(
+                [self._map_type_btn_ok, self._map_type_btn_cancel],
+                ["map.editor.apply", "map.editor.cancel"],
+                padding=44,
+            )
+            confirm_row.addWidget(self._map_type_btn_ok, 0, QtCore.Qt.AlignLeft)
+            confirm_row.addWidget(self._map_type_btn_cancel, 0, QtCore.Qt.AlignRight)
             layout.addLayout(confirm_row)
 
         # Inhalte aktualisieren
@@ -1100,7 +1166,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _add_map_type_row(self):
         if hasattr(self, "_map_type_list_widget"):
-            item = QtWidgets.QListWidgetItem("Neuer Typ")
+            item = QtWidgets.QListWidgetItem(i18n.t("map.editor.new_type"))
             item.setFlags(item.flags() | QtCore.Qt.ItemIsEditable)
             self._map_type_list_widget.addItem(item)
             self._map_type_list_widget.setCurrentItem(item)
@@ -1267,9 +1333,100 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _update_title(self):
         if self.current_mode == "maps":
-            self.title.setText("Overwatch 2 – Map-Wahl")
+            text = i18n.t("app.title.map")
         else:
-            self.title.setText("Overwatch 2 – Triple Wheel Picker")
+            text = i18n.t("app.title.main")
+        self.title.setText(text)
+        self.setWindowTitle(text)
+
+    def _switch_language(self, lang: str):
+        lang = lang if lang in i18n.SUPPORTED_LANGS else "de"
+        if lang == getattr(self, "language", "de"):
+            return
+        self.language = lang
+        self._apply_language()
+        if not getattr(self, "_restoring_state", False):
+            self._save_state()
+
+    def _toggle_language(self):
+        """Toggle between German and English via the single flag button."""
+        next_lang = "en" if self.language == "de" else "de"
+        self._switch_language(next_lang)
+
+    def _retranslate_map_ui(self):
+        if hasattr(self, "lbl_map_types"):
+            self.lbl_map_types.setText(i18n.t("map.types"))
+        if hasattr(self, "btn_edit_map_types"):
+            self.btn_edit_map_types.setText(i18n.t("map.edit_types"))
+        if hasattr(self, "_map_type_editor_title"):
+            self._map_type_editor_title.setText(i18n.t("map.editor.title"))
+        if hasattr(self, "_map_type_btn_add"):
+            self._map_type_btn_add.setText(i18n.t("map.editor.add"))
+        if hasattr(self, "_map_type_btn_del"):
+            self._map_type_btn_del.setText(i18n.t("map.editor.delete"))
+        if hasattr(self, "_map_type_btn_ok"):
+            self._map_type_btn_ok.setText(i18n.t("map.editor.apply"))
+        if hasattr(self, "_map_type_btn_cancel"):
+            self._map_type_btn_cancel.setText(i18n.t("map.editor.cancel"))
+
+    def _apply_language(self):
+        i18n.set_language(self.language)
+        if hasattr(self, "btn_language"):
+            flag = "🇩🇪" if self.language == "de" else "🇬🇧"
+            self.btn_language.setText(flag)
+            tooltip = i18n.t("language.tooltip.de") if self.language == "de" else i18n.t("language.tooltip.en")
+            self.btn_language.setToolTip(tooltip)
+        self.lbl_mode.setText(i18n.t("label.mode"))
+        self.btn_mode_players.setText(i18n.t("mode.players"))
+        self.btn_mode_heroes.setText(i18n.t("mode.heroes"))
+        self.btn_mode_heroban.setText(i18n.t("mode.hero_ban"))
+        self.btn_mode_maps.setText(i18n.t("mode.maps"))
+        self.lbl_volume_icon.setToolTip(i18n.t("volume.icon_tooltip"))
+        self.volume_slider.setToolTip(i18n.t("volume.slider_tooltip"))
+        self.btn_spin_all.setText(i18n.t("controls.spin_all"))
+        self.btn_cancel_spin.setText(i18n.t("controls.cancel_spin"))
+        self.lbl_anim_duration.setText(i18n.t("controls.anim_duration"))
+        self.duration.setToolTip(i18n.t("controls.anim_duration_tooltip"))
+        self._update_title()
+        for w in (self.tank, self.dps, self.support):
+            w.set_language(self.language)
+        if getattr(self, "map_main", None):
+            self.map_main.set_language(self.language)
+            self.map_main.set_spin_button_text(i18n.t("wheel.spin_map"))
+        if getattr(self, "map_lists", None):
+            for w in self.map_lists.values():
+                w.set_language(self.language)
+                w.set_spin_button_text(i18n.t("wheel.spin_single_map"))
+        self._retranslate_map_ui()
+        if hasattr(self, "overlay"):
+            self.overlay.set_language(self.language)
+            # Flag auf dem Overlay aktualisieren
+            self.overlay._apply_flag()
+        self._update_summary_from_results()
+
+    def _set_fixed_width_from_translations(self, widgets, keys, padding: int = 20, prefixes: list[str] | None = None):
+        """Set min/max width so labels don't jump between languages."""
+        if not isinstance(widgets, (list, tuple)):
+            widgets = [widgets]
+        prefixes = prefixes or [""]
+        # Sammle alle Texte für alle Keys über alle Sprachen
+        all_texts: list[str] = []
+        for key in keys:
+            entry = i18n.TRANSLATIONS.get(key, {})
+            if isinstance(entry, dict):
+                all_texts.extend([str(v) for v in entry.values()])
+            elif entry:
+                all_texts.append(str(entry))
+        for widget in widgets:
+            font = widget.font()
+            fm = QtGui.QFontMetrics(font)
+            max_w = 0
+            for txt in all_texts:
+                for pre in prefixes:
+                    max_w = max(max_w, fm.horizontalAdvance(f"{pre}{txt}"))
+            width = max_w + padding
+            widget.setMinimumWidth(width)
+            widget.setMaximumWidth(width)
     def _load_saved_state(self) -> dict:
         """
         Lädt den gespeicherten Zustand aus saved_state.json, falls vorhanden.
@@ -1277,7 +1434,9 @@ class MainWindow(QtWidgets.QMainWindow):
         {
           "players": {"Tank": {...}, "Damage": {...}, "Support": {...}},
           "heroes":  {"Tank": {...}, "Damage": {...}, "Support": {...}},
-          "volume": int
+          "maps": {...},
+          "volume": int,
+          "language": "de" | "en"   # fallback ist Englisch
         }
         """
         data = persistence.load_state(self._state_file)
@@ -1301,7 +1460,9 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if getattr(self, "map_lists", None):
             self._capture_map_state()
-        return self._state_store.to_saved(self.volume_slider.value())
+        state = self._state_store.to_saved(self.volume_slider.value())
+        state["language"] = self.language
+        return state
 
     def _update_hero_ban_wheel(self):
         """Delegiert an den Mode-Manager."""

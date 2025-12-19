@@ -7,6 +7,10 @@ Hier kannst du das Verhalten und die Startdaten des Programms anpassen.
 DEBUG = False
 QUIET = False
 
+# ---------- Sprache ----------
+# Voreingestellte Sprache, wenn keine Auswahl gespeichert wurde
+DEFAULT_LANGUAGE = "en"
+
 def debug_print(*args, **kwargs):
     """Wrapper um print, der nur aktiv ist, wenn DEBUG True ist."""
     if DEBUG:
