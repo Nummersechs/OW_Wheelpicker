@@ -65,6 +65,29 @@ class NamesList(QtWidgets.QListWidget):
         self.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
 
+    def wheelEvent(self, ev: QtGui.QWheelEvent):
+        """Etwas weniger sensibles Scrollen als Qt-Default."""
+        sb = self.verticalScrollBar()
+        if not sb:
+            return super().wheelEvent(ev)
+        angle = ev.angleDelta().y()
+        pixel = ev.pixelDelta().y()
+        factor = 0.4  # <1 -> langsamer
+
+        if angle:
+            base = (angle / 120.0) * sb.singleStep()
+            step = int(base * factor)
+        elif pixel:
+            step = int(pixel * factor)
+        else:
+            return super().wheelEvent(ev)
+
+        if step == 0:
+            step = 1 if (angle or pixel) > 0 else -1
+
+        sb.setValue(sb.value() - step)
+        ev.accept()
+
     def _new_item(self, text: str = "", subroles: Optional[List[str]] = None, active: Optional[bool] = None) -> QtWidgets.QListWidgetItem:
         item = QtWidgets.QListWidgetItem(text)
         item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsEditable)
