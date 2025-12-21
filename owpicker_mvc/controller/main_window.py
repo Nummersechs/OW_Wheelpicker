@@ -14,6 +14,9 @@ from services.sound import SoundManager
 from utils import flag_icons, theme as theme_util
 from view.overlay import ResultOverlay
 from view.wheel_view import WheelView
+from view.list_panel import ListPanel
+from controller.map_ui import MapUI
+from view import style_helpers
 
 # Fallback für "unbegrenzt" bei Widgetbreiten/Höhen (PySide6 exportiert QWIDGETSIZE_MAX nicht immer)
 QWIDGETSIZE_MAX = getattr(QtWidgets, "QWIDGETSIZE_MAX", getattr(QtCore, "QWIDGETSIZE_MAX", 16777215))
@@ -218,7 +221,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ----- Map-Mode-Container -----
         self._map_result_text = "–"
-        self.map_container = self._build_map_mode_ui()
+        self.map_ui = MapUI(self._state_store, self.language, self.theme, (self.tank, self.dps, self.support))
+        self.map_container = self.map_ui.container
+        self.map_ui.stateChanged.connect(self._update_spin_all_enabled)
+        self.map_ui.stateChanged.connect(self._save_state)
+        self.map_ui.requestSpinCategory.connect(self._spin_map_category)
+        # Kompatibilitäts-Aliase, damit bestehende Logik funktioniert
+        self.map_main = self.map_ui.map_main
+        self.map_lists = self.map_ui.map_lists
+        self.map_categories = self.map_ui.map_categories
 
         # ----- Stacked Content -----
         self.mode_stack = QtWidgets.QStackedLayout()
@@ -406,11 +417,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_theme_button_label()
         if hasattr(self, "summary"):
             self.summary.setStyleSheet(f"font-size:15px; color:{theme.muted_text}; margin:10px 0 6px 0;")
+        if hasattr(self, "btn_spin_all"):
+            style_helpers.style_primary_button(self.btn_spin_all, theme)
         if hasattr(self, "btn_cancel_spin"):
-            self.btn_cancel_spin.setStyleSheet(
-                "QPushButton { background:#c62828; color:white; border-radius:12px; padding:8px 18px; }"
-                f"QPushButton:disabled {{ background:{theme.disabled_bg}; color:{theme.disabled_text}; border:1px solid {theme.border}; }}"
-            )
+            style_helpers.style_danger_button(self.btn_cancel_spin, theme)
         if hasattr(self, "_map_type_editor"):
             self._map_type_editor.setStyleSheet(
                 f"QFrame {{ background: {theme.card_bg}; border: 2px solid {theme.card_border}; border-radius: 10px; }}"
@@ -423,6 +433,8 @@ class MainWindow(QtWidgets.QMainWindow):
         for w in (getattr(self, "tank", None), getattr(self, "dps", None), getattr(self, "support", None)):
             if w and hasattr(w, "apply_theme"):
                 targets.append(w)
+        if hasattr(self, "map_ui"):
+            self.map_ui.apply_theme(theme)
         # Map-spezifische Widgets IMMER stylen, damit ein späterer Moduswechsel nicht den alten Theme-Stand zeigt
         if hasattr(self, "map_main") and hasattr(self.map_main, "apply_theme"):
             targets.append(self.map_main)
@@ -498,7 +510,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         if self.current_mode == "maps":
             any_selected = any(w.btn_include_in_all.isChecked() for w in getattr(self, "map_lists", {}).values())
-            has_candidates = bool(getattr(self, "_map_combined", []))
+            has_candidates = bool(self.map_ui.combined_names() if hasattr(self, "map_ui") else [])
             self.btn_spin_all.setEnabled(any_selected and has_candidates and self.pending == 0)
             self._update_cancel_enabled()
             return
@@ -701,7 +713,8 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         # Neuer Spin → finale Anzeige wieder erlauben
         self._result_sent_this_spin = False
-        candidates = list(subset) if subset is not None else list(getattr(self, "_map_combined", []))
+        combined = self.map_ui.combined_names() if hasattr(self, "map_ui") else []
+        candidates = list(subset) if subset is not None else list(combined)
         if not candidates:
             self.summary.setText(i18n.t("map.summary.prompt"))
             return
@@ -746,10 +759,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._spin_map_all()
 
     def _spin_map_category(self, category: str):
-        wheel = self.map_lists.get(category)
-        if wheel is None:
-            return
-        names = [e.get("name", "").strip() for e in wheel._active_entries() if e.get("name", "").strip()]
+        names = []
+        if hasattr(self, "map_ui"):
+            names = self.map_ui.names_for_category(category)
         self._spin_map_all(subset=names)
 
     def _wheel_finished(self, _name: str):
@@ -1141,22 +1153,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 include_checked = bool(role_state.get("include_in_all", True))
             else:
                 include_checked = include_map.get(cat, True)
-            w = WheelView(cat, role_state.get("entries", []), pair_mode=False, allow_pair_toggle=False)
-            w.set_header_controls_visible(False)
-            w.set_subrole_controls_visible(False)
-            w.set_wheel_render_enabled(False)
-            w.set_show_names_visible(False)
-            w.view.setVisible(False)  # nur Liste zeigen
-            w.result_widget.setVisible(False)
-            w.btn_local_spin.setVisible(True)
-            w.btn_local_spin.setEnabled(True)
-            w.btn_local_spin.setText(i18n.t("wheel.spin_single_map"))
-            w.btn_local_spin.clicked.connect(lambda _=None, c=cat: self._spin_map_category(c))
+            w = ListPanel(cat, role_state.get("entries", []))
+            w.set_spin_button_text(i18n.t("wheel.spin_single_map"))
+            w.set_language(self.language)
+            w.set_interactive_enabled(include_checked)
+            w.setVisible(include_checked)
             w.btn_include_in_all.setChecked(include_checked)
             w.btn_include_in_all.toggled.connect(self._rebuild_map_wheel)
             w.stateChanged.connect(self._on_map_list_changed)
-            w.set_interactive_enabled(include_checked)
-            w.setVisible(include_checked)
+            w.request_spin.connect(lambda _=None, c=cat: self._spin_map_category(c))
             self.map_lists[cat] = w
             self.map_grid.addWidget(w)
 
@@ -1342,42 +1347,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_map_lists(new_state, include_map=new_include_map)
 
     def _rebuild_map_wheel(self):
-        if getattr(self, "_map_rebuild_guard", False):
-            return
         if self.current_mode != "maps":
             return
-        combined: list[str] = []
-        for _cat, wheel in getattr(self, "map_lists", {}).items():
-            if not wheel.btn_include_in_all.isChecked():
-                continue
-            for entry in wheel._active_entries():
-                name = entry.get("name", "").strip()
-                if name:
-                    combined.append(name)
-        self._map_combined = combined
-        if hasattr(self, "map_main"):
-            # Override-Einträge nutzen, damit das zentrale Rad nur die kombinierten Maps zeigt
-            self.map_main.set_override_entries([{"name": n, "subroles": [], "active": True} for n in combined])
+        if hasattr(self, "map_ui"):
+            self.map_ui.rebuild_combined()
         self._update_spin_all_enabled()
 
     def _load_map_state(self):
-        if not hasattr(self, "map_lists"):
-            return
-        prev_restoring = getattr(self, "_restoring_state", False)
-        self._restoring_state = True
-        try:
-            state = self._state_store.get_mode_state("maps") or {}
-            for cat, wheel in self.map_lists.items():
-                role_state = state.get(cat) or self._state_store.default_role_state(cat, "maps")
-                wheel.load_entries(role_state.get("entries", []))
-        finally:
-            self._restoring_state = prev_restoring
-        self._rebuild_map_wheel()
+        if hasattr(self, "map_ui"):
+            self.map_ui.load_state()
+            self._rebuild_map_wheel()
 
     def _capture_map_state(self):
-        if not hasattr(self, "map_lists"):
-            return
-        self._state_store.capture_mode_from_wheels("maps", self.map_lists)
+        if hasattr(self, "map_ui"):
+            self.map_ui.capture_state()
 
     def _activate_map_mode(self):
         if hasattr(self, "mode_stack"):
@@ -1493,20 +1476,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_theme.setToolTip(tooltip)
 
     def _retranslate_map_ui(self):
-        if hasattr(self, "lbl_map_types"):
-            self.lbl_map_types.setText(i18n.t("map.types"))
-        if hasattr(self, "btn_edit_map_types"):
-            self.btn_edit_map_types.setText(i18n.t("map.edit_types"))
-        if hasattr(self, "_map_type_editor_title"):
-            self._map_type_editor_title.setText(i18n.t("map.editor.title"))
-        if hasattr(self, "_map_type_btn_add"):
-            self._map_type_btn_add.setText(i18n.t("map.editor.add"))
-        if hasattr(self, "_map_type_btn_del"):
-            self._map_type_btn_del.setText(i18n.t("map.editor.delete"))
-        if hasattr(self, "_map_type_btn_ok"):
-            self._map_type_btn_ok.setText(i18n.t("map.editor.apply"))
-        if hasattr(self, "_map_type_btn_cancel"):
-            self._map_type_btn_cancel.setText(i18n.t("map.editor.cancel"))
+        if hasattr(self, "map_ui"):
+            self.map_ui.set_language(self.language)
 
     def _apply_language(self):
         i18n.set_language(self.language)
@@ -1529,13 +1500,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_title()
         for w in (self.tank, self.dps, self.support):
             w.set_language(self.language)
-        if getattr(self, "map_main", None):
-            self.map_main.set_language(self.language)
-            self.map_main.set_spin_button_text(i18n.t("wheel.spin_map"))
-        if getattr(self, "map_lists", None):
-            for w in self.map_lists.values():
-                w.set_language(self.language)
-                w.set_spin_button_text(i18n.t("wheel.spin_single_map"))
+        if hasattr(self, "map_ui"):
+            self.map_ui.set_language(self.language)
         self._retranslate_map_ui()
         if hasattr(self, "overlay"):
             self.overlay.set_language(self.language)

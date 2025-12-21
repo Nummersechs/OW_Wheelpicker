@@ -7,6 +7,7 @@ from view.name_list import NamesList, NameRowWidget
 import config
 import i18n
 from utils import theme as theme_util
+from view import style_helpers
 
 class WheelView(QtWidgets.QWidget):
     spun = QtCore.Signal(str)
@@ -382,49 +383,15 @@ class WheelView(QtWidgets.QWidget):
             }}
             """
         )
-        # Buttons explizit einfärben, damit Map-Listen dieselben Farben nutzen wie Rollen
+        # Buttons/Listen via gemeinsame Helper stylen
         if hasattr(self, "btn_local_spin"):
-            self.btn_local_spin.setStyleSheet(
-                "QPushButton {"
-                f" color:{theme.button_text}; background:{theme.primary};"
-                " border-radius:12px; font-weight:600; padding:8px 18px;"
-                "}"
-                f"QPushButton:hover {{ background:{theme.primary_hover}; }}"
-                f"QPushButton:pressed {{ background:{theme.primary_pressed}; }}"
-                f"QPushButton:disabled {{ background:{theme.disabled_bg}; color:{theme.disabled_text}; border:1px solid {theme.border}; }}"
-            )
+            style_helpers.style_primary_button(self.btn_local_spin, theme)
         if hasattr(self, "btn_include_in_all"):
-            self.btn_include_in_all.setStyleSheet(
-                "QPushButton {"
-                f" color:{theme.button_text}; background:{theme.primary};"
-                " border-radius:12px; font-weight:600; padding:8px 18px;"
-                "}"
-                f"QPushButton:checked {{ background:{theme.checked}; border:2px solid {theme.checked_border}; }}"
-                f"QPushButton:checked:hover {{ background:{theme.checked_hover}; }}"
-                f"QPushButton:checked:pressed {{ background:{theme.checked_pressed}; }}"
-                f"QPushButton:hover {{ background:{theme.primary_hover}; }}"
-                f"QPushButton:pressed {{ background:{theme.primary_pressed}; }}"
-                f"QPushButton:disabled {{ background:{theme.disabled_bg}; color:{theme.disabled_text}; border:1px solid {theme.border}; }}"
-            )
+            style_helpers.style_include_button(self.btn_include_in_all, theme)
         if hasattr(self, "btn_sort_names"):
-            self.btn_sort_names.setStyleSheet(
-                "QPushButton {"
-                f" color:{theme.button_text}; background:{theme.primary};"
-                " border-radius:12px; font-weight:600; padding:8px 18px;"
-                "}"
-                f"QPushButton:hover {{ background:{theme.primary_hover}; }}"
-                f"QPushButton:pressed {{ background:{theme.primary_pressed}; }}"
-                f"QPushButton:disabled {{ background:{theme.disabled_bg}; color:{theme.disabled_text}; border:1px solid {theme.border}; }}"
-            )
+            style_helpers.style_primary_button(self.btn_sort_names, theme)
         if hasattr(self, "names"):
-            self.names.setStyleSheet(
-                "QListWidget {"
-                f" background:{theme.base}; color:{theme.text};"
-                f" border:1px solid {theme.border}; border-radius:6px; "
-                "}"
-                f"QListWidget::item {{ color:{theme.text}; }}"
-                f"QListWidget::item:selected {{ background:{theme.alt_base}; color:{theme.text}; }}"
-            )
+            style_helpers.style_names_list(self.names, theme)
 
     def set_result_value(self, value: str):
         self._result_state = "value"
