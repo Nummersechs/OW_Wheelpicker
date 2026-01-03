@@ -7,6 +7,7 @@ class ResultOverlay(QtWidgets.QWidget):
     closed = QtCore.Signal()
     modeChosen = QtCore.Signal(bool)
     languageToggleRequested = QtCore.Signal()
+    disableResultsRequested = QtCore.Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -50,7 +51,11 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_close = QtWidgets.QPushButton(i18n.t("overlay.button_ok"))
         self.btn_close.setFixedHeight(40)
         self.btn_close.clicked.connect(self._close)
-        
+
+        self.btn_disable = QtWidgets.QPushButton(i18n.t("overlay.button_disable_results"))
+        self.btn_disable.setFixedHeight(40)
+        self.btn_disable.clicked.connect(self.disableResultsRequested.emit)
+
         self.btn_online = QtWidgets.QPushButton(i18n.t("overlay.button_online"))
         self.btn_online.setFixedHeight(40)
         self.btn_offline = QtWidgets.QPushButton(i18n.t("overlay.button_offline"))
@@ -70,6 +75,7 @@ class ResultOverlay(QtWidgets.QWidget):
         btn_row.addStretch(1)
         btn_row.addWidget(self.btn_offline)
         btn_row.addWidget(self.btn_online)
+        btn_row.addWidget(self.btn_disable)
         btn_row.addWidget(self.btn_close)
         btn_row.addStretch(1)
         v.addLayout(btn_row)
@@ -106,6 +112,7 @@ class ResultOverlay(QtWidgets.QWidget):
         self.lab_dps.setText(f"Damage: <b>{escape(dps)}</b>")
         self.lab_sup.setText(f"Support: <b>{escape(sup)}</b>")
         self.btn_close.show()
+        self.btn_disable.show()
         self.btn_online.hide()
         self.btn_offline.hide()
         self._last_view = {"type": "result", "data": (tank, dps, sup)}
@@ -119,6 +126,7 @@ class ResultOverlay(QtWidgets.QWidget):
         self.lab_dps.setText(escape(texts[1]))
         self.lab_sup.setText(escape(texts[2]))
         self.btn_close.show()
+        self.btn_disable.hide()
         self.btn_online.hide()
         self.btn_offline.hide()
         self._last_view = {"type": "message", "data": (title, list(lines))}
@@ -136,6 +144,7 @@ class ResultOverlay(QtWidgets.QWidget):
 
         # Online/Offline-Buttons anzeigen, OK ausblenden
         self.btn_close.hide()
+        self.btn_disable.hide()
         self.btn_online.show()
         self.btn_offline.show()
         self.set_choice_enabled(False)
@@ -203,26 +212,34 @@ class ResultOverlay(QtWidgets.QWidget):
 
     def _apply_button_labels(self):
         self.btn_close.setText(i18n.t("overlay.button_ok"))
+        self.btn_disable.setText(i18n.t("overlay.button_disable_results"))
         self.btn_online.setText(i18n.t("overlay.button_online"))
         self.btn_offline.setText(i18n.t("overlay.button_offline"))
 
     def _set_min_widths(self):
         """Fix widths so language switch doesn't move layout."""
-        buttons = [self.btn_close, self.btn_online, self.btn_offline]
         font = self.btn_close.font()
         fm = QtGui.QFontMetrics(font)
-        max_w = 0
-        for key in ("overlay.button_ok", "overlay.button_online", "overlay.button_offline"):
-            entry = i18n.TRANSLATIONS.get(key, {})
-            texts = entry.values() if isinstance(entry, dict) else [entry]
-            for txt in texts:
-                if txt is None:
-                    continue
-                max_w = max(max_w, fm.horizontalAdvance(str(txt)))
-        for btn in buttons:
-            width = max_w + 48
-            btn.setMinimumWidth(width)
-            btn.setMaximumWidth(width)
+        def max_width(keys):
+            max_w = 0
+            for key in keys:
+                entry = i18n.TRANSLATIONS.get(key, {})
+                texts = entry.values() if isinstance(entry, dict) else [entry]
+                for txt in texts:
+                    if txt is None:
+                        continue
+                    max_w = max(max_w, fm.horizontalAdvance(str(txt)))
+            return max_w + 48
+
+        result_width = max_width(("overlay.button_ok", "overlay.button_disable_results"))
+        for btn in (self.btn_close, self.btn_disable):
+            btn.setMinimumWidth(result_width)
+            btn.setMaximumWidth(result_width)
+
+        choice_width = max_width(("overlay.button_online", "overlay.button_offline"))
+        for btn in (self.btn_online, self.btn_offline):
+            btn.setMinimumWidth(choice_width)
+            btn.setMaximumWidth(choice_width)
 
     def _apply_flag(self):
         """Aktualisiert Text/Tooltip des Sprache-Buttons."""

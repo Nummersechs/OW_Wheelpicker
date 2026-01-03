@@ -30,6 +30,10 @@ TRANSLATIONS_DE = {
     "wheel.names_hint_single": "Aktive Namen zählen. Segment-Klick schließt aus.\nJeder Name nur einmal pro Spin.",
     "wheel.sort_names": "A→Z sortieren",
     "wheel.sort_names_tooltip": "Liste alphabetisch sortieren",
+    "wheel.select_all": "Alle auswählen",
+    "wheel.deselect_all": "Alle abwählen",
+    "wheel.select_all_tooltip": "Alle Namen dieser Rolle auswählen",
+    "wheel.deselect_all_tooltip": "Alle Namen dieser Rolle abwählen",
     "wheel.include_tooltip": "Wenn aktiv, wird dieses Rad beim Button »Drehen« mitgedreht.",
     "wheel.include_prefix": "Mitdrehen",
     "wheel.result_prefix": "Ergebnis: {result}",
@@ -37,6 +41,7 @@ TRANSLATIONS_DE = {
     "wheel.tooltip_pairs": "Aktuell: Paare",
     "wheel.tooltip_single": "Aktuell: Einzelnamen",
     "wheel.clear_result_tooltip": "Ergebnis löschen",
+    "wheel.reset_disabled_tooltip": "Auswahl zurücksetzen",
     # Name list
     "names.context_new": "Neuer Name",
     "names.context_delete": "Ausgewählte löschen",
@@ -62,6 +67,7 @@ TRANSLATIONS_DE = {
     # Overlay
     "overlay.title_result": "Ergebnis",
     "overlay.button_ok": "OK",
+    "overlay.button_disable_results": "Ergebnisse im nächsten Spin ausschließen",
     "overlay.button_online": "Online",
     "overlay.button_offline": "Offline",
     "overlay.mode_title": "Verbindungsmodus wählen",
@@ -76,6 +82,9 @@ TRANSLATIONS_DE = {
     "overlay.team_impossible_title": "Team kann nicht gebildet werden",
     "overlay.team_impossible_line1": "Mindestens eine Rolle kann nicht konfliktfrei besetzt werden.",
     "overlay.team_impossible_line2": "Bitte mehr unterschiedliche Namen eintragen oder Rollen deaktivieren.",
+    "overlay.not_enough_title": "Nicht genug Auswahl",
+    "overlay.not_enough_line1": "Nicht genug aktive Segmente für einen Spin.",
+    "overlay.not_enough_line2": "Segmente wieder aktivieren oder mehr Namen hinzufügen.",
     # Theme
     "theme.toggle.to_dark": "Dark Mode aktivieren",
     "theme.toggle.to_light": "Light Mode aktivieren",

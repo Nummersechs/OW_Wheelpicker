@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import List, Optional
 from PySide6 import QtCore, QtGui, QtWidgets
 import i18n
+from view import style_helpers
 
 
 class _NoPaintDelegate(QtWidgets.QStyledItemDelegate):
@@ -315,3 +316,136 @@ class NameRowWidget(QtWidgets.QWidget):
     def _on_subrole_changed(self, _checked: bool):
         self.item.setData(self.list_widget.SUBROLE_ROLE, list(self.selected_subroles()))
         self.list_widget.metaChanged.emit()
+
+
+class NamesListPanel(QtWidgets.QWidget):
+    """Composite widget: names list with select/deselect and sort actions."""
+    def __init__(self, parent=None, subrole_labels: Optional[List[str]] = None):
+        super().__init__(parent)
+        self.names = NamesList(self, subrole_labels=subrole_labels)
+
+        self.btn_toggle_all_names = QtWidgets.QPushButton()
+        self.btn_toggle_all_names.setFixedHeight(28)
+        self.btn_toggle_all_names.clicked.connect(self._on_toggle_all_names_clicked)
+
+        self.btn_sort_names = QtWidgets.QPushButton(i18n.t("wheel.sort_names"))
+        self.btn_sort_names.setFixedHeight(28)
+        self.btn_sort_names.setToolTip(i18n.t("wheel.sort_names_tooltip"))
+        self.btn_sort_names.clicked.connect(self._on_sort_names_clicked)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(self.names)
+
+        action_row = QtWidgets.QHBoxLayout()
+        action_row.setSpacing(8)
+        action_row.addWidget(self.btn_toggle_all_names, 0, QtCore.Qt.AlignLeft)
+        action_row.addStretch(1)
+        action_row.addWidget(self.btn_sort_names, 0, QtCore.Qt.AlignRight)
+        layout.addLayout(action_row)
+
+        self.names.itemChanged.connect(self._update_toggle_all_button_label)
+        self.names.model().rowsInserted.connect(self._update_toggle_all_button_label)
+        self.names.model().rowsRemoved.connect(self._update_toggle_all_button_label)
+        self.names.metaChanged.connect(self._update_toggle_all_button_label)
+        self._update_toggle_all_button_label()
+        self.apply_fixed_widths()
+
+    def set_language(self, _lang: str):
+        self.btn_sort_names.setText(i18n.t("wheel.sort_names"))
+        self.btn_sort_names.setToolTip(i18n.t("wheel.sort_names_tooltip"))
+        self._update_toggle_all_button_label()
+        self.apply_fixed_widths()
+
+    def apply_theme(self, theme):
+        style_helpers.style_primary_button(self.btn_sort_names, theme)
+        style_helpers.style_primary_button(self.btn_toggle_all_names, theme)
+        style_helpers.style_names_list(self.names, theme)
+
+    def apply_fixed_widths(self):
+        def set_min(widget, keys, padding=20, prefixes=None):
+            if widget is None:
+                return
+            prefixes_local = prefixes or [""]
+            font = widget.font()
+            fm = QtGui.QFontMetrics(font)
+            max_w = 0
+            for key in keys:
+                entry = i18n.TRANSLATIONS.get(key, {})
+                texts = entry.values() if isinstance(entry, dict) else [entry]
+                for txt in texts:
+                    if txt is None:
+                        continue
+                    for pre in prefixes_local:
+                        max_w = max(max_w, fm.horizontalAdvance(f"{pre}{txt}"))
+            width = max_w + padding
+            widget.setMinimumWidth(width)
+            widget.setMaximumWidth(width)
+
+        set_min(self.btn_toggle_all_names, ["wheel.select_all", "wheel.deselect_all"], padding=44, prefixes=["☑ ", "☐ "])
+        set_min(self.btn_sort_names, ["wheel.sort_names"], padding=44)
+
+    def refresh_action_state(self):
+        self._update_toggle_all_button_label()
+
+    def _item_text(self, item: QtWidgets.QListWidgetItem) -> str:
+        widget = self.names.itemWidget(item)
+        if isinstance(widget, NameRowWidget):
+            return widget.edit.text().strip()
+        return item.text().strip()
+
+    def _named_items(self) -> list[QtWidgets.QListWidgetItem]:
+        items: list[QtWidgets.QListWidgetItem] = []
+        for i in range(self.names.count()):
+            item = self.names.item(i)
+            if item is None:
+                continue
+            if self._item_text(item):
+                items.append(item)
+        return items
+
+    def _all_named_items_checked(self) -> bool:
+        items = self._named_items()
+        if not items:
+            return False
+        return all(item.checkState() == QtCore.Qt.Checked for item in items)
+
+    def _update_toggle_all_button_label(self):
+        items = self._named_items()
+        if not items:
+            self.btn_toggle_all_names.setEnabled(False)
+            self.btn_toggle_all_names.setText(f"☑ {i18n.t('wheel.select_all')}")
+            self.btn_toggle_all_names.setToolTip(i18n.t("wheel.select_all_tooltip"))
+            return
+        self.btn_toggle_all_names.setEnabled(True)
+        if self._all_named_items_checked():
+            self.btn_toggle_all_names.setText(f"☐ {i18n.t('wheel.deselect_all')}")
+            self.btn_toggle_all_names.setToolTip(i18n.t("wheel.deselect_all_tooltip"))
+        else:
+            self.btn_toggle_all_names.setText(f"☑ {i18n.t('wheel.select_all')}")
+            self.btn_toggle_all_names.setToolTip(i18n.t("wheel.select_all_tooltip"))
+
+    def _on_toggle_all_names_clicked(self):
+        items = self._named_items()
+        if not items:
+            return
+        target_checked = not self._all_named_items_checked()
+        blockers = [
+            QtCore.QSignalBlocker(self.names),
+            QtCore.QSignalBlocker(self.names.model()),
+        ]
+        try:
+            for item in items:
+                widget = self.names.itemWidget(item)
+                if isinstance(widget, NameRowWidget):
+                    widget.chk_active.setChecked(target_checked)
+                else:
+                    item.setCheckState(QtCore.Qt.Checked if target_checked else QtCore.Qt.Unchecked)
+        finally:
+            del blockers
+        self.names.metaChanged.emit()
+        self._update_toggle_all_button_label()
+
+    def _on_sort_names_clicked(self):
+        self.names.sort_alphabetically()

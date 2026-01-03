@@ -3,7 +3,7 @@ import random, itertools, difflib
 from PySide6 import QtCore, QtGui, QtWidgets
 from logic.spin_engine import plan_spin
 from view.wheel_widget import WheelWidget
-from view.name_list import NamesList, NameRowWidget
+from view.name_list import NamesListPanel, NameRowWidget
 import config
 import i18n
 from utils import theme as theme_util
@@ -48,6 +48,16 @@ class WheelView(QtWidgets.QWidget):
         )
         self._apply_title()
 
+        self.btn_reset_segments = QtWidgets.QToolButton()
+        self.btn_reset_segments.setText("↺")
+        self.btn_reset_segments.setToolTip(i18n.t("wheel.reset_disabled_tooltip"))
+        self.btn_reset_segments.setAutoRaise(True)
+        self.btn_reset_segments.setCursor(QtCore.Qt.PointingHandCursor)
+        self.btn_reset_segments.setFixedSize(30, 30)
+        self.btn_reset_segments.clicked.connect(self.reset_disabled_segments)
+        self._update_reset_button_state()
+
+        header.addWidget(self.btn_reset_segments, 0, QtCore.Qt.AlignVCenter)
         header.addStretch(1)
         header.addWidget(self.label)
         header.addStretch(1)
@@ -126,11 +136,10 @@ class WheelView(QtWidgets.QWidget):
                 # Hinweislabel für die Checkboxen
         self.names_hint = QtWidgets.QLabel("")
         self.names_hint.setStyleSheet("color:#444; font-size:12px; padding:2px;")
-        self.btn_sort_names = QtWidgets.QPushButton(i18n.t("wheel.sort_names"))
-        self.btn_sort_names.setFixedHeight(28)
-        self.btn_sort_names.setToolTip(i18n.t("wheel.sort_names_tooltip"))
-        self.btn_sort_names.clicked.connect(self._on_sort_names_clicked)
-        self.names = NamesList(subrole_labels=self.subrole_labels)
+        self.names_panel = NamesListPanel(subrole_labels=self.subrole_labels)
+        self.names = self.names_panel.names
+        self.btn_toggle_all_names = self.names_panel.btn_toggle_all_names
+        self.btn_sort_names = self.names_panel.btn_sort_names
 
         # Start-Namen anlegen – neue Namen sind standardmäßig aktiv (Checked)
         for entry in self._normalize_entries(defaults):
@@ -195,8 +204,7 @@ class WheelView(QtWidgets.QWidget):
         inner.addWidget(self.result_widget)
         inner.addLayout(btn_row)
         inner.addWidget(self.names_hint)
-        inner.addWidget(self.names)
-        inner.addWidget(self.btn_sort_names, 0, QtCore.Qt.AlignRight)
+        inner.addWidget(self.names_panel)
         
         # Checkbox-Styling konsistent halten
         self.setStyleSheet("""
@@ -251,9 +259,11 @@ class WheelView(QtWidgets.QWidget):
             self.chk_subroles.setToolTip(hint)
         if self.chk_show_names:
             self.chk_show_names.setText(i18n.t("wheel.show_names"))
+        if hasattr(self, "btn_reset_segments"):
+            self.btn_reset_segments.setToolTip(i18n.t("wheel.reset_disabled_tooltip"))
         self.btn_clear_result.setToolTip(i18n.t("wheel.clear_result_tooltip"))
-        self.btn_sort_names.setText(i18n.t("wheel.sort_names"))
-        self.btn_sort_names.setToolTip(i18n.t("wheel.sort_names_tooltip"))
+        if hasattr(self, "names_panel"):
+            self.names_panel.set_language(lang)
         self.btn_include_in_all.setToolTip(i18n.t("wheel.include_tooltip"))
         self._on_include_in_all_toggled(self.btn_include_in_all.isChecked())
         if self._custom_spin_label is None:
@@ -300,7 +310,8 @@ class WheelView(QtWidgets.QWidget):
 
         set_min(self.btn_local_spin, ["wheel.spin_role", "wheel.spin_map", "wheel.spin_single_map"], padding=44)
         set_min(self.btn_include_in_all, ["wheel.include_prefix"], padding=42, prefixes=["☑ ", "☐ "])
-        set_min(self.btn_sort_names, ["wheel.sort_names"], padding=44)
+        if hasattr(self, "names_panel"):
+            self.names_panel.apply_fixed_widths()
         if self.toggle:
             set_min(self.toggle, ["wheel.pairs_toggle"], padding=30)
         if self.chk_subroles:
@@ -388,10 +399,17 @@ class WheelView(QtWidgets.QWidget):
             style_helpers.style_primary_button(self.btn_local_spin, theme)
         if hasattr(self, "btn_include_in_all"):
             style_helpers.style_include_button(self.btn_include_in_all, theme)
-        if hasattr(self, "btn_sort_names"):
-            style_helpers.style_primary_button(self.btn_sort_names, theme)
-        if hasattr(self, "names"):
-            style_helpers.style_names_list(self.names, theme)
+        if hasattr(self, "names_panel"):
+            self.names_panel.apply_theme(theme)
+        if hasattr(self, "btn_reset_segments"):
+            tool_style = theme_util.tool_button_stylesheet(theme)
+            self.btn_reset_segments.setStyleSheet(
+                f"{tool_style} "
+                f"QToolButton {{ color:{theme.primary}; background:{theme.base}; "
+                f"border:1px solid {theme.primary}; border-radius:6px; }} "
+                f"QToolButton:disabled {{ color:{theme.disabled_text}; background:{theme.alt_base}; "
+                f"border:1px solid {theme.border}; border-radius:6px; }}"
+            )
 
     def set_result_value(self, value: str):
         self._result_state = "value"
@@ -411,6 +429,72 @@ class WheelView(QtWidgets.QWidget):
     def get_result_value(self) -> Optional[str]:
         return self._result_value if self._result_state == "value" else None
 
+    def _pair_parts_from_label(self, label: str) -> list[str]:
+        parts = [part.strip() for part in label.split(" + ") if part.strip()]
+        return parts if len(parts) == 2 else []
+
+    def disable_label(self, label: str) -> bool:
+        """Disable a segment by its label (returns True if it was newly disabled)."""
+        if not label:
+            return False
+        names = list(getattr(self.wheel, "names", []))
+        if not names:
+            return False
+        for idx, name in enumerate(names):
+            if name == label and idx not in self._disabled_indices:
+                self._disabled_indices.add(idx)
+                self._refresh_disabled_indices()
+                self.stateChanged.emit()
+                return True
+        return False
+
+    def disable_label_with_related_pairs(self, label: str) -> bool:
+        """Disable the label and all other pair segments that share a name."""
+        if not label:
+            return False
+        names = list(getattr(self.wheel, "names", []))
+        if not names:
+            return False
+        changed = False
+        found_label = False
+        for idx, name in enumerate(names):
+            if name == label:
+                found_label = True
+                if idx not in self._disabled_indices:
+                    self._disabled_indices.add(idx)
+                    changed = True
+        if not found_label:
+            return False
+        if self.pair_mode:
+            parts = self._pair_parts_from_label(label)
+            if parts:
+                parts_set = set(parts)
+                for idx, name in enumerate(names):
+                    if idx in self._disabled_indices:
+                        continue
+                    other_parts = self._pair_parts_from_label(name)
+                    if other_parts and parts_set.intersection(other_parts):
+                        self._disabled_indices.add(idx)
+                        changed = True
+        if changed:
+            self._refresh_disabled_indices()
+            self.stateChanged.emit()
+        return changed
+
+    def disable_current_result(self, include_related: bool = False) -> bool:
+        """Disable the currently selected result segment, if any."""
+        label = self.get_result_value() or ""
+        if include_related:
+            return self.disable_label_with_related_pairs(label)
+        return self.disable_label(label)
+
+    def reset_disabled_segments(self) -> None:
+        """Re-enable all segments on this wheel."""
+        self._disabled_indices.clear()
+        self._disabled_labels.clear()
+        self._refresh_disabled_indices()
+        self.stateChanged.emit()
+
     def get_result_payload(self) -> dict:
         return {"state": self._result_state, "value": self._result_value}
 
@@ -426,11 +510,6 @@ class WheelView(QtWidgets.QWidget):
             self.set_result_too_few()
         else:
             self.clear_result()
-        
-    def _on_sort_names_clicked(self):
-        """Sortiert die Namensliste alphabetisch und aktualisiert das Rad."""
-        self.names.sort_alphabetically()
-        self._on_names_list_changed()
 
     def _apply_placeholder(self):
         tooltip_key = "wheel.tooltip_pairs" if self.pair_mode else "wheel.tooltip_single"
@@ -653,11 +732,17 @@ class WheelView(QtWidgets.QWidget):
         if not names:
             self._disabled_indices = set()
             self._disabled_labels = set()
+            self._update_reset_button_state()
             return
         # Nur valide Indizes behalten
         self._disabled_indices = {i for i in self._disabled_indices if 0 <= i < len(names)}
         self._disabled_labels = {names[i] for i in self._disabled_indices}
         self.wheel.set_disabled_indices(self._disabled_indices)
+        self._update_reset_button_state()
+
+    def _update_reset_button_state(self):
+        if hasattr(self, "btn_reset_segments"):
+            self.btn_reset_segments.setEnabled(bool(self._disabled_indices))
 
     def _on_names_changed(self):
         # Kompatibilitäts-Methode, falls sie anderswo noch aufgerufen wird
@@ -831,8 +916,7 @@ class WheelView(QtWidgets.QWidget):
             self.anim.deleteLater()
             delattr(self, "anim")
         self._is_spinning = False
-        
-    
+
     def _update_name_dependent_ui(self):
         """
         Passt UI-Elemente je nach Anzahl der Basenamen an:
@@ -1023,6 +1107,8 @@ class WheelView(QtWidgets.QWidget):
 
         self._apply_placeholder()
         self._on_names_list_changed()
+        if hasattr(self, "names_panel"):
+            self.names_panel.refresh_action_state()
         # Sichtbarkeit der Subrollen-Kästchen nach einem vollständigen Neuaufbau anwenden
         self._apply_subrole_visibility()
 

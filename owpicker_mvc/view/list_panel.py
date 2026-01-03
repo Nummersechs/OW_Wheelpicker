@@ -6,7 +6,7 @@ from PySide6 import QtCore, QtWidgets, QtGui
 import i18n
 from utils import theme as theme_util
 from view import style_helpers
-from view.name_list import NamesList
+from view.name_list import NamesListPanel
 
 
 class ListPanel(QtWidgets.QWidget):
@@ -61,12 +61,11 @@ class ListPanel(QtWidgets.QWidget):
         self.names_hint.setStyleSheet("color:#444; font-size:12px; padding:2px;")
         inner.addWidget(self.names_hint)
 
-        self.names = NamesList()
-        inner.addWidget(self.names)
-        self.btn_sort_names = QtWidgets.QPushButton(i18n.t("wheel.sort_names"))
-        self.btn_sort_names.setFixedHeight(28)
-        self.btn_sort_names.clicked.connect(self._on_sort_names_clicked)
-        inner.addWidget(self.btn_sort_names, 0, QtCore.Qt.AlignRight)
+        self.names_panel = NamesListPanel()
+        self.names = self.names_panel.names
+        self.btn_sort_names = self.names_panel.btn_sort_names
+        self.btn_toggle_all_names = self.names_panel.btn_toggle_all_names
+        inner.addWidget(self.names_panel)
 
         # Populate list
         self.load_entries(entries)
@@ -82,7 +81,8 @@ class ListPanel(QtWidgets.QWidget):
     def set_language(self, lang: str):
         i18n.set_language(lang)
         self.btn_local_spin.setText(i18n.t("wheel.spin_single_map"))
-        self.btn_sort_names.setText(i18n.t("wheel.sort_names"))
+        if hasattr(self, "names_panel"):
+            self.names_panel.set_language(lang)
         self.btn_include_in_all.setText(self._include_label())
         self.names_hint.setText(i18n.t("wheel.names_hint_single"))
         self._apply_fixed_widths()
@@ -95,7 +95,10 @@ class ListPanel(QtWidgets.QWidget):
         self.names.setEnabled(en)
         self.btn_local_spin.setEnabled(en)
         self.btn_include_in_all.setEnabled(en)
-        self.btn_sort_names.setEnabled(en)
+        if hasattr(self, "btn_sort_names"):
+            self.btn_sort_names.setEnabled(en)
+        if hasattr(self, "btn_toggle_all_names"):
+            self.btn_toggle_all_names.setEnabled(en)
 
     def get_current_entries(self) -> List[dict]:
         entries: list[dict] = []
@@ -133,6 +136,8 @@ class ListPanel(QtWidgets.QWidget):
                 self.names.add_name(entry["name"], active=entry["active"])
         finally:
             del blockers
+        if hasattr(self, "names_panel"):
+            self.names_panel.refresh_action_state()
         self._apply_fixed_widths()
 
     def apply_theme(self, theme: theme_util.Theme):
@@ -148,12 +153,8 @@ class ListPanel(QtWidgets.QWidget):
         self.names_hint.setStyleSheet(f"color:{theme.muted_text}; font-size:12px; padding:2px;")
         style_helpers.style_primary_button(self.btn_local_spin, theme)
         style_helpers.style_include_button(self.btn_include_in_all, theme)
-        style_helpers.style_primary_button(self.btn_sort_names, theme)
-        style_helpers.style_names_list(self.names, theme)
-
-    def _on_sort_names_clicked(self):
-        self.names.sort_alphabetically()
-        self.stateChanged.emit()
+        if hasattr(self, "names_panel"):
+            self.names_panel.apply_theme(theme)
 
     def _on_names_changed(self, *args):
         self.stateChanged.emit()
@@ -189,5 +190,6 @@ class ListPanel(QtWidgets.QWidget):
 
         set_min(self.btn_local_spin, ["wheel.spin_role", "wheel.spin_map", "wheel.spin_single_map"], padding=44)
         set_min(self.btn_include_in_all, ["wheel.include_prefix"], padding=42, prefixes=["☑ ", "☐ "])
-        set_min(self.btn_sort_names, ["wheel.sort_names"], padding=44)
+        if hasattr(self, "names_panel"):
+            self.names_panel.apply_fixed_widths()
         self.btn_include_in_all.setText(self._include_label())

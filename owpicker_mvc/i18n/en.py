@@ -30,6 +30,10 @@ TRANSLATIONS_EN = {
     "wheel.names_hint_single": "Active names count. Click a segment to exclude.\nEach name only once per spin.",
     "wheel.sort_names": "Sort A→Z",
     "wheel.sort_names_tooltip": "Sort list alphabetically",
+    "wheel.select_all": "Select all",
+    "wheel.deselect_all": "Deselect all",
+    "wheel.select_all_tooltip": "Select all names in this role",
+    "wheel.deselect_all_tooltip": "Deselect all names in this role",
     "wheel.include_tooltip": "When enabled, this wheel spins with the global \"Spin\" button.",
     "wheel.include_prefix": "Include in spin",
     "wheel.result_prefix": "Result: {result}",
@@ -37,6 +41,7 @@ TRANSLATIONS_EN = {
     "wheel.tooltip_pairs": "Current: Pairs",
     "wheel.tooltip_single": "Current: Single names",
     "wheel.clear_result_tooltip": "Clear result",
+    "wheel.reset_disabled_tooltip": "Reset selection",
     # Name list
     "names.context_new": "New name",
     "names.context_delete": "Delete selected",
@@ -62,6 +67,7 @@ TRANSLATIONS_EN = {
     # Overlay
     "overlay.title_result": "Result",
     "overlay.button_ok": "OK",
+    "overlay.button_disable_results": "Exclude results in next spin",
     "overlay.button_online": "Online",
     "overlay.button_offline": "Offline",
     "overlay.mode_title": "Choose connection mode",
@@ -76,6 +82,9 @@ TRANSLATIONS_EN = {
     "overlay.team_impossible_title": "Team cannot be formed",
     "overlay.team_impossible_line1": "At least one role cannot be filled without conflicts.",
     "overlay.team_impossible_line2": "Add more distinct names or disable roles.",
+    "overlay.not_enough_title": "Not enough options",
+    "overlay.not_enough_line1": "Not enough active segments for a spin.",
+    "overlay.not_enough_line2": "Re-enable segments or add more names.",
     # Theme
     "theme.toggle.to_dark": "Switch to dark mode",
     "theme.toggle.to_light": "Switch to light mode",

@@ -89,10 +89,11 @@ class MapUI(QtCore.QObject):
         self.map_main.set_show_names_visible(True)
         self.map_main.btn_include_in_all.setVisible(False)
         self.map_main.btn_local_spin.setText(i18n.t("wheel.spin_map"))
-        self.map_main.names.setVisible(False)
         self.map_main.names_hint.setVisible(False)
-        if hasattr(self.map_main, "btn_sort_names"):
-            self.map_main.btn_sort_names.setVisible(False)
+        if hasattr(self.map_main, "names_panel"):
+            self.map_main.names_panel.setVisible(False)
+        else:
+            self.map_main.names.setVisible(False)
         self.map_main.result_widget.setVisible(False)
         self.map_main.btn_local_spin.setVisible(False)
 

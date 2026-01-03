@@ -292,6 +292,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.overlay.hide()
         self.overlay.closed.connect(self._on_overlay_closed)
         self.overlay.languageToggleRequested.connect(self._toggle_language)
+        self.overlay.disableResultsRequested.connect(self._on_overlay_disable_results)
         
         self.online_mode = False  # Standard
         self.overlay.modeChosen.connect(self._on_mode_chosen)
@@ -385,6 +386,21 @@ class MainWindow(QtWidgets.QMainWindow):
         # Tooltip/Truncation nach finalem Layout aktualisieren
         QtCore.QTimer.singleShot(0, self._refresh_tooltip_caches)
         QtCore.QTimer.singleShot(200, self._refresh_tooltip_caches)
+
+    def _on_overlay_disable_results(self):
+        last_view = getattr(self.overlay, "_last_view", {}) or {}
+        if last_view.get("type") == "result":
+            data = last_view.get("data") or ()
+            if len(data) == 3:
+                mapping = [(self.tank, data[0]), (self.dps, data[1]), (self.support, data[2])]
+                for wheel, label in mapping:
+                    if hasattr(wheel, "disable_label_with_related_pairs"):
+                        handled = wheel.disable_label_with_related_pairs(label)
+                    else:
+                        handled = False
+                    if not handled and hasattr(wheel, "disable_current_result"):
+                        wheel.disable_current_result(include_related=True)
+                return
 
     def eventFilter(self, obj, event):
         # Nach längeren Pausen/Focus-Wechsel Tooltip-Caches auffrischen
@@ -1060,10 +1076,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.map_main.request_spin.connect(self._spin_map_single)
         self.map_main.spun.connect(self._wheel_finished)
         # Nur Rad + „Namen anzeigen“ zeigen, rest ausblenden
-        self.map_main.names.setVisible(False)
         self.map_main.names_hint.setVisible(False)
-        if hasattr(self.map_main, "btn_sort_names"):
-            self.map_main.btn_sort_names.setVisible(False)
+        if hasattr(self.map_main, "names_panel"):
+            self.map_main.names_panel.setVisible(False)
+        else:
+            self.map_main.names.setVisible(False)
         self.map_main.result_widget.setVisible(False)
         self.map_main.btn_local_spin.setVisible(False)
         # Rad-Größe an den Standard-Rädern ausrichten (WHEEL_RADIUS*2 + Padding)

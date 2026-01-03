@@ -36,12 +36,19 @@ def spin_all(mw):
         wheel.clear_result()
 
     all_candidates_per_role = []
+    missing_roles = False
     for role, wheel in active:
         base_entries = wheel._active_entries()
         labels = wheel._effective_names_from(base_entries, include_disabled=False)
         labels = [lbl.strip() for lbl in labels if lbl and lbl.strip()]
 
         role_candidates = []
+        if not labels:
+            if hasattr(wheel, "set_result_too_few"):
+                wheel.set_result_too_few()
+            missing_roles = True
+            all_candidates_per_role.append(role_candidates)
+            continue
         for lbl in labels:
             parts = [p.strip() for p in lbl.split("+")]
             parts = [p for p in parts if p]
@@ -49,6 +56,14 @@ def spin_all(mw):
                 continue
             role_candidates.append((lbl, parts))
         all_candidates_per_role.append(role_candidates)
+
+    if missing_roles:
+        mw.summary.setText(i18n.t("summary.roles_prompt"))
+        mw.overlay.show_message(
+            i18n.t("overlay.not_enough_title"),
+            [i18n.t("overlay.not_enough_line1"), i18n.t("overlay.not_enough_line2"), ""],
+        )
+        return
 
     if all(not cands for cands in all_candidates_per_role):
         mw.summary.setText(i18n.t("summary.roles_prompt"))
@@ -128,4 +143,8 @@ def spin_single(mw, wheel, mult: float = 1.0, hero_ban_override: bool = True):
         mw.sound.stop_spin()
         mw._set_controls_enabled(True)
         mw.summary.setText(i18n.t("summary.wheel_prompt"))
+        mw.overlay.show_message(
+            i18n.t("overlay.not_enough_title"),
+            [i18n.t("overlay.not_enough_line1"), i18n.t("overlay.not_enough_line2"), ""],
+        )
     mw._update_cancel_enabled()
