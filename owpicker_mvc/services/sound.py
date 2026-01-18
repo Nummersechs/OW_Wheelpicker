@@ -19,8 +19,10 @@ class SoundManager:
         Wenn die Ordner leer sind oder nicht existieren, wird
         optional auf spin.wav / ding.wav im base_dir zurückgefallen.
         """
-        self.spin_effects: list[QSoundEffect] = []
-        self.ding_effects: list[QSoundEffect] = []
+        self.spin_effects: dict[Path, QSoundEffect] = {}
+        self.ding_effects: dict[Path, QSoundEffect] = {}
+        self.spin_sources: list[Path] = []
+        self.ding_sources: list[Path] = []
         self.master_volume: float = 1.0
         self.spin_base_volume = 0.35
         self.ding_base_volume = 0.7
@@ -30,42 +32,49 @@ class SoundManager:
         spin_dir = base_dir / "Spin"
         ding_dir = base_dir / "Ding"
 
-        self.spin_effects = self._load_effects(spin_dir, default_path=base_dir / "spin.wav", volume=self.spin_base_volume)
-        self.ding_effects = self._load_effects(ding_dir, default_path=base_dir / "ding.wav", volume=self.ding_base_volume)
-        self.preview_effect = self._create_preview_effect()
+        self.spin_sources = self._collect_sources(spin_dir, default_path=base_dir / "spin.wav")
+        self.ding_sources = self._collect_sources(ding_dir, default_path=base_dir / "ding.wav")
 
-    def _load_effects(self, folder: Path, default_path: Path, volume: float) -> list[QSoundEffect]:
-        effects: list[QSoundEffect] = []
+    def _collect_sources(self, folder: Path, default_path: Path) -> list[Path]:
+        sources: list[Path] = []
 
         # 1) Load all files from the directory (if present)
         if folder.exists() and folder.is_dir():
             for entry in sorted(folder.iterdir()):
                 if entry.is_file() and entry.suffix.lower() in AUDIO_EXTENSIONS:
-                    eff = QSoundEffect()
-                    eff.setSource(QUrl.fromLocalFile(str(entry)))
-                    eff.setLoopCount(1)
-                    eff.setVolume(volume * self.master_volume)
-                    effects.append(eff)
+                    sources.append(entry)
 
         # 2) Fallback: single file in base dir (spin.wav / ding.wav)
-        if not effects and default_path.exists():
-            eff = QSoundEffect()
-            eff.setSource(QUrl.fromLocalFile(str(default_path)))
-            eff.setLoopCount(1)
-            eff.setVolume(volume * self.master_volume)
-            effects.append(eff)
+        if not sources and default_path.exists():
+            sources.append(default_path)
 
-        return effects
+        return sources
+
+    def _get_or_create_effect(
+        self,
+        cache: dict[Path, QSoundEffect],
+        path: Path,
+        base_volume: float,
+    ) -> QSoundEffect:
+        eff = cache.get(path)
+        if eff:
+            return eff
+        eff = QSoundEffect()
+        eff.setSource(QUrl.fromLocalFile(str(path)))
+        eff.setLoopCount(1)
+        eff.setVolume(base_volume * self.master_volume)
+        cache[path] = eff
+        return eff
 
     # --- Control ---
 
     def play_spin(self):
         """Spielt einen zufälligen Spin-Sound oder Beep, falls nichts geladen."""
         try:
-            if self.spin_effects:
-                eff = random.choice(self.spin_effects)
-                eff.stop()
-                eff.play()
+            if self.spin_sources:
+                path = random.choice(self.spin_sources)
+                eff = self._get_or_create_effect(self.spin_effects, path, self.spin_base_volume)
+                self._play_effect(eff)
             else:
                 QtWidgets.QApplication.beep()
         except Exception:
@@ -73,7 +82,7 @@ class SoundManager:
 
     def stop_spin(self):
         try:
-            for eff in self.spin_effects:
+            for eff in self.spin_effects.values():
                 eff.stop()
         except Exception:
             pass
@@ -81,12 +90,12 @@ class SoundManager:
     def set_master_volume(self, factor: float):
         """Setzt die Master-Lautstärke (0.0–1.0) für alle Effekte."""
         self.master_volume = max(0.0, min(1.0, float(factor)))
-        self._apply_volume(self.spin_effects, self.spin_base_volume)
-        self._apply_volume(self.ding_effects, self.ding_base_volume)
+        self._apply_volume(self.spin_effects.values(), self.spin_base_volume)
+        self._apply_volume(self.ding_effects.values(), self.ding_base_volume)
         if self.preview_effect:
             self._apply_volume([self.preview_effect], self.preview_base_volume)
 
-    def _apply_volume(self, effects: list[QSoundEffect], base_volume: float):
+    def _apply_volume(self, effects, base_volume: float):
         vol = max(0.0, min(1.0, base_volume * self.master_volume))
         for eff in effects:
             try:
@@ -97,8 +106,10 @@ class SoundManager:
     def play_ding(self):
         """Spielt einen zufälligen Ding-Sound oder Beep, falls nichts geladen."""
         try:
-            if self.ding_effects:
-                self._play_effect(random.choice(self.ding_effects))
+            if self.ding_sources:
+                path = random.choice(self.ding_sources)
+                eff = self._get_or_create_effect(self.ding_effects, path, self.ding_base_volume)
+                self._play_effect(eff)
             else:
                 QtWidgets.QApplication.beep()
         except Exception:
@@ -106,7 +117,7 @@ class SoundManager:
 
     def stop_ding(self):
         try:
-            for eff in self.ding_effects:
+            for eff in self.ding_effects.values():
                 eff.stop()
         except Exception:
             pass
@@ -114,12 +125,18 @@ class SoundManager:
     def play_preview(self):
         """Kurzer Test-Sound für Lautstärkevorschau."""
         try:
+            if not self.preview_effect:
+                self.preview_effect = self._create_preview_effect()
             if self.preview_effect:
                 self._play_effect(self.preview_effect)
-            elif self.ding_effects:
-                self._play_effect(random.choice(self.ding_effects))
-            elif self.spin_effects:
-                self._play_effect(random.choice(self.spin_effects))
+            elif self.ding_sources:
+                path = random.choice(self.ding_sources)
+                eff = self._get_or_create_effect(self.ding_effects, path, self.ding_base_volume)
+                self._play_effect(eff)
+            elif self.spin_sources:
+                path = random.choice(self.spin_sources)
+                eff = self._get_or_create_effect(self.spin_effects, path, self.spin_base_volume)
+                self._play_effect(eff)
             else:
                 QtWidgets.QApplication.beep()
         except Exception:

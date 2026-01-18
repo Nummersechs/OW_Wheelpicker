@@ -4,7 +4,8 @@ py -m venv .venv
 pip install --upgrade pip
 pip install PySide6 pyinstaller
 
-pyinstaller --onefile --noconsole --name OverwatchWheels BeKFS.py --hidden-import PySide6.QtMultimedia --collect-submodules PySide6 --collect-data PySide6 --collect-binaries PySide6
+# Onefile build (optimized spec, smaller than collect-all)
+pyinstaller --noconfirm --clean owpicker_mvc/OverwatchWheels.spec
 
-pyinstaller --onefile --noconsole --add-data "spin.wav:." --add-data "ding.wav:." main.py
-pyinstaller --onefile --noconsole --add-data "Spin;Spin" --add-data "Ding;Ding" main.py
+# Optional: install UPX for more compression (faster download, slower build)
+# pyinstaller --noconfirm --clean --upx-dir C:\path\to\upx owpicker_mvc/OverwatchWheels.spec

@@ -13,9 +13,17 @@ TRANSLATIONS_EN = {
     "volume.slider_tooltip": "Sound effects volume",
     # Controls
     "controls.spin_all": "🎰 Spin",
+    "controls.spin_open_queue": "🎲 Open Queue ({count})",
+    "controls.spin_mode_role": "Role",
+    "controls.spin_mode_open": "Open {count}",
     "controls.anim_duration": "Animation duration:",
     "controls.anim_duration_tooltip": "Animation duration (ms)",
     "controls.cancel_spin": "✖ Cancel",
+    # Player list
+    "players.list_button": "All players",
+    "players.list_title": "All players",
+    "players.list_apply": "Apply",
+    "players.list_cancel": "Cancel",
     # Wheel / Names
     "wheel.spin_role": "🔁 Spin this role",
     "wheel.spin_map": "🔁 Spin map",

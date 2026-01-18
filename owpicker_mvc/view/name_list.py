@@ -220,7 +220,12 @@ class NameRowWidget(QtWidgets.QWidget):
         layout.setSpacing(6)
 
         self.chk_active = QtWidgets.QCheckBox()
-        self.chk_active.setChecked(item.checkState() == QtCore.Qt.Checked)
+        state = item.checkState()
+        if state == QtCore.Qt.PartiallyChecked:
+            self.chk_active.setTristate(True)
+            self.chk_active.setCheckState(state)
+        else:
+            self.chk_active.setChecked(state == QtCore.Qt.Checked)
         self.chk_active.toggled.connect(self._on_active_toggled)
         layout.addWidget(self.chk_active, 0, QtCore.Qt.AlignVCenter)
 

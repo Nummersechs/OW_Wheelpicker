@@ -472,6 +472,139 @@ class WheelView(QtWidgets.QWidget):
                     changed = True
         return changed
 
+    def add_name(self, name: str, active: bool = True) -> bool:
+        """Add a name if missing; returns True if it changed."""
+        name = str(name or "").strip()
+        if not name:
+            return False
+        for i in range(self.names.count()):
+            item = self.names.item(i)
+            if item is None:
+                continue
+            if self._item_text(item) == name:
+                if active:
+                    return self.set_names_active({name}, True)
+                return False
+        blockers = [
+            QtCore.QSignalBlocker(self.names),
+            QtCore.QSignalBlocker(self.names.model()),
+        ]
+        prev = self._suppress_state_signal
+        self._suppress_state_signal = True
+        try:
+            self.names.add_name(name, active=active)
+        finally:
+            del blockers
+        self._on_names_list_changed()
+        self._suppress_state_signal = prev
+        if not self._suppress_state_signal:
+            self.stateChanged.emit()
+        return True
+
+    def remove_names(self, names: set[str]) -> bool:
+        """Remove matching names from the list."""
+        targets = {n.strip() for n in names if isinstance(n, str) and n.strip()}
+        if not targets:
+            return False
+        changed = False
+        blockers = [
+            QtCore.QSignalBlocker(self.names),
+            QtCore.QSignalBlocker(self.names.model()),
+        ]
+        prev = self._suppress_state_signal
+        self._suppress_state_signal = True
+        try:
+            for i in range(self.names.count() - 1, -1, -1):
+                item = self.names.item(i)
+                if item is None:
+                    continue
+                if self._item_text(item) in targets:
+                    self.names.delete_row(i)
+                    changed = True
+        finally:
+            del blockers
+        if changed:
+            self._on_names_list_changed()
+        self._suppress_state_signal = prev
+        if changed and not self._suppress_state_signal:
+            self.stateChanged.emit()
+        return changed
+
+    def rename_name(self, old: str, new: str) -> bool:
+        """Rename a name in the list while keeping its state/subroles."""
+        old = str(old or "").strip()
+        new = str(new or "").strip()
+        if not old or not new or old == new:
+            return False
+        changed = False
+        blockers = [
+            QtCore.QSignalBlocker(self.names),
+            QtCore.QSignalBlocker(self.names.model()),
+        ]
+        prev = self._suppress_state_signal
+        self._suppress_state_signal = True
+        try:
+            for i in range(self.names.count()):
+                item = self.names.item(i)
+                if item is None:
+                    continue
+                if self._item_text(item) != old:
+                    continue
+                widget = self.names.itemWidget(item)
+                if isinstance(widget, NameRowWidget):
+                    widget.edit.setText(new)
+                item.setText(new)
+                changed = True
+        finally:
+            del blockers
+        if changed:
+            self._on_names_list_changed()
+        self._suppress_state_signal = prev
+        if changed and not self._suppress_state_signal:
+            self.stateChanged.emit()
+        return changed
+
+    def set_names_active(self, names: set[str], active: bool) -> bool:
+        """Set active state for matching names in the list."""
+        if not names:
+            return False
+        targets = {n.strip() for n in names if isinstance(n, str) and n.strip()}
+        if not targets:
+            return False
+        changed = False
+        blockers = [
+            QtCore.QSignalBlocker(self.names),
+            QtCore.QSignalBlocker(self.names.model()),
+        ]
+        prev = self._suppress_state_signal
+        self._suppress_state_signal = True
+        try:
+            for i in range(self.names.count()):
+                item = self.names.item(i)
+                if item is None:
+                    continue
+                text = self._item_text(item)
+                if not text or text not in targets:
+                    continue
+                widget = self.names.itemWidget(item)
+                target_state = QtCore.Qt.Checked if active else QtCore.Qt.Unchecked
+                if isinstance(widget, NameRowWidget):
+                    if widget.chk_active.isChecked() != active:
+                        widget.chk_active.setChecked(active)
+                        changed = True
+                else:
+                    if item.checkState() != target_state:
+                        item.setCheckState(target_state)
+                        changed = True
+        finally:
+            del blockers
+        if changed:
+            self._on_names_list_changed()
+        self._suppress_state_signal = prev
+        if changed and not self._suppress_state_signal:
+            self.stateChanged.emit()
+        return changed
+
     def disable_label(self, label: str) -> bool:
         """Disable a segment by its label (returns True if it was newly disabled)."""
         if not label:

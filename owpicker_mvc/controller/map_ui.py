@@ -143,8 +143,7 @@ class MapUI(QtCore.QObject):
             w.set_interactive_enabled(include_checked)
             w.setVisible(include_checked)
             w.btn_include_in_all.setChecked(include_checked)
-            w.btn_include_in_all.toggled.connect(self.rebuild_combined)
-            w.stateChanged.connect(self.stateChanged.emit)
+            w.stateChanged.connect(self.rebuild_combined)
             w.request_spin.connect(lambda _=None, c=cat: self.requestSpinCategory.emit(c))
             self.map_lists[cat] = w
             self.map_grid.addWidget(w)
