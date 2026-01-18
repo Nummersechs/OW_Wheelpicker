@@ -389,18 +389,23 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_overlay_disable_results(self):
         last_view = getattr(self.overlay, "_last_view", {}) or {}
-        if last_view.get("type") == "result":
-            data = last_view.get("data") or ()
-            if len(data) == 3:
-                mapping = [(self.tank, data[0]), (self.dps, data[1]), (self.support, data[2])]
-                for wheel, label in mapping:
-                    if hasattr(wheel, "disable_label_with_related_pairs"):
-                        handled = wheel.disable_label_with_related_pairs(label)
-                    else:
-                        handled = False
-                    if not handled and hasattr(wheel, "disable_current_result"):
-                        wheel.disable_current_result(include_related=True)
-                return
+        if last_view.get("type") != "result":
+            return
+        data = last_view.get("data") or ()
+        if len(data) != 3:
+            return
+        mapping = [(self.tank, data[0]), (self.dps, data[1]), (self.support, data[2])]
+        names_to_remove: set[str] = set()
+        for wheel, label in mapping:
+            if hasattr(wheel, "result_label_names"):
+                names_to_remove.update(wheel.result_label_names(label))
+            elif isinstance(label, str) and label.strip():
+                names_to_remove.add(label.strip())
+        if not names_to_remove:
+            return
+        for wheel in (self.tank, self.dps, self.support):
+            if hasattr(wheel, "deactivate_names"):
+                wheel.deactivate_names(names_to_remove)
 
     def eventFilter(self, obj, event):
         # Nach längeren Pausen/Focus-Wechsel Tooltip-Caches auffrischen

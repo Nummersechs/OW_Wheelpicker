@@ -433,6 +433,45 @@ class WheelView(QtWidgets.QWidget):
         parts = [part.strip() for part in label.split(" + ") if part.strip()]
         return parts if len(parts) == 2 else []
 
+    def result_label_names(self, label: str) -> list[str]:
+        """Return the underlying name(s) for a result label."""
+        if not label:
+            return []
+        cleaned = label.strip()
+        if not cleaned or cleaned == "–":
+            return []
+        if self.pair_mode:
+            parts = self._pair_parts_from_label(cleaned)
+            if parts:
+                return parts
+        return [cleaned]
+
+    def deactivate_names(self, names: set[str]) -> bool:
+        """Uncheck matching names in the list so they drop from active selection."""
+        if not names:
+            return False
+        targets = {n.strip() for n in names if isinstance(n, str) and n.strip()}
+        if not targets:
+            return False
+        changed = False
+        for i in range(self.names.count()):
+            item = self.names.item(i)
+            if item is None:
+                continue
+            text = self._item_text(item)
+            if not text or text not in targets:
+                continue
+            widget = self.names.itemWidget(item)
+            if isinstance(widget, NameRowWidget):
+                if widget.chk_active.isChecked():
+                    widget.chk_active.setChecked(False)
+                    changed = True
+            else:
+                if item.checkState() == QtCore.Qt.Checked:
+                    item.setCheckState(QtCore.Qt.Unchecked)
+                    changed = True
+        return changed
+
     def disable_label(self, label: str) -> bool:
         """Disable a segment by its label (returns True if it was newly disabled)."""
         if not label:
