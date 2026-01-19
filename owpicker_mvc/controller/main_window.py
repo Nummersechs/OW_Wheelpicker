@@ -1,7 +1,4 @@
 from pathlib import Path
-import random
-import json
-import os
 import sys
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -9,13 +6,14 @@ from PySide6 import QtCore, QtGui, QtWidgets
 import config
 import i18n
 from . import mode_manager, spin_service
-from services import hero_ban_merge, persistence, spin_planner, state_store, sync_service
+from services import persistence, state_store, sync_service
 from services.sound import SoundManager
 from utils import flag_icons, theme as theme_util, ui_helpers
 from view.overlay import ResultOverlay
 from view.wheel_view import WheelView
 from view.spin_mode_toggle import SpinModeToggle
 from controller.map_ui import MapUI
+from controller.map_mode import MapModeController
 from controller.open_queue import OpenQueueController
 from controller.player_list_panel import PlayerListPanelController
 from controller.role_mode import RoleModeController
@@ -233,10 +231,11 @@ class MainWindow(QtWidgets.QMainWindow):
         # ----- Map-Mode-Container -----
         self._map_result_text = "–"
         self.map_ui = MapUI(self._state_store, self.language, self.theme, (self.tank, self.dps, self.support))
+        self.map_mode = MapModeController(self)
         self.map_container = self.map_ui.container
         self.map_ui.stateChanged.connect(self._update_spin_all_enabled)
         self.map_ui.stateChanged.connect(self._save_state)
-        self.map_ui.requestSpinCategory.connect(self._spin_map_category)
+        self.map_ui.requestSpinCategory.connect(self.map_mode.spin_category)
         # Kompatibilitäts-Aliase, damit bestehende Logik funktioniert
         self.map_main = self.map_ui.map_main
         self.map_lists = self.map_ui.map_lists
@@ -516,14 +515,6 @@ class MainWindow(QtWidgets.QMainWindow):
             widths[name] = max(1, int(w))
         self._role_base_widths = widths
 
-    def _map_role_base_width(self) -> int:
-        """Maximale Basisbreite der Rollen-Karten als Referenz für Map-Rad."""
-        if not self._role_base_widths:
-            self._capture_role_base_widths()
-        if not self._role_base_widths:
-            return int(2 * getattr(config, "WHEEL_RADIUS", 136) + 80)
-        return max(self._role_base_widths.values())
-
     def _apply_role_width_lock(self, lock: bool):
         """
         Begrenze/entgrenze die Rollenbreiten – in Hero-Ban sperren wir auf die
@@ -769,7 +760,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def spin_all(self):
         """Dreht alle selektierten Räder auf faire Weise."""
         if self.current_mode == "maps":
-            self._spin_map_all()
+            self.map_mode.spin_all()
         elif self.open_queue.is_mode_active():
             spin_service.spin_open_queue(self)
         else:
@@ -782,65 +773,9 @@ class MainWindow(QtWidgets.QMainWindow):
         spin_service.spin_open_queue(self)
     def _spin_single(self, wheel: WheelView, mult: float = 1.0, hero_ban_override: bool = True):
         if self.current_mode == "maps":
-            self._spin_map_single()
+            self.map_mode.spin_single()
         else:
             spin_service.spin_single(self, wheel, mult=mult, hero_ban_override=hero_ban_override)
-
-    def _spin_map_all(self, subset: list[str] | None = None):
-        if self.pending > 0:
-            return
-        # Neuer Spin → finale Anzeige wieder erlauben
-        self._result_sent_this_spin = False
-        combined = self.map_ui.combined_names() if hasattr(self, "map_ui") else []
-        candidates = list(subset) if subset is not None else list(combined)
-        if not candidates:
-            self.summary.setText(i18n.t("map.summary.prompt"))
-            return
-        self._snapshot_results()
-        self.sound.stop_ding()
-        self._stop_all_wheels()
-        self._set_controls_enabled(False)
-        self.summary.setText("")
-        self.pending = 0
-        self.overlay.hide()
-        self.sound.play_spin()
-        duration = int(self.duration.value())
-        self._pending_map_choice = None
-        if hasattr(self, "map_main"):
-            # Wähle Zielname gezielt, falls möglich
-            # Temporär override, falls subset vorgegeben
-            if subset is not None:
-                override_entries = [{"name": n, "subroles": [], "active": True} for n in candidates]
-                self.map_main.set_override_entries(override_entries)
-                self._map_temp_override = True
-            else:
-                self._map_temp_override = False
-            candidates = self.map_main.get_effective_wheel_names(include_disabled=False)
-            if candidates:
-                choice = random.choice(candidates)
-                self._pending_map_choice = choice
-                ok = self.map_main.spin_to_name(choice, duration_ms=duration)
-            else:
-                ok = self.map_main.spin(duration_ms=duration)
-        else:
-            ok = False
-        if ok:
-            self.pending = 1
-        else:
-            self.sound.stop_spin()
-            self._set_controls_enabled(True)
-            self.summary.setText(i18n.t("map.summary.prompt"))
-        self._update_cancel_enabled()
-
-    def _spin_map_single(self):
-        # lokaler Spin im Map-Mode entspricht globalem Spin (nur ein Rad)
-        self._spin_map_all()
-
-    def _spin_map_category(self, category: str):
-        names = []
-        if hasattr(self, "map_ui"):
-            names = self.map_ui.names_for_category(category)
-        self._spin_map_all(subset=names)
 
     def _wheel_finished(self, _name: str):
         # Wenn laut State gar kein Spin aktiv ist, ignorieren wir alte/späte Signale,
@@ -874,7 +809,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._last_results_snapshot = None
                 self._snapshot_mode_results()
                 if getattr(self, "_map_temp_override", False):
-                    self._rebuild_map_wheel()
+                    self.map_mode.rebuild_wheel()
                     self._map_temp_override = False
                 self._set_controls_enabled(True)
                 self._update_cancel_enabled()
@@ -1011,30 +946,6 @@ class MainWindow(QtWidgets.QMainWindow):
             self.volume_slider.setValue(new_val)
             self.volume_slider.blockSignals(False)
             self._on_volume_changed(new_val)
-    def _normalize_entries_for_state(self, defaults) -> list[dict]:
-        """Formatiert eine Eingabeliste in das interne Eintragsformat."""
-        entries: list[dict] = []
-        for item in defaults or []:
-            if isinstance(item, str):
-                name = item.strip()
-                if name:
-                    entries.append({"name": name, "subroles": [], "active": True})
-            elif isinstance(item, dict) and "name" in item:
-                name = str(item.get("name", "")).strip()
-                if not name:
-                    continue
-                subs = item.get("subroles", [])
-                if isinstance(subs, (list, set, tuple)):
-                    subs_list = [str(s) for s in subs if str(s).strip()]
-                else:
-                    subs_list = []
-                entries.append({
-                    "name": name,
-                    "subroles": subs_list,
-                    "active": bool(item.get("active", True)),
-                })
-        return entries
-
     def _load_mode_into_wheels(self, mode: str, hero_ban: bool = False):
         """Wendet den gespeicherten Zustand eines Modus auf die UI an."""
         state = self._state_store.get_mode_state(mode)
@@ -1073,40 +984,6 @@ class MainWindow(QtWidgets.QMainWindow):
         # Modusabhängige Ergebnisse laden
         self._apply_mode_results(self._mode_key())
 
-    # ----- Map-Mode -----
-    def _rebuild_map_wheel(self):
-        if self.current_mode != "maps":
-            return
-        if hasattr(self, "map_ui"):
-            self.map_ui.rebuild_combined()
-        self._update_spin_all_enabled()
-
-    def _load_map_state(self):
-        if hasattr(self, "map_ui"):
-            self.map_ui.load_state()
-            self._rebuild_map_wheel()
-
-    def _capture_map_state(self):
-        if hasattr(self, "map_ui"):
-            self.map_ui.capture_state()
-
-    def _activate_map_mode(self):
-        if hasattr(self, "mode_stack"):
-            self.mode_stack.setCurrentIndex(1)
-        self.hero_ban_active = False
-        self.dps.set_override_entries(None)
-        self.current_mode = "maps"
-        if hasattr(self, "player_list_panel"):
-            self.player_list_panel.hide_panel()
-        self.btn_mode_players.setChecked(False)
-        self.btn_mode_heroes.setChecked(False)
-        self.btn_mode_heroban.setChecked(False)
-        self.btn_mode_maps.setChecked(True)
-        self._load_map_state()
-        self._update_title()
-        self._apply_mode_results(self._mode_key())
-        self._update_spin_all_enabled()
-
     def _activate_role_modes(self):
         if hasattr(self, "mode_stack"):
             self.mode_stack.setCurrentIndex(0)
@@ -1131,13 +1008,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 {"Tank": self.tank, "Damage": self.dps, "Support": self.support},
                 hero_ban_active=self.hero_ban_active,
             )
-            self._capture_map_state()
-            self._activate_map_mode()
+            self.map_mode.capture_state()
+            self.map_mode.activate_mode()
             return
 
         # wenn wir aus dem Map-Mode zurückkommen, zuerst speichern
         if self.current_mode == "maps":
-            self._capture_map_state()
+            self.map_mode.capture_state()
         self._activate_role_modes()
         mode_manager.on_mode_button_clicked(self, target)
 
@@ -1207,10 +1084,6 @@ class MainWindow(QtWidgets.QMainWindow):
         tooltip = i18n.t("theme.toggle.to_light") if is_dark else i18n.t("theme.toggle.to_dark")
         self.btn_theme.setToolTip(tooltip)
 
-    def _retranslate_map_ui(self):
-        if hasattr(self, "map_ui"):
-            self.map_ui.set_language(self.language)
-
     def _apply_language(self):
         i18n.set_language(self.language)
         if hasattr(self, "btn_language"):
@@ -1237,9 +1110,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_title()
         for w in (self.tank, self.dps, self.support):
             w.set_language(self.language)
-        if hasattr(self, "map_ui"):
-            self.map_ui.set_language(self.language)
-        self._retranslate_map_ui()
+        if hasattr(self, "map_mode"):
+            self.map_mode.retranslate_ui()
         if hasattr(self, "overlay"):
             self.overlay.set_language(self.language)
             # Flag auf dem Overlay aktualisieren
@@ -1281,7 +1153,7 @@ class MainWindow(QtWidgets.QMainWindow):
             hero_ban_active=self.hero_ban_active if mode_to_capture == "heroes" else False,
         )
         if getattr(self, "map_lists", None):
-            self._capture_map_state()
+            self.map_mode.capture_state()
         state = self._state_store.to_saved(self.volume_slider.value())
         state["language"] = self.language
         state["theme"] = self.theme

@@ -58,14 +58,17 @@ def spin_all(mw):
         return
     mw._result_sent_this_spin = False
 
-    role_wheels = mw.role_mode.role_wheels() if hasattr(mw, "role_mode") else [
-        ("Tank", mw.tank),
-        ("Damage", mw.dps),
-        ("Support", mw.support),
-    ]
-    active = mw.role_mode.active_wheels() if hasattr(mw, "role_mode") else [
-        (role, wheel) for role, wheel in role_wheels if wheel.is_selected_for_global_spin()
-    ]
+    if hasattr(mw, "role_mode"):
+        active = mw.role_mode.active_wheels()
+    else:
+        role_wheels = [
+            ("Tank", mw.tank),
+            ("Damage", mw.dps),
+            ("Support", mw.support),
+        ]
+        active = [
+            (role, wheel) for role, wheel in role_wheels if wheel.is_selected_for_global_spin()
+        ]
     if not active:
         return
 
@@ -138,14 +141,17 @@ def spin_open_queue(mw):
         return
     mw._result_sent_this_spin = False
 
-    role_wheels = mw.role_mode.role_wheels() if hasattr(mw, "role_mode") else [
-        ("Tank", mw.tank),
-        ("Damage", mw.dps),
-        ("Support", mw.support),
-    ]
-    active = mw.role_mode.active_wheels() if hasattr(mw, "role_mode") else [
-        (role, wheel) for role, wheel in role_wheels if wheel.is_selected_for_global_spin()
-    ]
+    if hasattr(mw, "role_mode"):
+        active = mw.role_mode.active_wheels()
+    else:
+        role_wheels = [
+            ("Tank", mw.tank),
+            ("Damage", mw.dps),
+            ("Support", mw.support),
+        ]
+        active = [
+            (role, wheel) for role, wheel in role_wheels if wheel.is_selected_for_global_spin()
+        ]
     if not active:
         return
 

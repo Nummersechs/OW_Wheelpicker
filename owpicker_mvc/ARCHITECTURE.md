@@ -8,7 +8,12 @@
   - Optional: `wheel_panel.py` für Buttons/Result separat
 - `controller/` – MainWindow + Controller-Helper
   - `main_window.py` (UI/Wiring)
+  - `map_ui.py` (Map-UI kapseln)
+  - `map_mode.py` (Map-Mode Steuerung)
   - `mode_manager.py` (Modus-Wechsel, Hero-Ban-Visuals/Update)
+  - `open_queue.py` (Open-Queue Preview/Override)
+  - `player_list_panel.py` (All-Players Panel)
+  - `role_mode.py` (Role-Mode Auswahl/Enable-Logik)
   - `spin_service.py` (Spin-All/Single, Snapshot/Restore)
 - `model/` – Zustandsmodelle
   - `roles.py` (bestehend)
