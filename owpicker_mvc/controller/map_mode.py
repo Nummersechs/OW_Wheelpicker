@@ -104,3 +104,21 @@ class MapModeController:
         if hasattr(self._mw, "map_ui"):
             names = self._mw.map_ui.names_for_category(category)
         self.spin_all(subset=names)
+
+    def handle_spin_finished(self) -> bool:
+        """Handle end-of-spin UI updates for map mode."""
+        mw = self._mw
+        if mw.current_mode != "maps":
+            return False
+        choice = getattr(mw, "_pending_map_choice", None) or getattr(mw, "_map_result_text", "–")
+        mw._map_result_text = choice
+        mw._update_summary_from_results()
+        mw.overlay.show_message(i18n.t("overlay.map_title"), [choice, "", ""])
+        mw._last_results_snapshot = None
+        mw._snapshot_mode_results()
+        if getattr(mw, "_map_temp_override", False):
+            self.rebuild_wheel()
+            mw._map_temp_override = False
+        mw._set_controls_enabled(True)
+        mw._update_cancel_enabled()
+        return True

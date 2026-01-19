@@ -13,7 +13,6 @@ TRANSLATIONS_DE = {
     "volume.slider_tooltip": "Soundeffekte-Lautstärke",
     # Controls
     "controls.spin_all": "🎰 Drehen",
-    "controls.spin_open_queue": "🎲 Open Queue ({count})",
     "controls.spin_mode_role": "Role",
     "controls.spin_mode_open": "Open {count}",
     "controls.anim_duration": "Animationsdauer:",
@@ -22,8 +21,6 @@ TRANSLATIONS_DE = {
     # Player list
     "players.list_button": "Alle Spieler",
     "players.list_title": "Alle Spieler",
-    "players.list_apply": "Übernehmen",
-    "players.list_cancel": "Abbrechen",
     # Wheel / Names
     "wheel.spin_role": "🔁 Diese Rolle drehen",
     "wheel.spin_map": "🔁 Karte drehen",

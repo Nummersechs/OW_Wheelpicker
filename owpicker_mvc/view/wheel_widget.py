@@ -66,14 +66,14 @@ class WheelWidget(QtWidgets.QGraphicsView):
         super().resizeEvent(event)
         self._refit_view()
         if hasattr(self, "wheel") and hasattr(self.wheel, "_ensure_cache"):
-            self.wheel._ensure_cache(force=True)
+            self.wheel._ensure_cache(force=False)
 
     def showEvent(self, event):
         super().showEvent(event)
         # Sobald der View sichtbar ist, Cache/Geometrie auf finale Größe bringen
         self._refit_view()
         if hasattr(self, "wheel") and hasattr(self.wheel, "_ensure_cache"):
-            self.wheel._ensure_cache(force=True)
+            self.wheel._ensure_cache(force=False)
 
     def _update_wheel_radius(self):
         if not hasattr(self, "wheel") or not hasattr(self, "scene"):

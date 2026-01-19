@@ -14,6 +14,7 @@
   - `open_queue.py` (Open-Queue Preview/Override)
   - `player_list_panel.py` (All-Players Panel)
   - `role_mode.py` (Role-Mode Auswahl/Enable-Logik)
+  - `state_sync.py` (Saved-State + Online-Sync)
   - `spin_service.py` (Spin-All/Single, Snapshot/Restore)
 - `model/` – Zustandsmodelle
   - `roles.py` (bestehend)

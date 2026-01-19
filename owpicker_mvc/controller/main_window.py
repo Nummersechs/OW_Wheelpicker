@@ -6,7 +6,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 import config
 import i18n
 from . import mode_manager, spin_service
-from services import persistence, state_store, sync_service
+from services import persistence, state_store
 from services.sound import SoundManager
 from utils import flag_icons, theme as theme_util, ui_helpers
 from view.overlay import ResultOverlay
@@ -17,6 +17,7 @@ from controller.map_mode import MapModeController
 from controller.open_queue import OpenQueueController
 from controller.player_list_panel import PlayerListPanelController
 from controller.role_mode import RoleModeController
+from controller.state_sync import StateSyncController
 from view import style_helpers
 
 # Fallback für "unbegrenzt" bei Widgetbreiten/Höhen (PySide6 exportiert QWIDGETSIZE_MAX nicht immer)
@@ -29,7 +30,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._asset_dir = self._asset_base_dir()
         self._state_dir = self._state_base_dir()
         self._state_file = self._get_state_file()
-        saved = self._load_saved_state()
+        saved = StateSyncController.load_saved_state(self._state_file)
         default_lang = getattr(config, "DEFAULT_LANGUAGE", "en")
         self.language = saved.get("language", default_lang) if isinstance(saved, dict) else default_lang
         i18n.set_language(self.language)
@@ -51,21 +52,37 @@ class MainWindow(QtWidgets.QMainWindow):
         self._role_base_widths: dict[str, int] = {}
         self._state_store = state_store.ModeStateStore.from_saved(saved)
         self._mode_results: dict[str, dict[str, str]] = {}
-        self._pending_sync_payload: list[dict] | None = None
+        self.state_sync = StateSyncController(self, self._state_file)
 
         # Timer für sanftere Sync-/Tooltip-Operationen
-        self._sync_timer = QtCore.QTimer(self)
-        self._sync_timer.setSingleShot(True)
-        self._sync_timer.timeout.connect(self._flush_role_sync)
         self._tooltip_refresh_timer = QtCore.QTimer(self)
         self._tooltip_refresh_timer.setSingleShot(True)
         self._tooltip_refresh_timer.timeout.connect(self._run_tooltip_cache_refresh)
         self._tooltip_refresh_step = 80
+        central, root = self._build_root()
+        self._build_header(root, saved)
+        self._build_mode_switcher(root)
+        role_container = self._build_role_container()
+        self._build_map_container()
+        self._build_mode_stack(root, role_container)
+        self._apply_initial_mode_state()
+        self._wire_spin_signals()
+        self._build_controls(root)
+        self._build_summary(root)
+        self._init_spin_state()
+        self._build_overlay(central)
+        self._install_event_filters()
+        self._start_overlay_warmup()
+        self._connect_state_signals()
+        self._finalize_startup()
 
+    def _build_root(self) -> tuple[QtWidgets.QWidget, QtWidgets.QVBoxLayout]:
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
         root = QtWidgets.QVBoxLayout(central)
+        return central, root
 
+    def _build_header(self, root: QtWidgets.QVBoxLayout, saved: dict) -> None:
         self.title = QtWidgets.QLabel("")
         self.title.setAlignment(QtCore.Qt.AlignCenter)
         self.title.setStyleSheet("font-size:22px; font-weight:700; margin:8px 0 2px 0;")
@@ -126,6 +143,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._on_volume_changed(self.volume_slider.value())
         self._last_volume_before_mute = self.volume_slider.value()
 
+    def _build_mode_switcher(self, root: QtWidgets.QVBoxLayout) -> None:
         # Modus-Schalter (Spieler / Helden / Hero-Ban / Maps)
         self.btn_mode_players = QtWidgets.QPushButton(i18n.t("mode.players"))
         self.btn_mode_players.setCheckable(True)
@@ -177,6 +195,7 @@ class MainWindow(QtWidgets.QMainWindow):
         mode_row.addStretch(1)
         root.addLayout(mode_row)
 
+    def _build_role_container(self) -> QtWidgets.QWidget:
         # ----- Rolle/Grid-Container (Players/Heroes/Hero-Ban) -----
         role_container = QtWidgets.QWidget()
         self.role_container = role_container
@@ -227,26 +246,29 @@ class MainWindow(QtWidgets.QMainWindow):
         grid.addWidget(self.btn_all_players, 1, 0, QtCore.Qt.AlignLeft)
         # Basisbreiten nach dem ersten Layout ermitteln
         QtCore.QTimer.singleShot(0, self._capture_role_base_widths)
+        return role_container
 
+    def _build_map_container(self) -> None:
         # ----- Map-Mode-Container -----
         self._map_result_text = "–"
         self.map_ui = MapUI(self._state_store, self.language, self.theme, (self.tank, self.dps, self.support))
         self.map_mode = MapModeController(self)
         self.map_container = self.map_ui.container
         self.map_ui.stateChanged.connect(self._update_spin_all_enabled)
-        self.map_ui.stateChanged.connect(self._save_state)
+        self.map_ui.stateChanged.connect(self.state_sync.save_state)
         self.map_ui.requestSpinCategory.connect(self.map_mode.spin_category)
         # Kompatibilitäts-Aliase, damit bestehende Logik funktioniert
         self.map_main = self.map_ui.map_main
         self.map_lists = self.map_ui.map_lists
-        self.map_categories = self.map_ui.map_categories
 
+    def _build_mode_stack(self, root: QtWidgets.QVBoxLayout, role_container: QtWidgets.QWidget) -> None:
         # ----- Stacked Content -----
         self.mode_stack = QtWidgets.QStackedLayout()
         self.mode_stack.addWidget(role_container)  # index 0
         self.mode_stack.addWidget(self.map_container)  # index 1
         root.addLayout(self.mode_stack, 1)
 
+    def _apply_initial_mode_state(self) -> None:
         # Aktiven Modus vollständig anwenden (Einträge, Toggles etc.)
         self.btn_mode_players.setChecked(self.current_mode == "players")
         self.btn_mode_heroes.setChecked(self.current_mode == "heroes")
@@ -254,11 +276,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_mode_button_styles()
         self._load_mode_into_wheels(self.current_mode)
 
+    def _wire_spin_signals(self) -> None:
         # Spin-Signale
         self.tank.request_spin.connect(lambda: self._spin_single(self.tank, 1.00))
         self.dps.request_spin.connect(lambda: self._spin_single(self.dps, 1.10))
         self.support.request_spin.connect(lambda: self._spin_single(self.support, 1.20))
 
+    def _build_controls(self, root: QtWidgets.QVBoxLayout) -> None:
         # --- Controls unten wie gehabt ---
         controls = QtWidgets.QHBoxLayout()
         root.addLayout(controls)
@@ -288,11 +312,13 @@ class MainWindow(QtWidgets.QMainWindow):
         controls.addWidget(self.btn_cancel_spin)
         controls.addStretch(1)
 
+    def _build_summary(self, root: QtWidgets.QVBoxLayout) -> None:
         self.summary = QtWidgets.QLabel("")
         self.summary.setAlignment(QtCore.Qt.AlignCenter)
         self.summary.setStyleSheet("font-size:15px; color:#333; margin:10px 0 6px 0;")
         root.addWidget(self.summary)
 
+    def _init_spin_state(self) -> None:
         self.pending = 0
         self._result_sent_this_spin = False
         self._last_results_snapshot: dict | None = None
@@ -302,44 +328,50 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "map_main"):
             self.map_main.spun.connect(self._wheel_finished)
 
+    def _build_overlay(self, central: QtWidgets.QWidget) -> None:
         self.overlay = ResultOverlay(parent=central)
         self.overlay.hide()
         self.overlay.closed.connect(self._on_overlay_closed)
         self.overlay.languageToggleRequested.connect(self._toggle_language)
         self.overlay.disableResultsRequested.connect(self._on_overlay_disable_results)
-        
+
         self.online_mode = False  # Standard
         self.overlay.modeChosen.connect(self._on_mode_chosen)
         self._pending_mode_choice: bool | None = None
         self._pending_language_toggle: str | None = None
         self._warmup_active = False
+
+    def _install_event_filters(self) -> None:
         self.installEventFilter(self)
         app = QtWidgets.QApplication.instance()
         if app:
             app.installEventFilter(self)
 
+    def _start_overlay_warmup(self) -> None:
         # Direkt beim Start Modus wählen lassen
         self._set_controls_enabled(False)
         self.overlay.show_online_choice()
         # Buttons vorerst gesperrt lassen, erst nach Tooltip-Warmup freigeben
         QtCore.QTimer.singleShot(0, self._warmup_tooltips_initial)
 
+    def _connect_state_signals(self) -> None:
         # JETZT: Save-Hooks anschließen
         for w in (self.tank, self.dps, self.support):
-            w.stateChanged.connect(self._save_state)
+            w.stateChanged.connect(self.state_sync.save_state)
             w.btn_include_in_all.toggled.connect(self._update_spin_all_enabled)
             w.stateChanged.connect(self._update_spin_all_enabled)
             w.stateChanged.connect(self._on_wheel_state_changed)
             w.btn_include_in_all.toggled.connect(self._on_role_include_toggled)
         if hasattr(self, "map_lists"):
             for w in self.map_lists.values():
-                w.stateChanged.connect(self._save_state)
-                w.btn_include_in_all.toggled.connect(self._save_state)
+                w.stateChanged.connect(self.state_sync.save_state)
+                w.btn_include_in_all.toggled.connect(self.state_sync.save_state)
                 w.btn_include_in_all.toggled.connect(self._update_spin_all_enabled)
                 # Sicherstellen, dass Buttons aktiv bleiben (nicht wie disabled im UI aussehen)
                 w.btn_local_spin.setEnabled(True)
                 w.btn_include_in_all.setEnabled(True)
 
+    def _finalize_startup(self) -> None:
         # jetzt darf gespeichert werden
         self._restoring_state = False
 
@@ -700,16 +732,14 @@ class MainWindow(QtWidgets.QMainWindow):
         QtCore.QTimer.singleShot(total_delay, lambda: (self._set_tooltips_ready(True), self._reset_hover_cache_under_cursor()))
 
     def _reset_hover_cache_under_cursor(self):
-        """Simuliert einen Hover unter dem aktuellen Cursor, um Tooltip-Cache zu aktualisieren."""
+        """Stellt sicher, dass Tooltip-Caches vorhanden sind, ohne Voll-Rebuild zu erzwingen."""
         for w in (self.tank, self.dps, self.support, getattr(self, "map_main", None)):
             if not w:
                 continue
             wheel = getattr(getattr(w, "view", None), "wheel", None)
             if wheel and hasattr(wheel, "_ensure_cache") and hasattr(wheel, "_needs_tooltip_runtime"):
-                # Cache leeren und neu aufbauen
                 try:
-                    wheel._cached = None
-                    wheel._ensure_cache(force=True)
+                    wheel._ensure_cache(force=False)
                 except Exception:
                     pass
 
@@ -766,11 +796,6 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             spin_service.spin_all(self)
 
-    def spin_open_queue(self):
-        """Zieht Spieler aus allen aktiven Listen ohne Rollenbindung."""
-        if self.current_mode == "maps":
-            return
-        spin_service.spin_open_queue(self)
     def _spin_single(self, wheel: WheelView, mult: float = 1.0, hero_ban_override: bool = True):
         if self.current_mode == "maps":
             self.map_mode.spin_single()
@@ -801,18 +826,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._last_results_snapshot = None
                 self._update_cancel_enabled()
                 return
-            if self.current_mode == "maps":
-                choice = getattr(self, "_pending_map_choice", None) or getattr(self, "_map_result_text", "–")
-                self._map_result_text = choice
-                self._update_summary_from_results()
-                self.overlay.show_message(i18n.t("overlay.map_title"), [choice, "", ""])
-                self._last_results_snapshot = None
-                self._snapshot_mode_results()
-                if getattr(self, "_map_temp_override", False):
-                    self.map_mode.rebuild_wheel()
-                    self._map_temp_override = False
-                self._set_controls_enabled(True)
-                self._update_cancel_enabled()
+            if self.map_mode.handle_spin_finished():
                 return
             else:
                 t = self.tank.get_result_value() or "–"
@@ -823,7 +837,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.overlay.show_result(t, d, s)
 
                 # Nur noch EIN Request pro abgeschlossenem Spin
-                self._send_spin_result_to_server(t, d, s)
+                self.state_sync.send_spin_result(t, d, s)
             self._last_results_snapshot = None
             # Ergebnisse für den aktuellen Modus merken
             self._snapshot_mode_results()
@@ -916,7 +930,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Wenn per Slider verändert, aktuell nicht mehr stumm gespeichert
         self._last_volume_before_mute = value if value > 0 else self._last_volume_before_mute
         if not getattr(self, "_restoring_state", False):
-            self._save_state()
+            self.state_sync.save_state()
     def _update_volume_icon(self, value: int):
         if value <= 0:
             icon = "🔇"
@@ -1047,7 +1061,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.overlay.set_choice_enabled(True)
                 self.overlay.set_hover_blocked(False)
         if not getattr(self, "_restoring_state", False):
-            self._save_state()
+            self.state_sync.save_state()
 
     def _toggle_language(self):
         """Toggle between German and English via the single flag button."""
@@ -1073,7 +1087,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.theme = "dark" if getattr(self, "theme", "light") == "light" else "light"
         self._apply_theme()
         if not getattr(self, "_restoring_state", False):
-            self._save_state()
+            self.state_sync.save_state()
 
     def _update_theme_button_label(self):
         """Update text/tooltip of the theme toggle."""
@@ -1120,45 +1134,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_spin_mode_ui()
         self._update_summary_from_results()
 
-    def _load_saved_state(self) -> dict:
-        """
-        Lädt den gespeicherten Zustand aus saved_state.json, falls vorhanden.
-        Struktur:
-        {
-          "players": {"Tank": {...}, "Damage": {...}, "Support": {...}},
-          "heroes":  {"Tank": {...}, "Damage": {...}, "Support": {...}},
-          "maps": {...},
-          "volume": int,
-          "language": "de" | "en",   # fallback ist Englisch
-          "theme": "light" | "dark"
-        }
-        """
-        data = persistence.load_state(self._state_file)
-        if isinstance(data, dict):
-            return data
-        return {}
-
-    def _gather_state(self) -> dict:
-        """
-        Liest den aktuellen Zustand beider Modi aus.
-        """
-        mode_to_capture = self.current_mode
-        if mode_to_capture == "maps":
-            mode_to_capture = getattr(self, "last_non_hero_mode", "players") or "players"
-            if mode_to_capture not in ("players", "heroes"):
-                mode_to_capture = "players"
-        self._state_store.capture_mode_from_wheels(
-            mode_to_capture,
-            {"Tank": self.tank, "Damage": self.dps, "Support": self.support},
-            hero_ban_active=self.hero_ban_active if mode_to_capture == "heroes" else False,
-        )
-        if getattr(self, "map_lists", None):
-            self.map_mode.capture_state()
-        state = self._state_store.to_saved(self.volume_slider.value())
-        state["language"] = self.language
-        state["theme"] = self.theme
-        return state
-
     def _update_hero_ban_wheel(self):
         """Delegiert an den Mode-Manager."""
         mode_manager.update_hero_ban_wheel(self)
@@ -1178,18 +1153,6 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self._hero_ban_override_role = None
         self._update_hero_ban_wheel()
-
-    def _save_state(self):
-        """
-        Speichert den aktuellen Zustand in saved_state.json neben dem Script/der EXE.
-        """
-        if getattr(self, "_restoring_state", False):
-            return
-        state = self._gather_state()
-        persistence.save_state(self._state_file, state)
-        self._sync_all_roles_to_server()
-        if self.hero_ban_active:
-            self._update_hero_ban_wheel()
     
     @QtCore.Slot(bool)
     def _on_mode_chosen(self, online: bool):
@@ -1214,45 +1177,4 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             config.debug_print("Offline-Modus aktiv.")
         # Sync ggf. neu einplanen oder abbrechen
-        self._sync_all_roles_to_server()
-            
-    def _send_spin_result_to_server(self, tank: str, damage: str, support: str):
-        # Offline? → gar nicht erst versuchen zu senden
-        if not getattr(self, "online_mode", False):
-            config.debug_print("Spin-Result: Offline-Modus – kein Senden.")
-            return
-        pair_modes = {
-            "Tank": getattr(self.tank, "pair_mode", False),
-            "Damage": getattr(self.dps, "pair_mode", False),
-            "Support": getattr(self.support, "pair_mode", False),
-        }
-        sync_service.send_spin_result(tank, damage, support, pair_modes)
-        
-    def _sync_all_roles_to_server(self):
-        if not getattr(self, "online_mode", False):
-            config.debug_print("Sync übersprungen: Offline-Modus.")
-            self._pending_sync_payload = None
-            if hasattr(self, "_sync_timer") and self._sync_timer.isActive():
-                self._sync_timer.stop()
-            return
-        payload = [
-            {"role": "Tank", "names": self.tank.get_current_names()},
-            {"role": "Damage", "names": self.dps.get_current_names()},
-            {"role": "Support", "names": self.support.get_current_names()},
-        ]
-        self._pending_sync_payload = payload
-        if hasattr(self, "_sync_timer") and self._sync_timer is not None:
-            # kurze Verzögerung, um schnelle State-Änderungen zu bündeln
-            self._sync_timer.start(200)
-        else:
-            sync_service.sync_roles(payload)
-
-    def _flush_role_sync(self):
-        """Sendet den letzten vorbereiteten Sync-Payload (debounced)."""
-        if not getattr(self, "online_mode", False):
-            self._pending_sync_payload = None
-            return
-        payload = getattr(self, "_pending_sync_payload", None)
-        self._pending_sync_payload = None
-        if payload:
-            sync_service.sync_roles(payload)
+        self.state_sync.sync_all_roles()

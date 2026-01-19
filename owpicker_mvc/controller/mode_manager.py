@@ -147,4 +147,4 @@ def on_mode_button_clicked(mw, target: str):
     mw.btn_mode_heroes.setChecked(target == "heroes")
     mw.btn_mode_heroban.setChecked(False)
     mw._load_mode_into_wheels(target, hero_ban=False)
-    mw._save_state()
+    mw.state_sync.save_state()
