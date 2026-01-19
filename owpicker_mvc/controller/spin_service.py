@@ -4,8 +4,46 @@ from __future__ import annotations
 
 import random
 from services import spin_planner
-import config
 import i18n
+
+
+def _show_roles_prompt(mw) -> None:
+    mw.summary.setText(i18n.t("summary.roles_prompt"))
+
+
+def _show_not_enough(mw) -> None:
+    _show_roles_prompt(mw)
+    mw.overlay.show_message(
+        i18n.t("overlay.not_enough_title"),
+        [i18n.t("overlay.not_enough_line1"), i18n.t("overlay.not_enough_line2"), ""],
+    )
+
+
+def _show_team_impossible(mw) -> None:
+    mw.sound.stop_spin()
+    mw.sound.stop_ding()
+    mw._set_controls_enabled(True)
+    mw.pending = 0
+    mw.summary.setText(i18n.t("summary.team_impossible"))
+    mw.overlay.show_message(
+        i18n.t("overlay.team_impossible_title"),
+        [
+            i18n.t("overlay.team_impossible_line1"),
+            i18n.t("overlay.team_impossible_line2"),
+            "",
+        ],
+    )
+
+
+def _labels_to_candidates(labels: list[str]) -> list[tuple[str, list[str]]]:
+    role_candidates: list[tuple[str, list[str]]] = []
+    for lbl in labels:
+        parts = [p.strip() for p in lbl.split("+")]
+        parts = [p for p in parts if p]
+        if not parts:
+            continue
+        role_candidates.append((lbl, parts))
+    return role_candidates
 
 
 def spin_all(mw):
@@ -20,12 +58,12 @@ def spin_all(mw):
         return
     mw._result_sent_this_spin = False
 
-    role_wheels = [
+    role_wheels = mw.role_mode.role_wheels() if hasattr(mw, "role_mode") else [
         ("Tank", mw.tank),
         ("Damage", mw.dps),
         ("Support", mw.support),
     ]
-    active = [
+    active = mw.role_mode.active_wheels() if hasattr(mw, "role_mode") else [
         (role, wheel) for role, wheel in role_wheels if wheel.is_selected_for_global_spin()
     ]
     if not active:
@@ -42,49 +80,25 @@ def spin_all(mw):
         labels = wheel._effective_names_from(base_entries, include_disabled=False)
         labels = [lbl.strip() for lbl in labels if lbl and lbl.strip()]
 
-        role_candidates = []
         if not labels:
             if hasattr(wheel, "set_result_too_few"):
                 wheel.set_result_too_few()
             missing_roles = True
-            all_candidates_per_role.append(role_candidates)
+            all_candidates_per_role.append([])
             continue
-        for lbl in labels:
-            parts = [p.strip() for p in lbl.split("+")]
-            parts = [p for p in parts if p]
-            if not parts:
-                continue
-            role_candidates.append((lbl, parts))
-        all_candidates_per_role.append(role_candidates)
+        all_candidates_per_role.append(_labels_to_candidates(labels))
 
     if missing_roles:
-        mw.summary.setText(i18n.t("summary.roles_prompt"))
-        mw.overlay.show_message(
-            i18n.t("overlay.not_enough_title"),
-            [i18n.t("overlay.not_enough_line1"), i18n.t("overlay.not_enough_line2"), ""],
-        )
+        _show_not_enough(mw)
         return
 
     if all(not cands for cands in all_candidates_per_role):
-        mw.summary.setText(i18n.t("summary.roles_prompt"))
+        _show_roles_prompt(mw)
         return
 
     assigned_for_role = spin_planner.plan_assignments(all_candidates_per_role)
     if not assigned_for_role:
-        mw.sound.stop_spin()
-        mw.sound.stop_ding()
-        mw._set_controls_enabled(True)
-        mw.pending = 0
-
-        mw.summary.setText(i18n.t("summary.team_impossible"))
-        mw.overlay.show_message(
-            i18n.t("overlay.team_impossible_title"),
-            [
-                i18n.t("overlay.team_impossible_line1"),
-                i18n.t("overlay.team_impossible_line2"),
-                "",
-            ],
-        )
+        _show_team_impossible(mw)
         return
 
     mw.sound.stop_ding()
@@ -113,7 +127,7 @@ def spin_all(mw):
     if mw.pending == 0:
         mw.sound.stop_spin()
         mw._set_controls_enabled(True)
-        mw.summary.setText(i18n.t("summary.roles_prompt"))
+        _show_roles_prompt(mw)
     mw._update_cancel_enabled()
 
 
@@ -124,12 +138,12 @@ def spin_open_queue(mw):
         return
     mw._result_sent_this_spin = False
 
-    role_wheels = [
+    role_wheels = mw.role_mode.role_wheels() if hasattr(mw, "role_mode") else [
         ("Tank", mw.tank),
         ("Damage", mw.dps),
         ("Support", mw.support),
     ]
-    active = [
+    active = mw.role_mode.active_wheels() if hasattr(mw, "role_mode") else [
         (role, wheel) for role, wheel in role_wheels if wheel.is_selected_for_global_spin()
     ]
     if not active:
@@ -146,11 +160,7 @@ def spin_open_queue(mw):
 
     total_slots = sum(2 if wheel.pair_mode else 1 for _role, wheel in active)
     if not combined_names or total_slots <= 0 or len(combined_names) < total_slots:
-        mw.summary.setText(i18n.t("summary.roles_prompt"))
-        mw.overlay.show_message(
-            i18n.t("overlay.not_enough_title"),
-            [i18n.t("overlay.not_enough_line1"), i18n.t("overlay.not_enough_line2"), ""],
-        )
+        _show_not_enough(mw)
         return
 
     all_candidates_per_role = []
@@ -169,49 +179,25 @@ def spin_open_queue(mw):
         if disabled_labels:
             labels = [lbl for lbl in labels if lbl not in disabled_labels]
 
-        role_candidates = []
         if not labels:
             if hasattr(wheel, "set_result_too_few"):
                 wheel.set_result_too_few()
             missing_roles = True
-            all_candidates_per_role.append(role_candidates)
+            all_candidates_per_role.append([])
             continue
-        for lbl in labels:
-            parts = [p.strip() for p in lbl.split("+")]
-            parts = [p for p in parts if p]
-            if not parts:
-                continue
-            role_candidates.append((lbl, parts))
-        all_candidates_per_role.append(role_candidates)
+        all_candidates_per_role.append(_labels_to_candidates(labels))
 
     if missing_roles:
-        mw.summary.setText(i18n.t("summary.roles_prompt"))
-        mw.overlay.show_message(
-            i18n.t("overlay.not_enough_title"),
-            [i18n.t("overlay.not_enough_line1"), i18n.t("overlay.not_enough_line2"), ""],
-        )
+        _show_not_enough(mw)
         return
 
     if all(not cands for cands in all_candidates_per_role):
-        mw.summary.setText(i18n.t("summary.roles_prompt"))
+        _show_roles_prompt(mw)
         return
 
     assigned_for_role = spin_planner.plan_assignments(all_candidates_per_role)
     if not assigned_for_role:
-        mw.sound.stop_spin()
-        mw.sound.stop_ding()
-        mw._set_controls_enabled(True)
-        mw.pending = 0
-
-        mw.summary.setText(i18n.t("summary.team_impossible"))
-        mw.overlay.show_message(
-            i18n.t("overlay.team_impossible_title"),
-            [
-                i18n.t("overlay.team_impossible_line1"),
-                i18n.t("overlay.team_impossible_line2"),
-                "",
-            ],
-        )
+        _show_team_impossible(mw)
         return
 
     mw._snapshot_results()
@@ -226,17 +212,7 @@ def spin_open_queue(mw):
     mw.overlay.hide()
     mw.sound.play_spin()
 
-    mw._open_queue_restore = []
-    for _role, wheel in active:
-        mw._open_queue_restore.append(
-            {
-                "wheel": wheel,
-                "override_entries": getattr(wheel, "_override_entries", None),
-                "disabled_indices": set(getattr(wheel, "_disabled_indices", set())),
-            }
-        )
-        wheel.set_override_entries(entries_by_wheel[wheel])
-    mw._open_queue_active = True
+    mw.open_queue.begin_spin_override(entries_by_wheel)
 
     duration = mw.duration.value()
     multipliers = [0.85, 1.00, 1.35]
@@ -256,9 +232,9 @@ def spin_open_queue(mw):
     if mw.pending == 0:
         mw.sound.stop_spin()
         mw._set_controls_enabled(True)
-        mw.summary.setText(i18n.t("summary.roles_prompt"))
-        if getattr(mw, "_open_queue_active", False):
-            mw._restore_open_queue_overrides()
+        _show_roles_prompt(mw)
+        if mw.open_queue.spin_active():
+            mw.open_queue.restore_spin_overrides()
     mw._update_cancel_enabled()
 
 

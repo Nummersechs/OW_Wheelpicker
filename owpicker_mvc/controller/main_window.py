@@ -14,9 +14,11 @@ from services.sound import SoundManager
 from utils import flag_icons, theme as theme_util, ui_helpers
 from view.overlay import ResultOverlay
 from view.wheel_view import WheelView
-from view.name_list import NamesListPanel
 from view.spin_mode_toggle import SpinModeToggle
 from controller.map_ui import MapUI
+from controller.open_queue import OpenQueueController
+from controller.player_list_panel import PlayerListPanelController
+from controller.role_mode import RoleModeController
 from view import style_helpers
 
 # Fallback für "unbegrenzt" bei Widgetbreiten/Höhen (PySide6 exportiert QWIDGETSIZE_MAX nicht immer)
@@ -214,6 +216,7 @@ class MainWindow(QtWidgets.QMainWindow):
             allow_pair_toggle=True,
             subrole_labels=["MS", "FS"],
         )
+        self.role_mode = RoleModeController(self)
 
         grid.addWidget(self.tank, 0, 0)
         grid.addWidget(self.dps, 0, 1)
@@ -221,7 +224,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_all_players = QtWidgets.QPushButton(i18n.t("players.list_button"))
         ui_helpers.set_fixed_width_from_translations([self.btn_all_players], ["players.list_button"], padding=40)
         self.btn_all_players.setFixedHeight(36)
-        self.btn_all_players.clicked.connect(self._show_all_players_panel)
+        self.player_list_panel = PlayerListPanelController(self, self.btn_all_players)
+        self.btn_all_players.clicked.connect(self.player_list_panel.toggle_panel)
         grid.addWidget(self.btn_all_players, 1, 0, QtCore.Qt.AlignLeft)
         # Basisbreiten nach dem ersten Layout ermitteln
         QtCore.QTimer.singleShot(0, self._capture_role_base_widths)
@@ -293,10 +297,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pending = 0
         self._result_sent_this_spin = False
         self._last_results_snapshot: dict | None = None
-        self._open_queue_active = False
-        self._open_queue_restore: list[dict] = []
-        self._open_queue_view_restore: dict[WheelView, dict] = {}
-        self._open_queue_preview_busy = False
+        self.open_queue = OpenQueueController(self)
         for w in (self.tank, self.dps, self.support):
             w.spun.connect(self._wheel_finished)
         if hasattr(self, "map_main"):
@@ -431,7 +432,8 @@ class MainWindow(QtWidgets.QMainWindow):
         ):
             self._refresh_tooltips_after_focus()
         if event.type() == QtCore.QEvent.MouseButtonPress:
-            self._maybe_close_player_list_panel(obj, event)
+            if hasattr(self, "player_list_panel"):
+                self.player_list_panel.maybe_close_on_click(obj, event)
         return super().eventFilter(obj, event)
 
     def _refresh_tooltips_after_focus(self):
@@ -441,33 +443,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if not getattr(self, "_warmup_active", False):
             self._set_tooltips_ready(True)
 
-    def _maybe_close_player_list_panel(self, obj, event) -> None:
-        panel = getattr(self, "_player_list_panel", None)
-        if not panel or not panel.isVisible():
-            return
-        if hasattr(event, "button") and event.button() != QtCore.Qt.LeftButton:
-            return
-        if isinstance(obj, QtWidgets.QWidget):
-            if obj is panel or panel.isAncestorOf(obj):
-                return
-            btn = getattr(self, "btn_all_players", None)
-            if btn and (obj is btn or btn.isAncestorOf(obj)):
-                return
-        if hasattr(event, "globalPosition"):
-            pos = event.globalPosition().toPoint()
-        elif hasattr(event, "globalPos"):
-            pos = event.globalPos()
-        else:
-            return
-        panel_rect = QtCore.QRect(panel.mapToGlobal(QtCore.QPoint(0, 0)), panel.size())
-        if panel_rect.contains(pos):
-            return
-        btn = getattr(self, "btn_all_players", None)
-        if btn:
-            btn_rect = QtCore.QRect(btn.mapToGlobal(QtCore.QPoint(0, 0)), btn.size())
-            if btn_rect.contains(pos):
-                return
-        panel.hide()
 
     def _apply_theme(self):
         """Apply the selected light/dark theme without freezing the UI."""
@@ -491,7 +466,8 @@ class MainWindow(QtWidgets.QMainWindow):
             style_helpers.style_primary_button(self.btn_all_players, theme)
         if hasattr(self, "btn_cancel_spin"):
             style_helpers.style_danger_button(self.btn_cancel_spin, theme)
-        self._apply_player_list_panel_theme()
+        if hasattr(self, "player_list_panel"):
+            self.player_list_panel.apply_theme()
         if hasattr(self, "overlay"):
             self.overlay.apply_theme(theme, tool_style)
 
@@ -566,8 +542,8 @@ class MainWindow(QtWidgets.QMainWindow):
         super().resizeEvent(e); 
         if self.overlay and self.centralWidget():
             self.overlay.setGeometry(self.centralWidget().rect())
-        if getattr(self, "_player_list_panel", None) and self._player_list_panel.isVisible():
-            self._position_player_list_panel()
+        if hasattr(self, "player_list_panel"):
+            self.player_list_panel.on_resize()
 
     def _update_spin_all_enabled(self):
         """Aktiviere/Deaktiviere den 'Drehen'-Button je nach Auswahl."""
@@ -581,382 +557,34 @@ class MainWindow(QtWidgets.QMainWindow):
             any_selected = any(w.btn_include_in_all.isChecked() for w in getattr(self, "map_lists", {}).values())
             has_candidates = bool(self.map_ui.combined_names() if hasattr(self, "map_ui") else [])
             self.btn_spin_all.setEnabled(any_selected and has_candidates and self.pending == 0)
-        elif self._is_open_queue_mode():
-            slots = self._open_queue_slots()
-            open_names = self._open_queue_names()
+        elif self.open_queue.is_mode_active():
+            slots = self.open_queue.slots()
+            open_names = self.open_queue.names()
             has_candidates = slots > 0 and len(open_names) >= slots
             self.btn_spin_all.setEnabled(has_candidates and self.pending == 0)
         else:
-            any_selected = any(
-                w.is_selected_for_global_spin()
-                for w in (self.tank, self.dps, self.support)
-            )
             # Nur aktiv, wenn allgemein erlaubt UND mindestens ein Rad ausgewählt
-            self.btn_spin_all.setEnabled(any_selected and self.pending == 0)
+            self.btn_spin_all.setEnabled(self.role_mode.can_spin_all())
         self._update_spin_mode_ui()
-        self._update_player_list_button()
-        self._apply_open_queue_preview(open_names)
+        if hasattr(self, "player_list_panel"):
+            self.player_list_panel.update_button()
+        self.open_queue.apply_preview(open_names)
         self._update_cancel_enabled()
-
-    def _spin_mode_allowed(self) -> bool:
-        return self.current_mode in ("players", "heroes") and not getattr(self, "hero_ban_active", False)
-
-    def _is_open_queue_mode(self) -> bool:
-        if not self._spin_mode_allowed():
-            return False
-        return bool(getattr(self, "spin_mode_toggle", None) and self.spin_mode_toggle.value() == 1)
-
-    def _open_queue_wheels(self) -> list[WheelView]:
-        return [w for w in (self.tank, self.dps, self.support) if w.is_selected_for_global_spin()]
-
-    def _open_queue_names(self) -> list[str]:
-        names: list[str] = []
-        seen: set[str] = set()
-        for wheel in self._open_queue_wheels():
-            disabled_labels = set(getattr(wheel, "_disabled_labels", set()) or set())
-            for entry in wheel._active_entries():
-                name = entry.get("name", "").strip()
-                if not name or name in disabled_labels:
-                    continue
-                if name not in seen:
-                    seen.add(name)
-                    names.append(name)
-        return names
-
-    def _open_queue_slots(self) -> int:
-        return sum(2 if w.pair_mode else 1 for w in self._open_queue_wheels())
-
-    def _open_queue_view_key(self, wheel: WheelView, names: list[str]) -> tuple:
-        use_subroles = bool(getattr(wheel, "use_subrole_filter", False))
-        subroles: tuple[str, str] | tuple = ()
-        if use_subroles and len(getattr(wheel, "subrole_labels", [])) >= 2:
-            subroles = tuple(wheel.subrole_labels[:2])
-        return (tuple(names), use_subroles, subroles)
-
-    def _open_queue_entries_for_wheel(self, wheel: WheelView, names: list[str]) -> list[dict]:
-        subroles: list[str] = []
-        if getattr(wheel, "use_subrole_filter", False) and len(getattr(wheel, "subrole_labels", [])) >= 2:
-            subroles = list(wheel.subrole_labels[:2])
-        return [{"name": n, "subroles": list(subroles), "active": True} for n in names]
-
-    def _apply_open_queue_preview(self, combined_names: list[str] | None = None) -> None:
-        if getattr(self, "_open_queue_preview_busy", False):
-            return
-        if not self._spin_mode_allowed() or not self._is_open_queue_mode():
-            self._clear_open_queue_preview()
-            return
-        if getattr(self, "_open_queue_active", False):
-            return
-        names = combined_names if combined_names is not None else self._open_queue_names()
-        restore = getattr(self, "_open_queue_view_restore", None)
-        if restore is None:
-            restore = {}
-            self._open_queue_view_restore = restore
-        for wheel in (self.tank, self.dps, self.support):
-            entry = restore.get(wheel)
-            if entry is None:
-                entry = {
-                    "override_entries": getattr(wheel, "_override_entries", None),
-                    "disabled_indices": set(getattr(wheel, "_disabled_indices", set())),
-                    "preview_entries": None,
-                    "key": None,
-                }
-                restore[wheel] = entry
-            key = self._open_queue_view_key(wheel, names)
-            if entry.get("key") == key and getattr(wheel, "_override_entries", None) is not None:
-                continue
-            preview_entries = self._open_queue_entries_for_wheel(wheel, names)
-            wheel.set_override_entries(preview_entries)
-            entry["preview_entries"] = preview_entries
-            entry["key"] = key
-
-    def _clear_open_queue_preview(self) -> None:
-        if getattr(self, "_open_queue_preview_busy", False):
-            return
-        restore = getattr(self, "_open_queue_view_restore", None)
-        if not restore:
-            return
-        if getattr(self, "_open_queue_active", False):
-            return
-        self._open_queue_preview_busy = True
-        try:
-            for wheel, entry in list(restore.items()):
-                preview_entries = entry.get("preview_entries")
-                current_override = getattr(wheel, "_override_entries", None)
-                if preview_entries is not None and current_override is not None and current_override != preview_entries:
-                    continue
-                wheel.set_override_entries(entry.get("override_entries"))
-                wheel._disabled_indices = set(entry.get("disabled_indices", set()))
-                wheel._refresh_disabled_indices()
-            self._open_queue_view_restore = {}
-        finally:
-            self._open_queue_preview_busy = False
 
     def _update_spin_mode_ui(self):
         if not hasattr(self, "spin_mode_toggle"):
             return
-        allowed = self._spin_mode_allowed()
+        allowed = self.open_queue.spin_mode_allowed()
         self.spin_mode_toggle.setVisible(allowed)
         if not allowed:
             self.spin_mode_toggle.setEnabled(False)
             return
         self.spin_mode_toggle.setEnabled(self.pending == 0)
-        slots = self._open_queue_slots()
+        slots = self.open_queue.slots()
         self.spin_mode_toggle.set_texts(
             i18n.t("controls.spin_mode_role"),
             i18n.t("controls.spin_mode_open", count=slots),
         )
-
-    def _player_list_allowed(self) -> bool:
-        return self.current_mode == "players" and not getattr(self, "hero_ban_active", False)
-
-    def _player_name_stats(self) -> dict[str, dict[str, int]]:
-        stats: dict[str, dict[str, int]] = {}
-        for wheel in (self.tank, self.dps, self.support):
-            for entry in wheel.get_current_entries():
-                name = str(entry.get("name", "")).strip()
-                if not name:
-                    continue
-                bucket = stats.setdefault(name, {"total": 0, "active": 0})
-                bucket["total"] += 1
-                if entry.get("active", True):
-                    bucket["active"] += 1
-        return stats
-
-    def _update_player_list_button(self) -> None:
-        if not hasattr(self, "btn_all_players"):
-            return
-        allowed = self._player_list_allowed()
-        self.btn_all_players.setVisible(allowed)
-        if not allowed:
-            self.btn_all_players.setEnabled(False)
-            if getattr(self, "_player_list_panel", None):
-                self._player_list_panel.hide()
-            return
-        has_names = bool(self._player_name_stats())
-        self.btn_all_players.setEnabled(has_names and self.pending == 0)
-
-    def _build_player_list_panel(self) -> None:
-        if getattr(self, "_player_list_panel", None):
-            return
-        parent = getattr(self, "role_container", None) or self
-        panel = QtWidgets.QFrame(parent)
-        panel.setObjectName("playerListPanel")
-        panel.setVisible(False)
-        panel.setFixedSize(360, 420)
-
-        layout = QtWidgets.QVBoxLayout(panel)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
-
-        header = QtWidgets.QHBoxLayout()
-        title = QtWidgets.QLabel(i18n.t("players.list_title"))
-        title.setStyleSheet("font-weight:700; font-size:14px;")
-        header.addWidget(title)
-        header.addStretch(1)
-        btn_close = QtWidgets.QToolButton()
-        btn_close.setText("X")
-        btn_close.setCursor(QtCore.Qt.PointingHandCursor)
-        btn_close.setAutoRaise(True)
-        btn_close.clicked.connect(panel.hide)
-        header.addWidget(btn_close)
-        layout.addLayout(header)
-
-        names_panel = NamesListPanel()
-        layout.addWidget(names_panel, 1)
-
-        names = names_panel.names
-        names.itemChanged.connect(self._schedule_player_list_sync)
-        names.model().rowsInserted.connect(self._schedule_player_list_sync)
-        names.model().rowsRemoved.connect(self._schedule_player_list_sync)
-        names.metaChanged.connect(self._schedule_player_list_sync)
-
-        self._player_list_panel = panel
-        self._player_list_title = title
-        self._player_list_close = btn_close
-        self._player_list_names_panel = names_panel
-        self._player_list_names = names
-        self._apply_player_list_panel_theme()
-
-    def _position_player_list_panel(self) -> None:
-        panel = getattr(self, "_player_list_panel", None)
-        if not panel or not panel.parentWidget():
-            return
-        parent = panel.parentWidget()
-        tank_geo = self.tank.geometry()
-        max_w = max(300, min(420, tank_geo.width() or 360))
-        panel.setFixedWidth(max_w)
-        panel.setFixedHeight(420)
-        x = tank_geo.x()
-        y = tank_geo.y() + tank_geo.height() + 8
-        x = max(8, min(x, parent.width() - panel.width() - 8))
-        y = max(8, min(y, parent.height() - panel.height() - 8))
-        panel.move(x, y)
-
-    def _player_name_roles(self) -> dict[str, dict[str, set]]:
-        stats: dict[str, dict[str, set]] = {}
-        for wheel in (self.tank, self.dps, self.support):
-            for entry in wheel.get_current_entries():
-                name = str(entry.get("name", "")).strip()
-                if not name:
-                    continue
-                bucket = stats.setdefault(name, {"roles": set(), "active_roles": set()})
-                bucket["roles"].add(wheel)
-                if entry.get("active", True):
-                    bucket["active_roles"].add(wheel)
-        return stats
-
-    def _refresh_player_list_panel(self) -> None:
-        names = getattr(self, "_player_list_names", None)
-        if not names:
-            return
-        stats = self._player_name_roles()
-        blockers = [
-            QtCore.QSignalBlocker(names),
-            QtCore.QSignalBlocker(names.model()),
-        ]
-        try:
-            names.clear()
-            if not stats:
-                names.add_name("")
-                self._player_panel_snapshot = {}
-                return
-            for name in sorted(stats.keys(), key=str.casefold):
-                info = stats[name]
-                roles = info.get("roles", set())
-                active_roles = info.get("active_roles", set())
-                total = len(roles)
-                active = len(active_roles)
-                if active <= 0:
-                    state = QtCore.Qt.Unchecked
-                elif active >= total:
-                    state = QtCore.Qt.Checked
-                else:
-                    state = QtCore.Qt.PartiallyChecked
-                names.add_name(name, active=(state == QtCore.Qt.Checked))
-                item = names.item(names.count() - 1)
-                if item is None:
-                    continue
-                if state == QtCore.Qt.PartiallyChecked:
-                    item.setFlags(item.flags() | QtCore.Qt.ItemIsTristate)
-                    item.setCheckState(state)
-                    widget = names.itemWidget(item)
-                    if widget and hasattr(widget, "chk_active"):
-                        widget.chk_active.setTristate(True)
-                        widget.chk_active.setCheckState(state)
-                item.setData(QtCore.Qt.UserRole + 2, set(roles))
-                item.setData(QtCore.Qt.UserRole + 3, name)
-        finally:
-            del blockers
-        self._player_panel_snapshot = {name: {"roles": set(info["roles"])} for name, info in stats.items()}
-        if hasattr(self, "_player_list_names_panel"):
-            self._player_list_names_panel.refresh_action_state()
-
-    def _show_all_players_panel(self) -> None:
-        if not self._player_list_allowed():
-            return
-        if not self._player_name_stats():
-            return
-        self._build_player_list_panel()
-        if self._player_list_panel.isVisible():
-            self._player_list_panel.hide()
-            return
-        self._refresh_player_list_panel()
-        self._position_player_list_panel()
-        self._player_list_panel.show()
-        self._player_list_panel.raise_()
-
-    def _schedule_player_list_sync(self, *_args) -> None:
-        if getattr(self, "_player_list_syncing", False):
-            return
-        timer = getattr(self, "_player_list_sync_timer", None)
-        if timer is None:
-            timer = QtCore.QTimer(self)
-            timer.setSingleShot(True)
-            timer.timeout.connect(self._sync_player_list_panel)
-            self._player_list_sync_timer = timer
-        timer.start(120)
-
-    def _sync_player_list_panel(self) -> None:
-        if getattr(self, "_player_list_syncing", False):
-            return
-        names = getattr(self, "_player_list_names", None)
-        if not names:
-            return
-        self._player_list_syncing = True
-        try:
-            prev_snapshot = dict(getattr(self, "_player_panel_snapshot", {}) or {})
-            current: dict[str, dict[str, set]] = {}
-            keep_names: set[str] = set()
-            for i in range(names.count()):
-                item = names.item(i)
-                if item is None:
-                    continue
-                name = item.text().strip()
-                if not name:
-                    orig = item.data(QtCore.Qt.UserRole + 3)
-                    if orig:
-                        keep_names.add(orig)
-                    continue
-                roles = item.data(QtCore.Qt.UserRole + 2)
-                if not roles:
-                    roles = {self.tank, self.dps, self.support}
-                    item.setData(QtCore.Qt.UserRole + 2, set(roles))
-                if not item.data(QtCore.Qt.UserRole + 3):
-                    item.setData(QtCore.Qt.UserRole + 3, name)
-                current[name] = {"roles": set(roles), "state": item.checkState()}
-
-            # Handle renames based on stored original names.
-            for i in range(names.count()):
-                item = names.item(i)
-                if item is None:
-                    continue
-                name = item.text().strip()
-                if not name:
-                    continue
-                orig = item.data(QtCore.Qt.UserRole + 3)
-                if orig and orig != name:
-                    roles = item.data(QtCore.Qt.UserRole + 2) or set()
-                    for wheel in roles:
-                        wheel.rename_name(orig, name)
-                    prev_snapshot.pop(orig, None)
-                    prev_snapshot[name] = {"roles": set(roles)}
-                    item.setData(QtCore.Qt.UserRole + 3, name)
-
-            prev_names = set(prev_snapshot.keys())
-            current_names = set(current.keys())
-            current_names |= keep_names
-
-            removed = prev_names - current_names
-            for name in removed:
-                roles = prev_snapshot.get(name, {}).get("roles", set())
-                for wheel in roles:
-                    wheel.remove_names({name})
-
-            added = current_names - prev_names
-            for name in added:
-                roles = current[name]["roles"]
-                state = current[name]["state"]
-                active = state == QtCore.Qt.Checked
-                for wheel in roles:
-                    wheel.add_name(name, active=active)
-
-            # Apply active state updates for existing names (checked/unchecked only).
-            for name in current_names & prev_names:
-                entry = current[name]
-                state = entry.get("state")
-                if state == QtCore.Qt.PartiallyChecked:
-                    continue
-                active = state == QtCore.Qt.Checked
-                for wheel in entry.get("roles", set()):
-                    wheel.set_names_active({name}, active)
-
-            self._player_panel_snapshot = {
-                name: {"roles": set(info["roles"])} for name, info in current.items()
-            }
-            self._update_spin_all_enabled()
-        finally:
-            self._player_list_syncing = False
 
     def _mode_key(self) -> str:
         return "hero_ban" if self.hero_ban_active else self.current_mode
@@ -1120,8 +748,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.spin_mode_toggle.setEnabled(False)
             if hasattr(self, "btn_all_players"):
                 self.btn_all_players.setEnabled(False)
-            if getattr(self, "_player_list_panel", None):
-                self._player_list_panel.hide()
+            if hasattr(self, "player_list_panel"):
+                self.player_list_panel.hide_panel()
         for w in (self.tank, self.dps, self.support):
             w.set_interactive_enabled(en)
         if getattr(self, "current_mode", "") == "maps" and hasattr(self, "map_lists"):
@@ -1142,7 +770,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """Dreht alle selektierten Räder auf faire Weise."""
         if self.current_mode == "maps":
             self._spin_map_all()
-        elif self._is_open_queue_mode():
+        elif self.open_queue.is_mode_active():
             spin_service.spin_open_queue(self)
         else:
             spin_service.spin_all(self)
@@ -1264,8 +892,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self._last_results_snapshot = None
             # Ergebnisse für den aktuellen Modus merken
             self._snapshot_mode_results()
-            if getattr(self, "_open_queue_active", False):
-                self._restore_open_queue_overrides()
+            if self.open_queue.spin_active():
+                self.open_queue.restore_spin_overrides()
         self._update_cancel_enabled()
 
     def _cancel_spin(self):
@@ -1278,8 +906,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._stop_all_wheels()
         # Ergebnisse wiederherstellen, falls Snapshot vorhanden
         self._restore_results_snapshot()
-        if getattr(self, "_open_queue_active", False):
-            self._restore_open_queue_overrides()
+        if self.open_queue.spin_active():
+            self.open_queue.restore_spin_overrides()
         # Hinweis anzeigen, Ergebnisse/Summary beibehalten
         self.overlay.show_message(
             i18n.t("overlay.spin_cancelled_title"),
@@ -1287,21 +915,6 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._set_controls_enabled(True)
         self._update_cancel_enabled()
-
-    def _restore_open_queue_overrides(self):
-        state = getattr(self, "_open_queue_restore", None)
-        if not state:
-            self._open_queue_active = False
-            return
-        for entry in state:
-            wheel = entry.get("wheel")
-            if not wheel:
-                continue
-            wheel.set_override_entries(entry.get("override_entries"))
-            wheel._disabled_indices = set(entry.get("disabled_indices", set()))
-            wheel._refresh_disabled_indices()
-        self._open_queue_restore = []
-        self._open_queue_active = False
 
     def _snapshot_results(self):
         """Merkt aktuelle Resultate & Summary, um sie bei Abbruch wiederherzustellen."""
@@ -1483,8 +1096,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.hero_ban_active = False
         self.dps.set_override_entries(None)
         self.current_mode = "maps"
-        if getattr(self, "_player_list_panel", None):
-            self._player_list_panel.hide()
+        if hasattr(self, "player_list_panel"):
+            self.player_list_panel.hide_panel()
         self.btn_mode_players.setChecked(False)
         self.btn_mode_heroes.setChecked(False)
         self.btn_mode_heroban.setChecked(False)
@@ -1497,8 +1110,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _activate_role_modes(self):
         if hasattr(self, "mode_stack"):
             self.mode_stack.setCurrentIndex(0)
-        if getattr(self, "_player_list_panel", None):
-            self._player_list_panel.hide()
+        if hasattr(self, "player_list_panel"):
+            self.player_list_panel.hide_panel()
 
 
     def _on_mode_button_clicked(self, target: str):
@@ -1594,21 +1207,6 @@ class MainWindow(QtWidgets.QMainWindow):
         tooltip = i18n.t("theme.toggle.to_light") if is_dark else i18n.t("theme.toggle.to_dark")
         self.btn_theme.setToolTip(tooltip)
 
-    def _apply_player_list_panel_theme(self) -> None:
-        panel = getattr(self, "_player_list_panel", None)
-        if not panel:
-            return
-        theme = theme_util.get_theme(getattr(self, "theme", "light"))
-        panel.setStyleSheet(
-            f"QFrame#playerListPanel {{ background: {theme.card_bg}; border: 2px solid {theme.card_border}; border-radius: 10px; }}"
-        )
-        if hasattr(self, "_player_list_title"):
-            self._player_list_title.setStyleSheet(f"font-weight:700; font-size:14px; color:{theme.text};")
-        if hasattr(self, "_player_list_names_panel"):
-            self._player_list_names_panel.apply_theme(theme)
-        if hasattr(self, "_player_list_close"):
-            self._player_list_close.setStyleSheet(theme_util.tool_button_stylesheet(theme))
-
     def _retranslate_map_ui(self):
         if hasattr(self, "map_ui"):
             self.map_ui.set_language(self.language)
@@ -1634,10 +1232,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "btn_all_players"):
             self.btn_all_players.setText(i18n.t("players.list_button"))
             ui_helpers.set_fixed_width_from_translations([self.btn_all_players], ["players.list_button"], padding=40)
-        if hasattr(self, "_player_list_title"):
-            self._player_list_title.setText(i18n.t("players.list_title"))
-        if hasattr(self, "_player_list_names_panel"):
-            self._player_list_names_panel.set_language(self.language)
+        if hasattr(self, "player_list_panel"):
+            self.player_list_panel.set_language(self.language)
         self._update_title()
         for w in (self.tank, self.dps, self.support):
             w.set_language(self.language)
