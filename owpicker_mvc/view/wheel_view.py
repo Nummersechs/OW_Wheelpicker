@@ -1,23 +1,32 @@
 from typing import List, Optional, Union
 import random, itertools, difflib
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtWidgets
 from logic.spin_engine import plan_spin
+from view.base_panel import BasePanel
 from view.wheel_widget import WheelWidget
-from view.name_list import NamesListPanel, NameRowWidget
+from view.name_list import NameRowWidget
 import config
 import i18n
-from utils import theme as theme_util
-from view import style_helpers
+from utils import theme as theme_util, ui_helpers
 
-class WheelView(QtWidgets.QWidget):
+class WheelView(BasePanel):
     spun = QtCore.Signal(str)
-    request_spin = QtCore.Signal()
-    stateChanged = QtCore.Signal()
     def __init__(self, title: str, defaults: List[str], pair_mode=False, allow_pair_toggle=False, subrole_labels: Optional[List[str]] = None, title_key: Optional[str] = None):
-        super().__init__()
-        self.pair_mode = pair_mode; self.allow_pair_toggle = allow_pair_toggle; self._is_spinning = False
-        self.subrole_labels = subrole_labels or []
+        self.pair_mode = pair_mode
+        self.allow_pair_toggle = allow_pair_toggle
+        self._is_spinning = False
         self.use_subrole_filter = False
+        default_spin_label = i18n.t("wheel.spin_role")
+        super().__init__(
+            title=title,
+            spin_label=default_spin_label,
+            names_hint_text="",
+            subrole_labels=subrole_labels,
+            title_key=title_key,
+            header_mode="custom",
+        )
+        self._default_spin_label = default_spin_label
+        self._custom_spin_label: Optional[str] = None
         self._suppress_wheel_render = False
         self._suppress_state_signal = False
         self._force_spin_enabled = False
@@ -25,28 +34,17 @@ class WheelView(QtWidgets.QWidget):
         self._subrole_controls_visible = True
         self._header_controls_visible = True
         self._show_names_visible = True
-        self._title_key = title_key
-        self._title_fallback = title
         self.view = WheelWidget(self._effective_names_from(defaults))
         self.view.segmentToggled.connect(self._on_segment_toggled)
         self.wheel = self.view.wheel
-        r = self.wheel.radius
         self._disabled_indices: set[int] = set()
         self._disabled_labels: set[str] = set()
         self._last_wheel_names: List[str] = list(self.wheel.names)
         self._result_state: str = "empty"  # empty | value | too_few
         self._result_value: Optional[str] = None
 
-        header = QtWidgets.QHBoxLayout()
+        header = self.header_layout
         header.setContentsMargins(0, 0, 0, 0)
-
-        self.label = QtWidgets.QLabel()
-        self.label.setAlignment(QtCore.Qt.AlignCenter)
-        # Deutlicher sichtbarer Titel über jedem Rad
-        self.label.setStyleSheet(
-            "font-size:18px; font-weight:800; letter-spacing:0.3px;"
-        )
-        self._apply_title()
 
         self.btn_reset_segments = QtWidgets.QToolButton()
         self.btn_reset_segments.setText("↺")
@@ -131,15 +129,8 @@ class WheelView(QtWidgets.QWidget):
         result_layout.addWidget(self.btn_clear_result, 0, QtCore.Qt.AlignVCenter)
         result_layout.addStretch(1)
 
-        # ---------- Namensliste mit integrierten Checkboxen ----------
-        # Eine Liste, in der jede Zeile ein Name mit Häkchen ist.
-                # Hinweislabel für die Checkboxen
-        self.names_hint = QtWidgets.QLabel("")
-        self.names_hint.setStyleSheet("color:#444; font-size:12px; padding:2px;")
-        self.names_panel = NamesListPanel(subrole_labels=self.subrole_labels)
-        self.names = self.names_panel.names
-        self.btn_toggle_all_names = self.names_panel.btn_toggle_all_names
-        self.btn_sort_names = self.names_panel.btn_sort_names
+        self.add_body_widget(self.view, 1)
+        self.add_body_widget(self.result_widget)
 
         # Start-Namen anlegen – neue Namen sind standardmäßig aktiv (Checked)
         for entry in self._normalize_entries(defaults):
@@ -160,51 +151,8 @@ class WheelView(QtWidgets.QWidget):
         self.names.metaChanged.connect(self._on_names_list_changed)
         # Neue Zeilen sollen sofort die korrekte Sichtbarkeit der Subrollen übernehmen
         self.names.model().rowsInserted.connect(lambda *_: self._apply_subrole_visibility())
-# ---------- Buttons unter dem Rad ----------
-        self._default_spin_label = i18n.t("wheel.spin_role")
-        self.btn_local_spin = QtWidgets.QPushButton(self._default_spin_label)
-        self.btn_local_spin.setFixedHeight(36)
-        self.btn_local_spin.clicked.connect(self.request_spin.emit)
-        self._custom_spin_label: Optional[str] = None
-
-        # Toggle-Button statt Checkbox, optisch wie ein weiterer Button
-        self.btn_include_in_all = QtWidgets.QPushButton()
-        self.btn_include_in_all.setCheckable(True)
-        self.btn_include_in_all.setChecked(True)
-        self.btn_include_in_all.setFixedHeight(36)
         self.btn_include_in_all.setToolTip(i18n.t("wheel.include_tooltip"))
-
-        # Initialen Text mit Symbol setzen
-        self._on_include_in_all_toggled(self.btn_include_in_all.isChecked())
-        # Bei jedem Umschalten Text aktualisieren
-        self.btn_include_in_all.toggled.connect(self._on_include_in_all_toggled)
-        # Fixe Breite, damit Sprache das Layout nicht verschiebt
-        self._apply_fixed_min_widths()
-
-
-        # Buttonzeile: Spin + "Bei Drehen" nebeneinander
-        btn_row = QtWidgets.QHBoxLayout()
-        btn_row.setSpacing(8)
-        btn_row.addWidget(self.btn_local_spin, 1)
-        btn_row.addWidget(self.btn_include_in_all, 0)
-
-        # ---------- Karte / Card-Layout ----------
-        self.card = QtWidgets.QFrame()
-        self.card.setObjectName("card")
-        self.card.setStyleSheet(
-            "#card { "
-            "background: rgba(255,255,255,0.75); "
-            "border:1px solid #e6e6e6; border-radius:16px; }"
-        )
-
-        inner = QtWidgets.QVBoxLayout(self.card)
-        inner.setContentsMargins(16, 12, 16, 12)
-        inner.addLayout(header)
-        inner.addWidget(self.view, 1)
-        inner.addWidget(self.result_widget)
-        inner.addLayout(btn_row)
-        inner.addWidget(self.names_hint)
-        inner.addWidget(self.names_panel)
+        self._apply_fixed_widths()
         
         # Checkbox-Styling konsistent halten
         self.setStyleSheet("""
@@ -229,22 +177,14 @@ class WheelView(QtWidgets.QWidget):
         self._apply_placeholder()
         self._apply_result_state()
 
-        outer = QtWidgets.QVBoxLayout(self)
-        outer.addWidget(self.card)
         # Default theme; main window reapplies the persisted choice.
         self.apply_theme(theme_util.get_theme("light"))
         QtCore.QTimer.singleShot(0, self._refit_view)
-    def _apply_title(self):
-        text = self._title_fallback
-        if self._title_key:
-            text = i18n.t(self._title_key)
-        self.label.setText(text)
 
     def set_language(self, lang: str):
         """Reapply translated labels for the current wheel."""
-        i18n.set_language(lang)
+        super().set_language(lang)
         self._default_spin_label = i18n.t("wheel.spin_role")
-        self._apply_title()
         if self.toggle:
             self.toggle.setText(i18n.t("wheel.pairs_toggle"))
         if self.chk_subroles:
@@ -262,15 +202,12 @@ class WheelView(QtWidgets.QWidget):
         if hasattr(self, "btn_reset_segments"):
             self.btn_reset_segments.setToolTip(i18n.t("wheel.reset_disabled_tooltip"))
         self.btn_clear_result.setToolTip(i18n.t("wheel.clear_result_tooltip"))
-        if hasattr(self, "names_panel"):
-            self.names_panel.set_language(lang)
         self.btn_include_in_all.setToolTip(i18n.t("wheel.include_tooltip"))
-        self._on_include_in_all_toggled(self.btn_include_in_all.isChecked())
         if self._custom_spin_label is None:
             self.set_spin_button_text(None)
         self._apply_placeholder()
         self._apply_result_state()
-        self._apply_fixed_min_widths()
+        self._apply_fixed_widths()
 
     def _refit_view(self):
         """Reicht Größenanpassung an das WheelWidget weiter."""
@@ -287,51 +224,32 @@ class WheelView(QtWidgets.QWidget):
             self.result.setText("–")
         self._update_clear_button_enabled()
 
-    def _apply_fixed_min_widths(self):
+    def _apply_fixed_widths(self):
         """Set fixed widths based on max translation to avoid layout jumps."""
-        def set_min(widget, keys, padding=20, prefixes=None):
-            if widget is None:
-                return
-            prefixes_local = prefixes or [""]
-            font = widget.font()
-            fm = QtGui.QFontMetrics(font)
-            max_w = 0
-            for key in keys:
-                entry = i18n.TRANSLATIONS.get(key, {})
-                texts = entry.values() if isinstance(entry, dict) else [entry]
-                for txt in texts:
-                    if txt is None:
-                        continue
-                    for pre in prefixes_local:
-                        max_w = max(max_w, fm.horizontalAdvance(f"{pre}{txt}"))
-            width = max_w + padding
-            widget.setMinimumWidth(width)
-            widget.setMaximumWidth(width)
-
-        set_min(self.btn_local_spin, ["wheel.spin_role", "wheel.spin_map", "wheel.spin_single_map"], padding=44)
-        set_min(self.btn_include_in_all, ["wheel.include_prefix"], padding=42, prefixes=["☑ ", "☐ "])
-        if hasattr(self, "names_panel"):
-            self.names_panel.apply_fixed_widths()
+        super()._apply_fixed_widths()
         if self.toggle:
-            set_min(self.toggle, ["wheel.pairs_toggle"], padding=30)
+            ui_helpers.set_fixed_width_from_translations(
+                self.toggle,
+                ["wheel.pairs_toggle"],
+                padding=30,
+            )
         if self.chk_subroles:
-            set_min(self.chk_subroles, ["wheel.subroles_toggle"], padding=30)
+            ui_helpers.set_fixed_width_from_translations(
+                self.chk_subroles,
+                ["wheel.subroles_toggle"],
+                padding=30,
+            )
         if self.chk_show_names:
-            set_min(self.chk_show_names, ["wheel.show_names"], padding=30)
+            ui_helpers.set_fixed_width_from_translations(
+                self.chk_show_names,
+                ["wheel.show_names"],
+                padding=30,
+            )
 
     def apply_theme(self, theme: theme_util.Theme) -> None:
         """Apply color palette for the active theme to this wheel."""
-        self.card.setStyleSheet(
-            "#card { "
-            f"background: {theme.card_bg}; "
-            f"border:1px solid {theme.card_border}; border-radius:16px; }}"
-        )
-        self.label.setStyleSheet(
-            "font-size:18px; font-weight:800; letter-spacing:0.3px; "
-            f"color:{theme.text};"
-        )
+        super().apply_theme(theme)
         self.result.setStyleSheet(f"font-size:14px; color:{theme.muted_text}; margin-top:6px;")
-        self.names_hint.setStyleSheet(f"color:{theme.muted_text}; font-size:12px; padding:2px;")
         # Indicator styling stays aligned with the active theme colors.
         self.setStyleSheet(
             f"""
@@ -394,13 +312,6 @@ class WheelView(QtWidgets.QWidget):
             }}
             """
         )
-        # Buttons/Listen via gemeinsame Helper stylen
-        if hasattr(self, "btn_local_spin"):
-            style_helpers.style_primary_button(self.btn_local_spin, theme)
-        if hasattr(self, "btn_include_in_all"):
-            style_helpers.style_include_button(self.btn_include_in_all, theme)
-        if hasattr(self, "names_panel"):
-            self.names_panel.apply_theme(theme)
         if hasattr(self, "btn_reset_segments"):
             tool_style = theme_util.tool_button_stylesheet(theme)
             self.btn_reset_segments.setStyleSheet(
@@ -959,11 +870,6 @@ class WheelView(QtWidgets.QWidget):
                 self.toggle.setEnabled(False)
             if hasattr(self, "btn_include_in_all"):
                 self.btn_include_in_all.setEnabled(False)
-    def _on_include_in_all_toggled(self, checked: bool):
-        prefix = "☑" if checked else "☐"
-        self.btn_include_in_all.setText(f"{prefix} {i18n.t('wheel.include_prefix')}")
-        self.stateChanged.emit()
-
     def is_selected_for_global_spin(self) -> bool:
         """Ob dieses Rad beim globalen Spin ('Drehen') mitgedreht werden soll."""
         return getattr(self, "btn_include_in_all", None) is None or self.btn_include_in_all.isChecked()

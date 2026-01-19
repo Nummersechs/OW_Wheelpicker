@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from typing import Dict, List
-from PySide6 import QtCore, QtWidgets, QtGui
+from PySide6 import QtCore, QtWidgets
 import config
 import i18n
-from utils import theme as theme_util
+from utils import theme as theme_util, ui_helpers
 from view import style_helpers
 from view.wheel_view import WheelView
 from view.list_panel import ListPanel
@@ -47,14 +47,14 @@ class MapUI(QtCore.QObject):
         sb_layout.setSpacing(6)
         self.lbl_map_types = QtWidgets.QLabel(i18n.t("map.types"))
         self.lbl_map_types.setStyleSheet("font-weight:600;")
-        self._set_fixed_width_from_translations([self.lbl_map_types], ["map.types"], padding=30)
+        ui_helpers.set_fixed_width_from_translations([self.lbl_map_types], ["map.types"], padding=30)
         sb_layout.addWidget(self.lbl_map_types)
         self.map_type_checks: dict[str, QtWidgets.QCheckBox] = {}
         self._map_type_list_layout = QtWidgets.QVBoxLayout()
         self._map_type_list_layout.setSpacing(4)
         sb_layout.addLayout(self._map_type_list_layout)
         self.btn_edit_map_types = QtWidgets.QPushButton(i18n.t("map.edit_types"))
-        self._set_fixed_width_from_translations([self.btn_edit_map_types], ["map.edit_types"], padding=48)
+        ui_helpers.set_fixed_width_from_translations([self.btn_edit_map_types], ["map.edit_types"], padding=48)
         self.btn_edit_map_types.clicked.connect(lambda: self._show_map_type_editor(container))
         sb_layout.addWidget(self.btn_edit_map_types, 0, QtCore.Qt.AlignLeft)
         sb_layout.addStretch(1)
@@ -178,7 +178,7 @@ class MapUI(QtCore.QObject):
             layout.setSpacing(8)
             self._map_type_editor_title = QtWidgets.QLabel(i18n.t("map.editor.title"))
             self._map_type_editor_title.setStyleSheet("font-weight:700; font-size:14px;")
-            self._set_fixed_width_from_translations([self._map_type_editor_title], ["map.editor.title"], padding=28)
+            ui_helpers.set_fixed_width_from_translations([self._map_type_editor_title], ["map.editor.title"], padding=28)
             layout.addWidget(self._map_type_editor_title)
 
             self._map_type_list_widget = QtWidgets.QListWidget()
@@ -196,7 +196,7 @@ class MapUI(QtCore.QObject):
             self._map_type_btn_del = QtWidgets.QPushButton(i18n.t("map.editor.delete"))
             self._map_type_btn_add.clicked.connect(self._add_map_type_row)
             self._map_type_btn_del.clicked.connect(self._del_map_type_row)
-            self._set_fixed_width_from_translations(
+            ui_helpers.set_fixed_width_from_translations(
                 [self._map_type_btn_add, self._map_type_btn_del],
                 ["map.editor.add", "map.editor.delete"],
                 padding=40,
@@ -215,7 +215,7 @@ class MapUI(QtCore.QObject):
             self._map_type_btn_cancel = QtWidgets.QPushButton(i18n.t("map.editor.cancel"))
             self._map_type_btn_ok.clicked.connect(self._confirm_map_types)
             self._map_type_btn_cancel.clicked.connect(lambda: self._map_type_editor.hide())
-            self._set_fixed_width_from_translations(
+            ui_helpers.set_fixed_width_from_translations(
                 [self._map_type_btn_ok, self._map_type_btn_cancel],
                 ["map.editor.apply", "map.editor.cancel"],
                 padding=44,
@@ -371,29 +371,6 @@ class MapUI(QtCore.QObject):
             style_helpers.style_primary_button(getattr(self, "_map_type_btn_del", None), theme)
             style_helpers.style_success_button(getattr(self, "_map_type_btn_ok", None), theme)
             style_helpers.style_danger_button(getattr(self, "_map_type_btn_cancel", None), theme)
-
-    def _set_fixed_width_from_translations(self, widgets, keys, padding: int = 20, prefixes: list[str] | None = None):
-        """Kleine Helper-Variante aus MainWindow, um Button-/Labelbreiten stabil zu halten."""
-        if not isinstance(widgets, (list, tuple)):
-            widgets = [widgets]
-        prefixes = prefixes or [""]
-        all_texts: list[str] = []
-        for key in keys:
-            entry = i18n.TRANSLATIONS.get(key, {})
-            if isinstance(entry, dict):
-                all_texts.extend([str(v) for v in entry.values()])
-            elif entry:
-                all_texts.append(str(entry))
-        for widget in widgets:
-            font = widget.font()
-            fm = QtGui.QFontMetrics(font)
-            max_w = 0
-            for txt in all_texts:
-                for pre in prefixes:
-                    max_w = max(max_w, fm.horizontalAdvance(f"{pre}{txt}"))
-            width = max_w + padding
-            widget.setMinimumWidth(width)
-            widget.setMaximumWidth(width)
 
     def load_state(self):
         state = self.state_store.get_mode_state("maps") or {}
