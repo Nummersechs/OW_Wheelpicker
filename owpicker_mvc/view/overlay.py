@@ -65,10 +65,6 @@ class ResultOverlay(QtWidgets.QWidget):
 
         self.btn_online.clicked.connect(self._choose_online)
         self.btn_offline.clicked.connect(self._choose_offline)
-        # Hover für Warmup blockierbar halten
-        self._block_hover = False
-        self.btn_online.installEventFilter(self)
-        self.btn_offline.installEventFilter(self)
 
         # Buttons in einer Zeile anordnen
         btn_row = QtWidgets.QHBoxLayout()
@@ -147,7 +143,6 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_disable.hide()
         self.btn_online.show()
         self.btn_offline.show()
-        self.set_choice_enabled(False)
 
         self._last_view = {"type": "online_choice"}
         self._show()
@@ -174,7 +169,6 @@ class ResultOverlay(QtWidgets.QWidget):
         """Refresh labels while keeping current visibility."""
         # Zustand merken, damit Online/Offline nicht erneut deaktiviert wird
         prev_choice_enabled = self.btn_online.isEnabled() and self.btn_offline.isEnabled()
-        prev_hover_block = getattr(self, "_block_hover", False)
         i18n.set_language(lang)
         self._apply_button_labels()
         self._set_min_widths()
@@ -193,7 +187,6 @@ class ResultOverlay(QtWidgets.QWidget):
             self.show_online_choice()
             if prev_choice_enabled:
                 self.set_choice_enabled(True)
-            self.set_hover_blocked(prev_hover_block)
 
     def apply_theme(self, theme: theme_util.Theme, tool_style: str | None = None) -> None:
         """Update overlay colors to match the active theme."""
@@ -237,7 +230,10 @@ class ResultOverlay(QtWidgets.QWidget):
             btn.setMaximumWidth(result_width)
 
         choice_width = max_width(("overlay.button_online", "overlay.button_offline"))
-        for btn in (self.btn_online, self.btn_offline):
+        for btn in (
+            self.btn_online,
+            self.btn_offline,
+        ):
             btn.setMinimumWidth(choice_width)
             btn.setMaximumWidth(choice_width)
 
@@ -250,20 +246,3 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_language.setIcon(flag)
         self.btn_language.setText("")
         self.btn_language.setToolTip(tooltip)
-
-    # --- Hover-Steuerung für Warmup ---
-    def set_hover_blocked(self, blocked: bool):
-        """Deaktiviert Hover-Effekte der Online/Offline-Buttons temporär."""
-        self._block_hover = bool(blocked)
-
-    def eventFilter(self, obj, event):
-        if obj in (getattr(self, "btn_online", None), getattr(self, "btn_offline", None)):
-            if self._block_hover and event.type() in (
-                QtCore.QEvent.HoverEnter,
-                QtCore.QEvent.HoverLeave,
-                QtCore.QEvent.HoverMove,
-                QtCore.QEvent.Enter,
-                QtCore.QEvent.Leave,
-            ):
-                return True
-        return super().eventFilter(obj, event)

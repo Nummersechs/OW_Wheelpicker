@@ -1,4 +1,4 @@
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 from PySide6.QtMultimedia import QSoundEffect
 from PySide6.QtCore import QUrl
 from pathlib import Path
@@ -28,6 +28,8 @@ class SoundManager:
         self.ding_base_volume = 0.7
         self.preview_base_volume = 0.35
         self.preview_effect: QSoundEffect | None = None
+        self._warmup_timer: QtCore.QTimer | None = None
+        self._warmup_items: list[tuple[Path, dict[Path, QSoundEffect], float]] = []
 
         spin_dir = base_dir / "Spin"
         ding_dir = base_dir / "Ding"
@@ -65,6 +67,43 @@ class SoundManager:
         eff.setVolume(base_volume * self.master_volume)
         cache[path] = eff
         return eff
+
+    def warmup_async(self, parent: QtCore.QObject | None = None, step_ms: int = 15) -> None:
+        """Warm up sounds incrementally to avoid blocking the UI thread."""
+        items: list[tuple[Path, dict[Path, QSoundEffect], float]] = []
+        items.extend([(p, self.spin_effects, self.spin_base_volume) for p in self.spin_sources])
+        items.extend([(p, self.ding_effects, self.ding_base_volume) for p in self.ding_sources])
+        if not items:
+            self._stop_warmup_timer()
+            return
+        self._warmup_items = items
+        if self._warmup_timer is None:
+            self._warmup_timer = QtCore.QTimer(parent)
+            self._warmup_timer.timeout.connect(self._warmup_step)
+        else:
+            if parent is not None:
+                self._warmup_timer.setParent(parent)
+        self._warmup_timer.setSingleShot(False)
+        self._warmup_timer.start(max(0, int(step_ms)))
+
+    def _warmup_step(self) -> None:
+        if not self._warmup_items:
+            self._stop_warmup_timer()
+            return
+        path, cache, base_volume = self._warmup_items.pop(0)
+        try:
+            self._get_or_create_effect(cache, path, base_volume)
+        except Exception:
+            pass
+        if not self._warmup_items:
+            self._stop_warmup_timer()
+
+    def _stop_warmup_timer(self) -> None:
+        if self._warmup_timer is not None:
+            self._warmup_timer.stop()
+            self._warmup_timer.deleteLater()
+            self._warmup_timer = None
+        self._warmup_items = []
 
     # --- Control ---
 

@@ -53,6 +53,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._state_store = state_store.ModeStateStore.from_saved(saved)
         self._mode_results: dict[str, dict[str, str]] = {}
         self.state_sync = StateSyncController(self, self._state_file)
+        self._mode_choice_locked = False
 
         # Timer für sanftere Sync-/Tooltip-Operationen
         self._tooltip_refresh_timer = QtCore.QTimer(self)
@@ -72,7 +73,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._init_spin_state()
         self._build_overlay(central)
         self._install_event_filters()
-        self._start_overlay_warmup()
+        self._show_mode_choice()
         self._connect_state_signals()
         self._finalize_startup()
 
@@ -251,15 +252,28 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_map_container(self) -> None:
         # ----- Map-Mode-Container -----
         self._map_result_text = "–"
-        self.map_ui = MapUI(self._state_store, self.language, self.theme, (self.tank, self.dps, self.support))
+        self._map_initialized = False
         self.map_mode = MapModeController(self)
-        self.map_container = self.map_ui.container
+        self.map_container = QtWidgets.QWidget()
+        self._map_container_layout = QtWidgets.QVBoxLayout(self.map_container)
+        self._map_container_layout.setContentsMargins(0, 0, 0, 0)
+        self._map_container_layout.setSpacing(0)
+
+    def _ensure_map_ui(self) -> None:
+        """Build map UI lazily to keep startup fast."""
+        if getattr(self, "_map_initialized", False):
+            return
+        self.map_ui = MapUI(self._state_store, self.language, self.theme, (self.tank, self.dps, self.support))
+        self._map_container_layout.addWidget(self.map_ui.container)
         self.map_ui.stateChanged.connect(self._update_spin_all_enabled)
         self.map_ui.stateChanged.connect(self.state_sync.save_state)
         self.map_ui.requestSpinCategory.connect(self.map_mode.spin_category)
         # Kompatibilitäts-Aliase, damit bestehende Logik funktioniert
         self.map_main = self.map_ui.map_main
         self.map_lists = self.map_ui.map_lists
+        self.map_ui.set_language(self.language)
+        self.map_ui.apply_theme(theme_util.get_theme(self.theme))
+        self._map_initialized = True
 
     def _build_mode_stack(self, root: QtWidgets.QVBoxLayout, role_container: QtWidgets.QWidget) -> None:
         # ----- Stacked Content -----
@@ -337,9 +351,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.online_mode = False  # Standard
         self.overlay.modeChosen.connect(self._on_mode_chosen)
-        self._pending_mode_choice: bool | None = None
-        self._pending_language_toggle: str | None = None
-        self._warmup_active = False
 
     def _install_event_filters(self) -> None:
         self.installEventFilter(self)
@@ -347,12 +358,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if app:
             app.installEventFilter(self)
 
-    def _start_overlay_warmup(self) -> None:
-        # Direkt beim Start Modus wählen lassen
+    def _show_mode_choice(self) -> None:
+        """Direkt beim Start Modus wählen lassen."""
         self._set_controls_enabled(False)
         self.overlay.show_online_choice()
-        # Buttons vorerst gesperrt lassen, erst nach Tooltip-Warmup freigeben
-        QtCore.QTimer.singleShot(0, self._warmup_tooltips_initial)
 
     def _connect_state_signals(self) -> None:
         # JETZT: Save-Hooks anschließen
@@ -383,46 +392,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._apply_language()
         # Tooltips sofort erlauben (werden später noch einmal frisch berechnet)
         self._set_tooltips_ready(True)
-
-    def _warmup_tooltips_initial(self):
-        """Initial Cache/Tooltips vorbereiten und Online/Offline-Buttons freigeben."""
-        # Erst alles sperren, dann die Caches zweimal aufbauen, damit das Dark-Theme-Repolish
-        # erledigt ist, bevor die Buttons anklickbar werden.
-        self._warmup_active = True
-        self._pending_mode_choice = None
-        self._pending_language_toggle = None
-        self.overlay.set_choice_enabled(False)
-        self.overlay.set_hover_blocked(True)
-        self._set_language_buttons_enabled(False)
-        # Während des Warmups keine Hover-Tooltips zulassen
-        self._set_tooltips_ready(False)
-        def _rebuild_tooltips():
-            self._refresh_tooltip_caches()
-            self._reset_hover_cache_under_cursor()
-        _rebuild_tooltips()
-        QtCore.QTimer.singleShot(220, _rebuild_tooltips)
-        QtCore.QTimer.singleShot(620, _rebuild_tooltips)
-        # Mehr Luft lassen, damit der erste Klick nicht vor dem Tooltip-Warmup passiert
-        QtCore.QTimer.singleShot(2000, self._finish_warmup)
-
-    def _finish_warmup(self):
-        """Hebt den Warmup-Block auf; idempotent."""
-        if not getattr(self, "_warmup_active", False):
-            return
-        self._warmup_active = False
-        self.overlay.set_hover_blocked(False)
-        self.overlay.set_choice_enabled(True)
-        self._set_tooltips_ready(True)
-        self._set_language_buttons_enabled(True)
-        self._reset_hover_cache_under_cursor()
-        if self._pending_mode_choice is not None:
-            choice = self._pending_mode_choice
-            self._pending_mode_choice = None
-            self._apply_mode_choice(choice)
-        if self._pending_language_toggle:
-            lang = self._pending_language_toggle
-            self._pending_language_toggle = None
-            self._switch_language(lang)
 
     def _on_overlay_closed(self):
         self._set_controls_enabled(True)
@@ -470,10 +439,64 @@ class MainWindow(QtWidgets.QMainWindow):
     def _refresh_tooltips_after_focus(self):
         """Bringt Tooltip-Caches nach Fokuswechsel zurück, ohne zu blockieren."""
         self._refresh_tooltip_caches_async(delay_step_ms=50)
-        QtCore.QTimer.singleShot(200, self._reset_hover_cache_under_cursor)
-        if not getattr(self, "_warmup_active", False):
-            self._set_tooltips_ready(True)
+        QtCore.QTimer.singleShot(200, lambda: self._ensure_hover_cache(ready=True))
 
+    def _refresh_hover_under_cursor(self):
+        """Trigger a hover refresh for widgets that just became enabled."""
+        app = QtWidgets.QApplication.instance()
+        if not app:
+            return
+        pos = QtGui.QCursor.pos()
+        views = []
+        for w in (self.tank, self.dps, self.support, getattr(self, "map_main", None)):
+            view = getattr(w, "view", None)
+            if view:
+                views.append(view)
+        for view in views:
+            if not view.isVisible():
+                continue
+            vp = view.viewport()
+            rect = QtCore.QRect(vp.mapToGlobal(QtCore.QPoint(0, 0)), vp.size())
+            if not rect.contains(pos):
+                continue
+            local_pos = vp.mapFromGlobal(pos)
+            enter_event = QtCore.QEvent(QtCore.QEvent.Enter)
+            move_event = QtGui.QMouseEvent(
+                QtCore.QEvent.MouseMove,
+                local_pos,
+                pos,
+                QtCore.Qt.NoButton,
+                QtCore.Qt.NoButton,
+                QtCore.Qt.NoModifier,
+            )
+            QtWidgets.QApplication.postEvent(vp, enter_event)
+            QtWidgets.QApplication.postEvent(vp, move_event)
+            return
+        widget = app.widgetAt(pos)
+        if widget is None:
+            return
+        local_pos = widget.mapFromGlobal(pos)
+        event = QtGui.QMouseEvent(
+            QtCore.QEvent.MouseMove,
+            local_pos,
+            pos,
+            QtCore.Qt.NoButton,
+            QtCore.Qt.NoButton,
+            QtCore.Qt.NoModifier,
+        )
+        QtWidgets.QApplication.postEvent(widget, event)
+
+    def _refresh_hover_state(self):
+        """Normalize hover/tooltips after enable/disable transitions."""
+        self._ensure_hover_cache(refresh_hover=True)
+
+    def _ensure_hover_cache(self, ready: bool | None = None, refresh_hover: bool = False) -> None:
+        """Ensure hover caches exist and optionally refresh hover or ready state."""
+        if ready is not None:
+            self._set_tooltips_ready(ready)
+        self._reset_hover_cache_under_cursor()
+        if refresh_hover:
+            QtCore.QTimer.singleShot(0, self._refresh_hover_under_cursor)
 
     def _apply_theme(self):
         """Apply the selected light/dark theme without freezing the UI."""
@@ -729,7 +752,7 @@ class MainWindow(QtWidgets.QMainWindow):
             QtCore.QTimer.singleShot(idx * step_ms, lambda _w=w: rebuild_single(_w))
         # Am Ende Tooltips freigeben und Hover-Cache setzen
         total_delay = len(wheels) * step_ms + 40
-        QtCore.QTimer.singleShot(total_delay, lambda: (self._set_tooltips_ready(True), self._reset_hover_cache_under_cursor()))
+        QtCore.QTimer.singleShot(total_delay, lambda: self._ensure_hover_cache(ready=True))
 
     def _reset_hover_cache_under_cursor(self):
         """Stellt sicher, dass Tooltip-Caches vorhanden sind, ohne Voll-Rebuild zu erzwingen."""
@@ -782,6 +805,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self._update_cancel_enabled()
         if self.hero_ban_active and en:
             self._set_hero_ban_visuals(True)
+        if en:
+            self._refresh_hover_state()
     def _stop_all_wheels(self):
         for w in (self.tank, self.dps, self.support): w.hard_stop()
     def _update_cancel_enabled(self):
@@ -1009,6 +1034,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Aktuelle Ergebnisse für den Modus merken, bevor wir wechseln
         self._snapshot_mode_results()
         if target == "maps":
+            self._ensure_map_ui()
             # Merk dir, welcher Rollen-Modus gerade in den Wheels steckt,
             # damit Map-Mode-Saves später nicht versehentlich den falschen Modus überschreiben.
             self.last_non_hero_mode = self.current_mode
@@ -1049,36 +1075,17 @@ class MainWindow(QtWidgets.QMainWindow):
         # Nach Sprachwechsel Label-Messungen aktualisieren, damit Tooltips weiter funktionieren
         self._set_tooltips_ready(False)
         self._refresh_tooltip_caches_async()
-        # Wenn im Warmup die Sprache gewechselt wird, Warmup abschließen,
-        # damit die Buttons nicht dauerhaft gesperrt bleiben.
-        if getattr(self, "_warmup_active", False):
-            self._finish_warmup()
-        else:
-            # Falls das Online/Offline-Overlay offen ist und Warmup schon vorbei war,
-            # Aktivierung sicherstellen (Setzen der Sprache ruft show_online_choice erneut auf).
-            last_view = getattr(self.overlay, "_last_view", {}) or {}
-            if last_view.get("type") == "online_choice":
-                self.overlay.set_choice_enabled(True)
-                self.overlay.set_hover_blocked(False)
+        # Falls das Online/Offline-Overlay offen ist, Aktivierung sicherstellen
+        last_view = getattr(self.overlay, "_last_view", {}) or {}
+        if last_view.get("type") == "online_choice":
+            self.overlay.set_choice_enabled(True)
         if not getattr(self, "_restoring_state", False):
             self.state_sync.save_state()
 
     def _toggle_language(self):
         """Toggle between German and English via the single flag button."""
         next_lang = "en" if self.language == "de" else "de"
-        # Wenn Warmup läuft, den Toggle vormerken und Buttons deaktivieren
-        if getattr(self, "_warmup_active", False):
-            self._pending_language_toggle = next_lang
-            self._set_language_buttons_enabled(False)
-            return
         self._switch_language(next_lang)
-
-    def _set_language_buttons_enabled(self, enabled: bool):
-        """Aktiviert/Deaktiviert sowohl das Haupt-Sprachicon als auch das Overlay-Icon."""
-        if hasattr(self, "btn_language"):
-            self.btn_language.setEnabled(enabled)
-        if hasattr(self, "overlay") and hasattr(self.overlay, "btn_language"):
-            self.overlay.btn_language.setEnabled(enabled)
 
     def _toggle_theme(self):
         """Switch between light and dark mode."""
@@ -1156,21 +1163,20 @@ class MainWindow(QtWidgets.QMainWindow):
     
     @QtCore.Slot(bool)
     def _on_mode_chosen(self, online: bool):
-        # Wenn Warmup noch läuft, Klick merken und nach Warmup ausführen
-        if getattr(self, "_warmup_active", False):
-            self._pending_mode_choice = online
-            self.overlay.set_choice_enabled(False)
+        if getattr(self, "_mode_choice_locked", False):
             return
+        self._mode_choice_locked = True
         self._apply_mode_choice(online)
 
     def _apply_mode_choice(self, online: bool):
         self.online_mode = online
         self._set_controls_enabled(True)
-        # Tooltip-Caches ohne spürbare Blockade asynchron neu aufbauen
-        self._set_tooltips_ready(False)
+        QtCore.QTimer.singleShot(250, lambda: self.sound.warmup_async(self, step_ms=15))
+        # Tooltip-Caches ohne spuerbare Blockade asynchron neu aufbauen
         self._refresh_tooltip_caches_async()
         # Nach dem Klick einen „Refokus“ durchführen, damit Hover/Tooltips sofort wieder greifen
         QtCore.QTimer.singleShot(300, self._refresh_tooltips_after_focus)
+        QtCore.QTimer.singleShot(0, self._refresh_hover_under_cursor)
 
         if self.online_mode:
             config.debug_print("Online-Modus aktiv.")

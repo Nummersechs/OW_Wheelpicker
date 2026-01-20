@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from typing import List, Optional, Union
 import random, itertools, difflib
 from PySide6 import QtCore, QtWidgets
@@ -180,6 +181,20 @@ class WheelView(BasePanel):
         # Default theme; main window reapplies the persisted choice.
         self.apply_theme(theme_util.get_theme("light"))
         QtCore.QTimer.singleShot(0, self._refit_view)
+
+    @contextmanager
+    def _suspend_list_signals(self):
+        blockers = [
+            QtCore.QSignalBlocker(self.names),
+            QtCore.QSignalBlocker(self.names.model()),
+        ]
+        prev = self._suppress_state_signal
+        self._suppress_state_signal = True
+        try:
+            yield prev
+        finally:
+            del blockers
+            self._suppress_state_signal = prev
 
     def set_language(self, lang: str):
         """Reapply translated labels for the current wheel."""
@@ -396,19 +411,10 @@ class WheelView(BasePanel):
                 if active:
                     return self.set_names_active({name}, True)
                 return False
-        blockers = [
-            QtCore.QSignalBlocker(self.names),
-            QtCore.QSignalBlocker(self.names.model()),
-        ]
-        prev = self._suppress_state_signal
-        self._suppress_state_signal = True
-        try:
+        with self._suspend_list_signals() as prev:
             self.names.add_name(name, active=active)
-        finally:
-            del blockers
-        self._on_names_list_changed()
-        self._suppress_state_signal = prev
-        if not self._suppress_state_signal:
+            self._on_names_list_changed()
+        if not prev:
             self.stateChanged.emit()
         return True
 
@@ -418,13 +424,7 @@ class WheelView(BasePanel):
         if not targets:
             return False
         changed = False
-        blockers = [
-            QtCore.QSignalBlocker(self.names),
-            QtCore.QSignalBlocker(self.names.model()),
-        ]
-        prev = self._suppress_state_signal
-        self._suppress_state_signal = True
-        try:
+        with self._suspend_list_signals() as prev:
             for i in range(self.names.count() - 1, -1, -1):
                 item = self.names.item(i)
                 if item is None:
@@ -432,12 +432,9 @@ class WheelView(BasePanel):
                 if self._item_text(item) in targets:
                     self.names.delete_row(i)
                     changed = True
-        finally:
-            del blockers
-        if changed:
-            self._on_names_list_changed()
-        self._suppress_state_signal = prev
-        if changed and not self._suppress_state_signal:
+            if changed:
+                self._on_names_list_changed()
+        if changed and not prev:
             self.stateChanged.emit()
         return changed
 
@@ -448,13 +445,7 @@ class WheelView(BasePanel):
         if not old or not new or old == new:
             return False
         changed = False
-        blockers = [
-            QtCore.QSignalBlocker(self.names),
-            QtCore.QSignalBlocker(self.names.model()),
-        ]
-        prev = self._suppress_state_signal
-        self._suppress_state_signal = True
-        try:
+        with self._suspend_list_signals() as prev:
             for i in range(self.names.count()):
                 item = self.names.item(i)
                 if item is None:
@@ -466,12 +457,9 @@ class WheelView(BasePanel):
                     widget.edit.setText(new)
                 item.setText(new)
                 changed = True
-        finally:
-            del blockers
-        if changed:
-            self._on_names_list_changed()
-        self._suppress_state_signal = prev
-        if changed and not self._suppress_state_signal:
+            if changed:
+                self._on_names_list_changed()
+        if changed and not prev:
             self.stateChanged.emit()
         return changed
 
@@ -483,13 +471,7 @@ class WheelView(BasePanel):
         if not targets:
             return False
         changed = False
-        blockers = [
-            QtCore.QSignalBlocker(self.names),
-            QtCore.QSignalBlocker(self.names.model()),
-        ]
-        prev = self._suppress_state_signal
-        self._suppress_state_signal = True
-        try:
+        with self._suspend_list_signals() as prev:
             for i in range(self.names.count()):
                 item = self.names.item(i)
                 if item is None:
@@ -507,12 +489,9 @@ class WheelView(BasePanel):
                     if item.checkState() != target_state:
                         item.setCheckState(target_state)
                         changed = True
-        finally:
-            del blockers
-        if changed:
-            self._on_names_list_changed()
-        self._suppress_state_signal = prev
-        if changed and not self._suppress_state_signal:
+            if changed:
+                self._on_names_list_changed()
+        if changed and not prev:
             self.stateChanged.emit()
         return changed
 

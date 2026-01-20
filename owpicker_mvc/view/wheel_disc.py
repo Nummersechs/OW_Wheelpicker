@@ -18,6 +18,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         self.names = [n.strip() for n in names if n.strip()]
         self.disabled_indices: set[int] = set()
         self._tooltips_ready: bool = True
+        self._runtime_truncation_checked: set[int] = set()
         # Flag, ob die Namens-Labels gezeichnet werden sollen
         self.show_labels = True
         self._cache_key = (tuple(self.names), self.radius, tuple(sorted(self.disabled_indices)))
@@ -50,6 +51,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         if not force and self._cached is not None and key == self._cache_key:
             return
         self._cache_key = key
+        self._runtime_truncation_checked = set()
 
         # Pixmap aufsetzen
         s = int(2 * self.radius) + 4
@@ -356,10 +358,13 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         cached_truncated = False
         if 0 <= idx < len(self._label_truncated):
             cached_truncated = bool(self._label_truncated[idx])
-        # Fallback nur, falls Cache/Truncation noch nicht sauber aufgebaut ist
         is_truncated = cached_truncated
-        if not is_truncated and (self._cached is None or len(self._label_truncated) != len(self.names)):
-            is_truncated = self._needs_tooltip_runtime(idx, angle_step)
+        if not is_truncated and idx not in self._runtime_truncation_checked:
+            self._runtime_truncation_checked.add(idx)
+            if self._needs_tooltip_runtime(idx, angle_step):
+                if 0 <= idx < len(self._label_truncated):
+                    self._label_truncated[idx] = True
+                is_truncated = True
         if not is_truncated:
             self._hide_hover_overlay()
             self._hide_floating_label()

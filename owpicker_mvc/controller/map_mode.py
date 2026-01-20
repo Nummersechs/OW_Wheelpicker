@@ -28,6 +28,8 @@ class MapModeController:
             self._mw.map_ui.capture_state()
 
     def activate_mode(self) -> None:
+        if hasattr(self._mw, "_ensure_map_ui"):
+            self._mw._ensure_map_ui()
         if hasattr(self._mw, "mode_stack"):
             self._mw.mode_stack.setCurrentIndex(1)
         self._mw.hero_ban_active = False

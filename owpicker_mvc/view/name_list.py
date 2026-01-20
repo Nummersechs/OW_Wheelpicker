@@ -4,6 +4,7 @@ from typing import List, Optional
 from PySide6 import QtCore, QtGui, QtWidgets
 import i18n
 from view import style_helpers
+from utils import ui_helpers
 
 
 class _NoPaintDelegate(QtWidgets.QStyledItemDelegate):
@@ -369,27 +370,17 @@ class NamesListPanel(QtWidgets.QWidget):
         style_helpers.style_names_list(self.names, theme)
 
     def apply_fixed_widths(self):
-        def set_min(widget, keys, padding=20, prefixes=None):
-            if widget is None:
-                return
-            prefixes_local = prefixes or [""]
-            font = widget.font()
-            fm = QtGui.QFontMetrics(font)
-            max_w = 0
-            for key in keys:
-                entry = i18n.TRANSLATIONS.get(key, {})
-                texts = entry.values() if isinstance(entry, dict) else [entry]
-                for txt in texts:
-                    if txt is None:
-                        continue
-                    for pre in prefixes_local:
-                        max_w = max(max_w, fm.horizontalAdvance(f"{pre}{txt}"))
-            width = max_w + padding
-            widget.setMinimumWidth(width)
-            widget.setMaximumWidth(width)
-
-        set_min(self.btn_toggle_all_names, ["wheel.select_all", "wheel.deselect_all"], padding=44, prefixes=["☑ ", "☐ "])
-        set_min(self.btn_sort_names, ["wheel.sort_names"], padding=44)
+        ui_helpers.set_fixed_width_from_translations(
+            self.btn_toggle_all_names,
+            ["wheel.select_all", "wheel.deselect_all"],
+            padding=44,
+            prefixes=["☑ ", "☐ "],
+        )
+        ui_helpers.set_fixed_width_from_translations(
+            self.btn_sort_names,
+            ["wheel.sort_names"],
+            padding=44,
+        )
 
     def refresh_action_state(self):
         self._update_toggle_all_button_label()
