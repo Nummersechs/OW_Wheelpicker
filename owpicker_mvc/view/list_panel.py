@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List
 
-from PySide6 import QtCore
+from PySide6 import QtCore, QtWidgets
 
 import i18n
 from utils import theme as theme_util
@@ -15,11 +15,12 @@ class ListPanel(BasePanel):
     Bietet Spin-/Include-Buttons und eine Namensliste, aber kein Rad.
     """
 
-    def __init__(self, title: str, entries: List[dict] | List[str]):
+    def __init__(self, title: str, entries: List[dict] | List[str], parent: QtWidgets.QWidget | None = None):
         super().__init__(
             title=title,
             spin_label=i18n.t("wheel.spin_single_map"),
             names_hint_key="wheel.names_hint_single",
+            parent=parent,
         )
         self.pair_mode = False
         self.use_subrole_filter = False

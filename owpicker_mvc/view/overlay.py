@@ -13,7 +13,9 @@ class ResultOverlay(QtWidgets.QWidget):
         super().__init__(parent)
         self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, False)
         self.setAttribute(QtCore.Qt.WA_NoSystemBackground, True)
-        self.setWindowFlags(QtCore.Qt.FramelessWindowHint)
+        # Keep overlay as a child widget (not a separate window) to avoid Stage Manager focus jumps.
+        self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(QtCore.Qt.NoFocus)
 
         self.card = QtWidgets.QFrame(self)
         self.card.setObjectName("resultCard")
@@ -99,7 +101,7 @@ class ResultOverlay(QtWidgets.QWidget):
             self.setGeometry(self.parent().rect())
         self.show()
         self.raise_()
-        self.activateWindow()
+        # Keine Fokus-Erzwingung, damit kein unerwarteter Refokus entsteht.
 
     def show_result(self, tank, dps, sup):
         self._apply_button_labels()

@@ -45,14 +45,23 @@ class StateSyncController(QtCore.QObject):
         state["theme"] = self._mw.theme
         return state
 
-    def save_state(self) -> None:
+    def save_state(self, sync: bool = True) -> None:
         if getattr(self._mw, "_restoring_state", False):
             return
+        if getattr(self._mw, "_closing", False):
+            sync = False
         state = self.gather_state()
         persistence.save_state(self._state_file, state)
-        self.sync_all_roles()
-        if self._mw.hero_ban_active:
+        if sync:
+            self.sync_all_roles()
+        if self._mw.hero_ban_active and not getattr(self._mw, "_closing", False):
             self._mw._update_hero_ban_wheel()
+
+    def shutdown(self) -> None:
+        """Stop pending timers and clear queued sync payloads."""
+        if self._sync_timer.isActive():
+            self._sync_timer.stop()
+        self._pending_sync_payload = None
 
     def send_spin_result(self, tank: str, damage: str, support: str) -> None:
         if not getattr(self._mw, "online_mode", False):

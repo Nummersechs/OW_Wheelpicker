@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+import time
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -54,6 +55,49 @@ class MainWindow(QtWidgets.QMainWindow):
         self._mode_results: dict[str, dict[str, str]] = {}
         self.state_sync = StateSyncController(self, self._state_file)
         self._mode_choice_locked = False
+        self._closing = False
+        self._choice_shown_at: float | None = None
+        self._post_choice_delay_ms = 350
+        self._post_choice_step_ms = 90
+        self._post_choice_warmup_step_ms = 40
+        self._post_choice_timer = QtCore.QTimer(self)
+        self._post_choice_timer.setSingleShot(True)
+        self._post_choice_timer.timeout.connect(self._run_post_choice_init)
+        self._theme_heavy_pending = False
+        self._language_heavy_pending = False
+        self._post_choice_init_done = False
+        self._stack_switching = False
+        self._stack_switch_timer = QtCore.QTimer(self)
+        self._stack_switch_timer.setSingleShot(True)
+        self._stack_switch_timer.timeout.connect(self._clear_stack_switching)
+        self._map_init_in_progress = False
+        self._map_lists_ready = False
+        self._map_prebuild_in_progress = False
+        self._focus_trace_enabled = bool(getattr(config, "TRACE_FOCUS", False))
+        self._focus_trace_count = 0
+        self._focus_trace_max_events = int(getattr(config, "FOCUS_TRACE_MAX_EVENTS", 120))
+        self._focus_trace_until = time.monotonic() + float(getattr(config, "FOCUS_TRACE_DURATION_S", 3.0))
+        self._focus_trace_window_events = bool(getattr(config, "FOCUS_TRACE_WINDOW_EVENTS", True))
+        self._focus_trace_windows_only = bool(getattr(config, "FOCUS_TRACE_WINDOWS_ONLY", False))
+        self._focus_trace_snapshot_interval_ms = int(getattr(config, "FOCUS_TRACE_SNAPSHOT_INTERVAL_MS", 0))
+        self._focus_trace_snapshot_remaining = int(getattr(config, "FOCUS_TRACE_SNAPSHOT_COUNT", 0))
+        self._focus_trace_snapshot_timer: QtCore.QTimer | None = None
+        self._focus_trace_window_handle_installed = False
+        self._focus_trace_file = self._state_dir / "focus_trace.log"
+        if self._focus_trace_enabled:
+            try:
+                self._focus_trace_file.write_text("", encoding="utf-8")
+            except Exception:
+                pass
+        self._trace_enabled = bool(getattr(config, "TRACE_FLOW", False) or getattr(config, "DEBUG", False))
+        self._trace_file = self._state_dir / "flow_trace.log"
+        if self._trace_enabled:
+            self._trace_event("startup")
+        if getattr(config, "DISABLE_TOOLTIPS", False):
+            try:
+                QtWidgets.QToolTip.setEnabled(False)
+            except Exception:
+                pass
 
         # Timer für sanftere Sync-/Tooltip-Operationen
         self._tooltip_refresh_timer = QtCore.QTimer(self)
@@ -76,6 +120,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._show_mode_choice()
         self._connect_state_signals()
         self._finalize_startup()
+        self._apply_focus_policy_defaults()
+        self._schedule_clear_focus()
 
     def _build_root(self) -> tuple[QtWidgets.QWidget, QtWidgets.QVBoxLayout]:
         central = QtWidgets.QWidget()
@@ -255,25 +301,57 @@ class MainWindow(QtWidgets.QMainWindow):
         self._map_initialized = False
         self.map_mode = MapModeController(self)
         self.map_container = QtWidgets.QWidget()
+        self.map_container.setFocusPolicy(QtCore.Qt.NoFocus)
         self._map_container_layout = QtWidgets.QVBoxLayout(self.map_container)
         self._map_container_layout.setContentsMargins(0, 0, 0, 0)
         self._map_container_layout.setSpacing(0)
 
     def _ensure_map_ui(self) -> None:
         """Build map UI lazily to keep startup fast."""
+        self._trace_event("ensure_map_ui:start", map_initialized=getattr(self, "_map_initialized", False))
         if getattr(self, "_map_initialized", False):
             return
-        self.map_ui = MapUI(self._state_store, self.language, self.theme, (self.tank, self.dps, self.support))
-        self._map_container_layout.addWidget(self.map_ui.container)
-        self.map_ui.stateChanged.connect(self._update_spin_all_enabled)
-        self.map_ui.stateChanged.connect(self.state_sync.save_state)
-        self.map_ui.requestSpinCategory.connect(self.map_mode.spin_category)
-        # Kompatibilitäts-Aliase, damit bestehende Logik funktioniert
-        self.map_main = self.map_ui.map_main
-        self.map_lists = self.map_ui.map_lists
-        self.map_ui.set_language(self.language)
-        self.map_ui.apply_theme(theme_util.get_theme(self.theme))
-        self._map_initialized = True
+        self._map_init_in_progress = True
+        try:
+            self._map_lists_ready = False
+            self.map_ui = MapUI(
+                self._state_store,
+                self.language,
+                self.theme,
+                (self.tank, self.dps, self.support),
+                defer_lists=True,
+            )
+            self.map_ui.listsBuilt.connect(self._on_map_lists_ready)
+            self._map_container_layout.addWidget(self.map_ui.container)
+            self.map_ui.stateChanged.connect(self._update_spin_all_enabled)
+            self.map_ui.stateChanged.connect(self.state_sync.save_state)
+            self.map_ui.requestSpinCategory.connect(self.map_mode.spin_category)
+            # Kompatibilitäts-Aliase, damit bestehende Logik funktioniert
+            self.map_main = self.map_ui.map_main
+            self.map_lists = self.map_ui.map_lists
+            self.map_ui.set_language(self.language)
+            self.map_ui.apply_theme(theme_util.get_theme(self.theme))
+            # Map-Mode soll keinen Fokus ziehen
+            try:
+                self.map_ui.container.setFocusPolicy(QtCore.Qt.NoFocus)
+            except Exception:
+                pass
+            for w in (self.map_ui.map_main, *self.map_ui.map_lists.values()):
+                try:
+                    w.setFocusPolicy(QtCore.Qt.NoFocus)
+                except Exception:
+                    pass
+                view = getattr(w, "view", None)
+                if view:
+                    try:
+                        view.setFocusPolicy(QtCore.Qt.NoFocus)
+                    except Exception:
+                        pass
+            self._map_initialized = True
+            self._trace_event("ensure_map_ui:done")
+            self._apply_focus_policy_defaults()
+        finally:
+            self._map_init_in_progress = False
 
     def _build_mode_stack(self, root: QtWidgets.QVBoxLayout, role_container: QtWidgets.QWidget) -> None:
         # ----- Stacked Content -----
@@ -357,11 +435,60 @@ class MainWindow(QtWidgets.QMainWindow):
         app = QtWidgets.QApplication.instance()
         if app:
             app.installEventFilter(self)
+            if getattr(self, "_focus_trace_enabled", False):
+                try:
+                    app.focusChanged.connect(self._trace_focus_signal)
+                except Exception:
+                    pass
+                try:
+                    QtGui.QGuiApplication.applicationStateChanged.connect(self._trace_app_state)
+                except Exception:
+                    pass
+                try:
+                    QtGui.QGuiApplication.focusWindowChanged.connect(self._trace_focus_window_signal)
+                except Exception:
+                    pass
+                if self._focus_trace_snapshot_interval_ms > 0 and self._focus_trace_snapshot_remaining > 0:
+                    QtCore.QTimer.singleShot(0, self._start_focus_snapshots)
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
+        super().showEvent(event)
+        if not getattr(self, "_focus_trace_enabled", False):
+            return
+        self._install_window_handle_filter()
+
+    def _install_window_handle_filter(self) -> None:
+        if self._focus_trace_window_handle_installed:
+            return
+        try:
+            handle = self.windowHandle()
+        except Exception:
+            handle = None
+        if handle is None:
+            return
+        try:
+            handle.installEventFilter(self)
+            self._focus_trace_window_handle_installed = True
+        except Exception:
+            pass
+
+    def _start_focus_snapshots(self) -> None:
+        if not getattr(self, "_focus_trace_enabled", False):
+            return
+        if self._focus_trace_snapshot_remaining <= 0:
+            return
+        if self._focus_trace_snapshot_timer is None:
+            self._focus_trace_snapshot_timer = QtCore.QTimer(self)
+            self._focus_trace_snapshot_timer.timeout.connect(self._trace_window_snapshot)
+        self._focus_trace_snapshot_timer.start(max(40, self._focus_trace_snapshot_interval_ms))
 
     def _show_mode_choice(self) -> None:
         """Direkt beim Start Modus wählen lassen."""
         self._set_controls_enabled(False)
+        self._set_heavy_ui_updates_enabled(False)
         self.overlay.show_online_choice()
+        self._choice_shown_at = time.monotonic()
+        self._trace_event("show_mode_choice")
 
     def _connect_state_signals(self) -> None:
         # JETZT: Save-Hooks anschließen
@@ -388,8 +515,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_spin_all_enabled()
         self._update_cancel_enabled()
         self._apply_mode_results(self._mode_key())
-        self._apply_theme()
-        self._apply_language()
+        # Heavy parts (wheel styling, full wheel retranslate) erst nach Mode-Choice
+        self._apply_theme(defer_heavy=True)
+        self._apply_language(defer_heavy=True)
         # Tooltips sofort erlauben (werden später noch einmal frisch berechnet)
         self._set_tooltips_ready(True)
 
@@ -424,71 +552,277 @@ class MainWindow(QtWidgets.QMainWindow):
                 wheel.deactivate_names(names_to_remove)
 
     def eventFilter(self, obj, event):
-        # Nach längeren Pausen/Focus-Wechsel Tooltip-Caches auffrischen
-        if event.type() in (
-            QtCore.QEvent.FocusIn,
-            QtCore.QEvent.WindowActivate,
-            QtCore.QEvent.ApplicationActivate,
-        ):
-            self._refresh_tooltips_after_focus()
+        if getattr(self, "_focus_trace_enabled", False):
+            self._trace_focus_event(obj, event)
+        if getattr(self, "_closing", False):
+            return super().eventFilter(obj, event)
+        if self._overlay_choice_active():
+            return super().eventFilter(obj, event)
         if event.type() == QtCore.QEvent.MouseButtonPress:
             if hasattr(self, "player_list_panel"):
                 self.player_list_panel.maybe_close_on_click(obj, event)
         return super().eventFilter(obj, event)
 
-    def _refresh_tooltips_after_focus(self):
-        """Bringt Tooltip-Caches nach Fokuswechsel zurück, ohne zu blockieren."""
-        self._refresh_tooltip_caches_async(delay_step_ms=50)
-        QtCore.QTimer.singleShot(200, lambda: self._ensure_hover_cache(ready=True))
+    def _event_type_name(self, etype: int) -> str:
+        try:
+            return QtCore.QEvent.Type(etype).name  # type: ignore[attr-defined]
+        except Exception:
+            return str(etype)
+
+    def _trace_focus_signal(self, old, new) -> None:
+        if not getattr(self, "_focus_trace_enabled", False):
+            return
+        try:
+            now = time.monotonic()
+            if now > getattr(self, "_focus_trace_until", 0):
+                self._focus_trace_enabled = False
+                return
+            if self._focus_trace_count >= getattr(self, "_focus_trace_max_events", 0):
+                self._focus_trace_enabled = False
+                return
+            old_name = type(old).__name__ if old is not None else None
+            new_name = type(new).__name__ if new is not None else None
+            old_obj = old.objectName() if old is not None else None
+            new_obj = new.objectName() if new is not None else None
+            line = (
+                f"t={round(now, 3)} | signal=focusChanged | old={old_name} | old_name={old_obj} | "
+                f"new={new_name} | new_name={new_obj}"
+            )
+            with self._focus_trace_file.open("a", encoding="utf-8") as f:
+                f.write(line + "\n")
+            self._focus_trace_count += 1
+        except Exception:
+            pass
+
+    def _trace_focus_window_signal(self, win) -> None:
+        if not getattr(self, "_focus_trace_enabled", False):
+            return
+        try:
+            now = time.monotonic()
+            if now > getattr(self, "_focus_trace_until", 0):
+                self._focus_trace_enabled = False
+                return
+            if self._focus_trace_count >= getattr(self, "_focus_trace_max_events", 0):
+                self._focus_trace_enabled = False
+                return
+            win_name = type(win).__name__ if win is not None else None
+            win_obj = win.objectName() if win is not None else None
+            try:
+                win_title = win.title() if win is not None else None
+            except Exception:
+                win_title = None
+            is_active = None
+            is_visible = None
+            window_state = None
+            flags = None
+            if isinstance(win, QtGui.QWindow):
+                try:
+                    is_active = win.isActive()
+                    is_visible = win.isVisible()
+                    window_state = int(win.windowState())
+                    flags = int(win.flags())
+                except Exception:
+                    pass
+            line = (
+                f"t={round(now, 3)} | signal=focusWindowChanged | win={win_name} | win_name={win_obj} | "
+                f"title={win_title} | active={is_active} | visible={is_visible} | "
+                f"window_state={window_state} | flags={flags}"
+            )
+            with self._focus_trace_file.open("a", encoding="utf-8") as f:
+                f.write(line + "\n")
+            self._focus_trace_count += 1
+        except Exception:
+            pass
+
+    def _trace_app_state(self, state) -> None:
+        if not getattr(self, "_focus_trace_enabled", False):
+            return
+        try:
+            now = time.monotonic()
+            if now > getattr(self, "_focus_trace_until", 0):
+                self._focus_trace_enabled = False
+                return
+            if self._focus_trace_count >= getattr(self, "_focus_trace_max_events", 0):
+                self._focus_trace_enabled = False
+                return
+            line = f"t={round(now, 3)} | signal=appState | state={state}"
+            with self._focus_trace_file.open("a", encoding="utf-8") as f:
+                f.write(line + "\n")
+            self._focus_trace_count += 1
+        except Exception:
+            pass
+
+    def _trace_window_snapshot(self) -> None:
+        if not getattr(self, "_focus_trace_enabled", False):
+            return
+        try:
+            now = time.monotonic()
+            if now > getattr(self, "_focus_trace_until", 0):
+                self._focus_trace_enabled = False
+                return
+            if self._focus_trace_count >= getattr(self, "_focus_trace_max_events", 0):
+                self._focus_trace_enabled = False
+                return
+            app = QtGui.QGuiApplication.instance()
+            windows = []
+            if app:
+                for win in app.allWindows():
+                    try:
+                        info = {
+                            "type": type(win).__name__,
+                            "title": win.title(),
+                            "name": win.objectName(),
+                            "visible": win.isVisible(),
+                            "active": win.isActive(),
+                            "state": int(win.windowState()),
+                            "flags": int(win.flags()),
+                        }
+                    except Exception:
+                        continue
+                    windows.append(info)
+            line = f"t={round(now, 3)} | snapshot=windows | data={windows}"
+            with self._focus_trace_file.open("a", encoding="utf-8") as f:
+                f.write(line + "\n")
+            self._focus_trace_count += 1
+            self._focus_trace_snapshot_remaining -= 1
+            if self._focus_trace_snapshot_remaining <= 0 and self._focus_trace_snapshot_timer:
+                self._focus_trace_snapshot_timer.stop()
+        except Exception:
+            pass
+
+    def _trace_focus_event(self, obj, event) -> None:
+        if not getattr(self, "_focus_trace_enabled", False):
+            return
+        try:
+            now = time.monotonic()
+            if now > getattr(self, "_focus_trace_until", 0):
+                self._focus_trace_enabled = False
+                return
+            if self._focus_trace_count >= getattr(self, "_focus_trace_max_events", 0):
+                self._focus_trace_enabled = False
+                return
+            etype = int(event.type())
+            focus_events = (
+                QtCore.QEvent.FocusIn,
+                QtCore.QEvent.FocusOut,
+                QtCore.QEvent.WindowActivate,
+                QtCore.QEvent.WindowDeactivate,
+                QtCore.QEvent.ApplicationActivate,
+                QtCore.QEvent.ApplicationDeactivate,
+            )
+            window_events = (
+                QtCore.QEvent.Show,
+                QtCore.QEvent.Hide,
+                QtCore.QEvent.ShowToParent,
+                QtCore.QEvent.HideToParent,
+                QtCore.QEvent.WindowStateChange,
+                QtCore.QEvent.ActivationChange,
+                QtCore.QEvent.Move,
+                QtCore.QEvent.Resize,
+            )
+            if etype not in focus_events:
+                if not self._focus_trace_window_events or etype not in window_events:
+                    return
+            app = QtWidgets.QApplication.instance()
+            focus_widget = app.focusWidget() if app else None
+            focus_name = type(focus_widget).__name__ if focus_widget is not None else None
+            focus_obj = focus_widget.objectName() if focus_widget is not None else None
+            obj_name = obj.objectName() if hasattr(obj, "objectName") else None
+            obj_type = type(obj).__name__ if obj is not None else None
+            is_window = False
+            is_visible = None
+            is_active = None
+            window_state = None
+            if isinstance(obj, QtWidgets.QWidget):
+                try:
+                    is_window = obj.isWindow()
+                    is_visible = obj.isVisible()
+                    is_active = obj.isActiveWindow()
+                    window_state = int(obj.windowState())
+                except Exception:
+                    pass
+            elif isinstance(obj, QtGui.QWindow):
+                try:
+                    is_window = True
+                    is_visible = obj.isVisible()
+                    is_active = obj.isActive()
+                    window_state = int(obj.windowState())
+                except Exception:
+                    pass
+            if getattr(self, "_focus_trace_windows_only", False) and not is_window:
+                return
+            text = None
+            if hasattr(obj, "text"):
+                try:
+                    text = obj.text()
+                except Exception:
+                    text = None
+            line = (
+                f"t={round(now, 3)} | etype={etype} | etype_name={self._event_type_name(etype)} | "
+                f"obj={obj_type} | obj_name={obj_name} | obj_text={text} | "
+                f"is_window={is_window} | is_visible={is_visible} | is_active={is_active} | "
+                f"window_state={window_state} | focus={focus_name} | focus_name={focus_obj}"
+            )
+            with self._focus_trace_file.open("a", encoding="utf-8") as f:
+                f.write(line + "\n")
+            self._focus_trace_count += 1
+        except Exception:
+            pass
+
+    def _apply_focus_policy_defaults(self) -> None:
+        """Avoid automatic focus on startup by forcing ClickFocus for focusable widgets."""
+        for w in self.findChildren(QtWidgets.QWidget):
+            try:
+                policy = w.focusPolicy()
+            except Exception:
+                continue
+            # Don't allow buttons to grab focus on activation (prevents startup refocus flash).
+            if isinstance(w, QtWidgets.QAbstractButton):
+                try:
+                    w.setFocusPolicy(QtCore.Qt.NoFocus)
+                except Exception:
+                    pass
+                continue
+            if policy == QtCore.Qt.NoFocus:
+                continue
+            if policy in (QtCore.Qt.TabFocus, QtCore.Qt.StrongFocus):
+                try:
+                    w.setFocusPolicy(QtCore.Qt.ClickFocus)
+                except Exception:
+                    pass
+
+    def _schedule_clear_focus(self) -> None:
+        """Clear any automatic focus after startup to avoid refocus flicker."""
+        QtCore.QTimer.singleShot(0, self._clear_focus_now)
+        QtCore.QTimer.singleShot(150, self._clear_focus_now)
+        QtCore.QTimer.singleShot(400, self._clear_focus_now)
+
+    def _clear_focus_now(self) -> None:
+        try:
+            app = QtWidgets.QApplication.instance()
+            if app:
+                fw = app.focusWidget()
+                if fw:
+                    fw.clearFocus()
+        except Exception:
+            pass
+        try:
+            self.clearFocus()
+        except Exception:
+            pass
 
     def _refresh_hover_under_cursor(self):
         """Trigger a hover refresh for widgets that just became enabled."""
-        app = QtWidgets.QApplication.instance()
-        if not app:
+        if getattr(self, "_closing", False):
             return
-        pos = QtGui.QCursor.pos()
-        views = []
-        for w in (self.tank, self.dps, self.support, getattr(self, "map_main", None)):
-            view = getattr(w, "view", None)
-            if view:
-                views.append(view)
-        for view in views:
-            if not view.isVisible():
-                continue
-            vp = view.viewport()
-            rect = QtCore.QRect(vp.mapToGlobal(QtCore.QPoint(0, 0)), vp.size())
-            if not rect.contains(pos):
-                continue
-            local_pos = vp.mapFromGlobal(pos)
-            enter_event = QtCore.QEvent(QtCore.QEvent.Enter)
-            move_event = QtGui.QMouseEvent(
-                QtCore.QEvent.MouseMove,
-                local_pos,
-                pos,
-                QtCore.Qt.NoButton,
-                QtCore.Qt.NoButton,
-                QtCore.Qt.NoModifier,
-            )
-            QtWidgets.QApplication.postEvent(vp, enter_event)
-            QtWidgets.QApplication.postEvent(vp, move_event)
+        if self._overlay_choice_active():
             return
-        widget = app.widgetAt(pos)
-        if widget is None:
-            return
-        local_pos = widget.mapFromGlobal(pos)
-        event = QtGui.QMouseEvent(
-            QtCore.QEvent.MouseMove,
-            local_pos,
-            pos,
-            QtCore.Qt.NoButton,
-            QtCore.Qt.NoButton,
-            QtCore.Qt.NoModifier,
-        )
-        QtWidgets.QApplication.postEvent(widget, event)
+        # Hover-Refocus deaktiviert
+        return
 
     def _refresh_hover_state(self):
         """Normalize hover/tooltips after enable/disable transitions."""
-        self._ensure_hover_cache(refresh_hover=True)
+        return
 
     def _ensure_hover_cache(self, ready: bool | None = None, refresh_hover: bool = False) -> None:
         """Ensure hover caches exist and optionally refresh hover or ready state."""
@@ -498,7 +832,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if refresh_hover:
             QtCore.QTimer.singleShot(0, self._refresh_hover_under_cursor)
 
-    def _apply_theme(self):
+    def _apply_theme(self, defer_heavy: bool = False):
         """Apply the selected light/dark theme without freezing the UI."""
         theme = theme_util.get_theme(getattr(self, "theme", "light"))
         theme_util.apply_app_theme(theme)  # einmal zentral, danach in Scheiben
@@ -525,6 +859,12 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "overlay"):
             self.overlay.apply_theme(theme, tool_style)
 
+        self._theme_heavy_pending = bool(defer_heavy)
+        if defer_heavy:
+            return
+        self._apply_theme_heavy(theme, step_ms=15)
+
+    def _apply_theme_heavy(self, theme: theme_util.Theme, step_ms: int = 15):
         # Größere Widget-Mengen in kleinen Paketen aktualisieren
         targets = []
         for w in (getattr(self, "tank", None), getattr(self, "dps", None), getattr(self, "support", None)):
@@ -540,7 +880,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 if hasattr(wheel, "apply_theme"):
                     targets.append(wheel)
 
-        step_ms = 15
+        step_ms = max(0, int(step_ms))
         for idx, w in enumerate(targets):
             QtCore.QTimer.singleShot(idx * step_ms, lambda _w=w: _w.apply_theme(theme))
 
@@ -699,6 +1039,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _refresh_tooltip_caches(self):
         """Baut die Label-/Tooltip-Caches nach finalem Layout neu auf und schaltet sie frei."""
+        if getattr(self, "_closing", False):
+            return
+        if self._overlay_choice_active():
+            return
+        self._trace_event("refresh_tooltip_caches:sync")
         wheels = [self.tank, self.dps, self.support]
         if getattr(self, "map_main", None):
             wheels.append(self.map_main)
@@ -721,6 +1066,11 @@ class MainWindow(QtWidgets.QMainWindow):
         damit der UI-Thread beim Online/Offline-Klick nicht blockiert.
         Mehrfachaufrufe werden kurz gesammelt, um die Render-Last zu drosseln.
         """
+        if getattr(self, "_closing", False):
+            return
+        if self._overlay_choice_active():
+            return
+        self._trace_event("refresh_tooltip_caches:async", step_ms=delay_step_ms)
         step = max(0, int(delay_step_ms))
         self._tooltip_refresh_step = step
         timer = getattr(self, "_tooltip_refresh_timer", None)
@@ -734,6 +1084,17 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _run_tooltip_cache_refresh(self):
         """Führt den eigentlichen Cache-Rebuild sequenziell aus."""
+        if getattr(self, "_closing", False):
+            return
+        if self._overlay_choice_active():
+            return
+        if getattr(self, "_stack_switching", False):
+            self._trace_event("run_tooltip_cache_refresh:defer", reason="stack_switching")
+            timer = getattr(self, "_tooltip_refresh_timer", None)
+            if timer is not None:
+                timer.start(80)
+            return
+        self._trace_event("run_tooltip_cache_refresh")
         wheels = [self.tank, self.dps, self.support]
         if getattr(self, "map_main", None):
             wheels.append(self.map_main)
@@ -768,6 +1129,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _set_tooltips_ready(self, ready: bool = True):
         """Setzt das Tooltip-Ready-Flag für alle Räder."""
+        if getattr(self, "_closing", False):
+            return
+        if self._overlay_choice_active():
+            return
         wheels = [self.tank, self.dps, self.support]
         if getattr(self, "map_main", None):
             wheels.append(self.map_main)
@@ -805,8 +1170,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._update_cancel_enabled()
         if self.hero_ban_active and en:
             self._set_hero_ban_visuals(True)
-        if en:
-            self._refresh_hover_state()
+        # Kein automatischer Hover-Refresh beim Aktivieren
     def _stop_all_wheels(self):
         for w in (self.tank, self.dps, self.support): w.hard_stop()
     def _update_cancel_enabled(self):
@@ -1031,6 +1395,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
     def _on_mode_button_clicked(self, target: str):
+        self._trace_event("mode_button_clicked", target=target)
+        if not self._post_choice_init_done and not self._overlay_choice_active():
+            self._ensure_post_choice_ready()
+        if target == "maps" and not getattr(self, "_map_lists_ready", False):
+            self._trace_event("mode_switch_deferred", target=target)
+            self._set_map_button_enabled(False)
+            return
         # Aktuelle Ergebnisse für den Modus merken, bevor wir wechseln
         self._snapshot_mode_results()
         if target == "maps":
@@ -1050,13 +1421,19 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             self.map_mode.capture_state()
             self.map_mode.activate_mode()
+            self._sync_mode_stack()
+            self._trace_event("mode_switch:maps_done")
             return
 
         # wenn wir aus dem Map-Mode zurückkommen, zuerst speichern
         if self.current_mode == "maps":
             self.map_mode.capture_state()
+            if hasattr(self, "map_ui"):
+                self.map_ui.set_active(False)
         self._activate_role_modes()
         mode_manager.on_mode_button_clicked(self, target)
+        self._sync_mode_stack()
+        self._trace_event("mode_switch:roles_done", target=target)
 
     def _update_title(self):
         if self.current_mode == "maps":
@@ -1070,6 +1447,7 @@ class MainWindow(QtWidgets.QMainWindow):
         lang = lang if lang in i18n.SUPPORTED_LANGS else "de"
         if lang == getattr(self, "language", "de"):
             return
+        self._trace_event("switch_language", lang=lang)
         self.language = lang
         self._apply_language()
         # Nach Sprachwechsel Label-Messungen aktualisieren, damit Tooltips weiter funktionieren
@@ -1105,7 +1483,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tooltip = i18n.t("theme.toggle.to_light") if is_dark else i18n.t("theme.toggle.to_dark")
         self.btn_theme.setToolTip(tooltip)
 
-    def _apply_language(self):
+    def _apply_language(self, defer_heavy: bool = False):
         i18n.set_language(self.language)
         if hasattr(self, "btn_language"):
             self.btn_language.setIcon(flag_icons.icon_for_language(self.language))
@@ -1129,10 +1507,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "player_list_panel"):
             self.player_list_panel.set_language(self.language)
         self._update_title()
-        for w in (self.tank, self.dps, self.support):
-            w.set_language(self.language)
-        if hasattr(self, "map_mode"):
-            self.map_mode.retranslate_ui()
         if hasattr(self, "overlay"):
             self.overlay.set_language(self.language)
             # Flag auf dem Overlay aktualisieren
@@ -1140,6 +1514,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_theme_button_label()
         self._update_spin_mode_ui()
         self._update_summary_from_results()
+
+        self._language_heavy_pending = bool(defer_heavy)
+        if defer_heavy:
+            return
+        self._apply_language_heavy()
+
+    def _apply_language_heavy(self):
+        for w in (self.tank, self.dps, self.support):
+            w.set_language(self.language)
+        if hasattr(self, "map_mode"):
+            self.map_mode.retranslate_ui()
 
     def _update_hero_ban_wheel(self):
         """Delegiert an den Mode-Manager."""
@@ -1169,14 +1554,30 @@ class MainWindow(QtWidgets.QMainWindow):
         self._apply_mode_choice(online)
 
     def _apply_mode_choice(self, online: bool):
+        if getattr(self, "_closing", False):
+            return
         self.online_mode = online
         self._set_controls_enabled(True)
-        QtCore.QTimer.singleShot(250, lambda: self.sound.warmup_async(self, step_ms=15))
-        # Tooltip-Caches ohne spuerbare Blockade asynchron neu aufbauen
-        self._refresh_tooltip_caches_async()
-        # Nach dem Klick einen „Refokus“ durchführen, damit Hover/Tooltips sofort wieder greifen
-        QtCore.QTimer.singleShot(300, self._refresh_tooltips_after_focus)
-        QtCore.QTimer.singleShot(0, self._refresh_hover_under_cursor)
+        self._set_heavy_ui_updates_enabled(True)
+        self._post_choice_init_done = False
+        # Schwere Arbeiten nach der Auswahl leicht verzögern, um "Early Click"-Lags zu vermeiden.
+        delay_ms = self._post_choice_delay_ms
+        if self._choice_shown_at is not None:
+            elapsed = time.monotonic() - self._choice_shown_at
+            if elapsed < 0.8:
+                delay_ms = max(delay_ms, 900)
+                self._post_choice_step_ms = 140
+                self._post_choice_warmup_step_ms = 55
+            else:
+                self._post_choice_step_ms = 90
+                self._post_choice_warmup_step_ms = 40
+            self._trace_event(
+                "apply_mode_choice",
+                online=online,
+                elapsed=round(elapsed, 3),
+                delay_ms=delay_ms,
+            )
+        self._schedule_post_choice_init(delay_ms)
 
         if self.online_mode:
             config.debug_print("Online-Modus aktiv.")
@@ -1184,3 +1585,246 @@ class MainWindow(QtWidgets.QMainWindow):
             config.debug_print("Offline-Modus aktiv.")
         # Sync ggf. neu einplanen oder abbrechen
         self.state_sync.sync_all_roles()
+
+    def _set_heavy_ui_updates_enabled(self, enabled: bool) -> None:
+        """Defer expensive wheel painting while the mode-choice overlay is visible."""
+        self._trace_event("set_heavy_ui_updates", enabled=enabled)
+        for w in (self.tank, self.dps, self.support, getattr(self, "map_main", None)):
+            if not w:
+                continue
+            try:
+                w.setUpdatesEnabled(enabled)
+            except Exception:
+                pass
+            view = getattr(w, "view", None)
+            if view:
+                try:
+                    view.setUpdatesEnabled(enabled)
+                except Exception:
+                    pass
+
+    def _overlay_choice_active(self) -> bool:
+        overlay = getattr(self, "overlay", None)
+        if not overlay or not overlay.isVisible():
+            return False
+        view = getattr(overlay, "_last_view", {}) or {}
+        return view.get("type") == "online_choice"
+
+    def _schedule_post_choice_init(self, delay_ms: int) -> None:
+        if getattr(self, "_closing", False):
+            return
+        if not hasattr(self, "_post_choice_timer"):
+            return
+        self._trace_event("schedule_post_choice_init", delay_ms=delay_ms)
+        self._post_choice_timer.start(max(0, int(delay_ms)))
+
+    def _ensure_post_choice_ready(self) -> None:
+        """Run deferred init immediately after the mode choice if the user interacts fast."""
+        self._trace_event("ensure_post_choice_ready")
+        if self._post_choice_init_done:
+            return
+        if hasattr(self, "_post_choice_timer") and self._post_choice_timer.isActive():
+            self._post_choice_timer.stop()
+        self._run_post_choice_init()
+
+    def _run_post_choice_init(self) -> None:
+        if getattr(self, "_closing", False):
+            return
+        if getattr(self, "_post_choice_init_done", False):
+            return
+        if self._overlay_choice_active():
+            return
+        self._trace_event("run_post_choice_init:start")
+        self._set_tooltips_ready(True)
+        self._set_heavy_ui_updates_enabled(True)
+        if self._language_heavy_pending:
+            self._apply_language_heavy()
+            self._language_heavy_pending = False
+        if self._theme_heavy_pending:
+            theme = theme_util.get_theme(getattr(self, "theme", "light"))
+            self._apply_theme_heavy(theme, step_ms=int(self._post_choice_step_ms))
+            self._theme_heavy_pending = False
+        self.sound.warmup_async(self, step_ms=int(self._post_choice_warmup_step_ms))
+        self._refresh_tooltip_caches_async(delay_step_ms=int(self._post_choice_step_ms))
+        self._schedule_map_prebuild()
+        self._post_choice_init_done = True
+        self._sync_mode_stack()
+        self._trace_event("run_post_choice_init:done")
+
+    def _schedule_map_prebuild(self) -> None:
+        if getattr(self, "_closing", False):
+            return
+        if getattr(self, "_map_initialized", False) or getattr(self, "_map_prebuild_in_progress", False):
+            return
+        self._set_map_button_enabled(False)
+        self._map_prebuild_in_progress = True
+        QtCore.QTimer.singleShot(0, self._run_map_prebuild)
+
+    def _run_map_prebuild(self) -> None:
+        if getattr(self, "_closing", False):
+            return
+        if getattr(self, "_map_initialized", False):
+            self._set_map_button_enabled(True)
+            self._map_prebuild_in_progress = False
+            return
+        self._trace_event("map_prebuild:start")
+        self._ensure_map_ui()
+        # map_lists_ready will flip once listsBuilt fires
+
+    def _on_map_lists_ready(self) -> None:
+        self._map_lists_ready = True
+        self._map_prebuild_in_progress = False
+        self._set_map_button_enabled(True)
+        self._trace_event("map_prebuild:done")
+        self._apply_focus_policy_defaults()
+
+    def _set_map_button_enabled(self, enabled: bool) -> None:
+        if hasattr(self, "btn_mode_maps"):
+            try:
+                self.btn_mode_maps.setEnabled(bool(enabled))
+            except Exception:
+                pass
+
+    def _mark_stack_switching(self, delay_ms: int = 140) -> None:
+        if getattr(self, "_closing", False):
+            return
+        self._stack_switching = True
+        timer = getattr(self, "_stack_switch_timer", None)
+        if timer is not None:
+            timer.start(max(0, int(delay_ms)))
+        self._trace_event("stack_switching", active=True, delay_ms=delay_ms)
+
+    def _clear_stack_switching(self) -> None:
+        if not getattr(self, "_stack_switching", False):
+            return
+        self._stack_switching = False
+        self._trace_event("stack_switching", active=False)
+
+    def _sync_mode_stack(self) -> None:
+        if not hasattr(self, "mode_stack"):
+            return
+        self._mark_stack_switching()
+        self._trace_event("sync_mode_stack:before")
+        if self.current_mode == "maps":
+            self.mode_stack.setCurrentIndex(1)
+            if hasattr(self, "map_ui"):
+                self.map_ui.set_active(True)
+        else:
+            self.mode_stack.setCurrentIndex(0)
+            if hasattr(self, "map_ui"):
+                self.map_ui.set_active(False)
+        self._update_title()
+        self._update_spin_all_enabled()
+        if getattr(self, "role_container", None):
+            self.role_container.update()
+        if getattr(self, "map_container", None):
+            self.map_container.update()
+        self._trace_event("sync_mode_stack:after", force_vis=True)
+        self._trace_event("sync_mode_stack:after")
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        self._closing = True
+        self._trace_event("close_event")
+        try:
+            self._stop_all_wheels()
+            if getattr(self, "map_main", None):
+                self.map_main.hard_stop()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "map_ui"):
+                self.map_ui.shutdown()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "player_list_panel"):
+                self.player_list_panel.shutdown()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "_tooltip_refresh_timer") and self._tooltip_refresh_timer.isActive():
+                self._tooltip_refresh_timer.stop()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "_post_choice_timer") and self._post_choice_timer.isActive():
+                self._post_choice_timer.stop()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "_stack_switch_timer") and self._stack_switch_timer.isActive():
+                self._stack_switch_timer.stop()
+        except Exception:
+            pass
+        try:
+            self.state_sync.save_state(sync=False)
+            self.state_sync.shutdown()
+        except Exception:
+            pass
+        try:
+            self.sound.shutdown()
+        except Exception:
+            pass
+        app = QtWidgets.QApplication.instance()
+        if app:
+            try:
+                app.removeEventFilter(self)
+            except Exception:
+                pass
+        super().closeEvent(event)
+
+    def _trace_event(self, name: str, **extra) -> None:
+        if not getattr(self, "_trace_enabled", False):
+            return
+        try:
+            stack_idx = self.mode_stack.currentIndex() if hasattr(self, "mode_stack") else None
+            stack_widget = None
+            if hasattr(self, "mode_stack"):
+                try:
+                    stack_widget = self.mode_stack.currentWidget()
+                except Exception:
+                    stack_widget = None
+            stack_widget_name = type(stack_widget).__name__ if stack_widget is not None else None
+            overlay = getattr(self, "overlay", None)
+            overlay_visible = overlay.isVisible() if overlay else False
+            overlay_type = getattr(overlay, "_last_view", {}) or {}
+            overlay_type = overlay_type.get("type") if isinstance(overlay_type, dict) else None
+            tank_updates = self.tank.updatesEnabled() if hasattr(self, "tank") else None
+            map_updates = getattr(self, "map_main", None)
+            map_updates = map_updates.updatesEnabled() if map_updates else None
+            role_vis = None
+            map_vis = None
+            if getattr(self, "role_container", None):
+                role_vis = self.role_container.isVisible()
+            if getattr(self, "map_container", None):
+                map_vis = self.map_container.isVisible()
+            if extra.pop("force_vis", False):
+                # no-op, but keeps the visibility fields in the trace for sync events
+                pass
+            base = {
+                "t": round(time.monotonic(), 3),
+                "event": name,
+                "mode": getattr(self, "current_mode", None),
+                "stack": stack_idx,
+                "stack_widget": stack_widget_name,
+                "overlay": overlay_type,
+                "overlay_visible": overlay_visible,
+                "post_init": getattr(self, "_post_choice_init_done", None),
+                "map_init": getattr(self, "_map_initialized", None),
+                "stack_switching": getattr(self, "_stack_switching", None),
+                "tank_updates": tank_updates,
+                "map_updates": map_updates,
+                "role_vis": role_vis,
+                "map_vis": map_vis,
+            }
+            base.update(extra)
+            line = " | ".join(f"{k}={v}" for k, v in base.items())
+            try:
+                with self._trace_file.open("a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+            except Exception:
+                pass
+            if getattr(config, "DEBUG", False):
+                config.debug_print(line)
+        except Exception:
+            pass

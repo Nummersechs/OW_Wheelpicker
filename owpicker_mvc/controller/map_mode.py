@@ -15,13 +15,13 @@ class MapModeController:
         if self._mw.current_mode != "maps":
             return
         if hasattr(self._mw, "map_ui"):
-            self._mw.map_ui.rebuild_combined()
+            self._mw.map_ui.rebuild_combined(emit_state=False, force_wheel=True)
         self._mw._update_spin_all_enabled()
 
     def load_state(self) -> None:
         if hasattr(self._mw, "map_ui"):
             self._mw.map_ui.load_state()
-            self.rebuild_wheel()
+        self._mw._update_spin_all_enabled()
 
     def capture_state(self) -> None:
         if hasattr(self._mw, "map_ui"):
@@ -41,6 +41,8 @@ class MapModeController:
         self._mw.btn_mode_heroes.setChecked(False)
         self._mw.btn_mode_heroban.setChecked(False)
         self._mw.btn_mode_maps.setChecked(True)
+        if hasattr(self._mw, "map_ui"):
+            self._mw.map_ui.set_active(True)
         self.load_state()
         self._mw._update_title()
         self._mw._apply_mode_results(self._mw._mode_key())

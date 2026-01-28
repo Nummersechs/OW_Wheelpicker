@@ -17,7 +17,7 @@ class SpinModeToggle(QtWidgets.QFrame):
         self._thumb_anim: QtCore.QPropertyAnimation | None = None
 
         self.setCursor(QtCore.Qt.PointingHandCursor)
-        self.setFocusPolicy(QtCore.Qt.StrongFocus)
+        self.setFocusPolicy(QtCore.Qt.NoFocus)
         self.setFixedHeight(44)
         self.setAttribute(QtCore.Qt.WA_StyledBackground, True)
 

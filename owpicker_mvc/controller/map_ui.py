@@ -18,18 +18,31 @@ class MapUI(QtCore.QObject):
 
     stateChanged = QtCore.Signal()
     requestSpinCategory = QtCore.Signal(str)
+    listsBuilt = QtCore.Signal()
 
-    def __init__(self, state_store, language: str, theme_key: str, role_widgets: tuple):
+    def __init__(self, state_store, language: str, theme_key: str, role_widgets: tuple, defer_lists: bool = False):
         super().__init__()
         self.state_store = state_store
         self.language = language
         self.theme_key = theme_key
         self._role_widgets = role_widgets  # (tank, dps, support)
+        self._defer_list_build = bool(defer_lists)
 
         self.map_categories = list(getattr(config, "MAP_CATEGORIES", [])) or list(config.DEFAULT_MAPS.keys())
         self.map_lists: Dict[str, ListPanel] = {}
         self._map_combined: list[str] = []
         self._map_result_text = "–"
+        self._active = True
+        self._pending_rebuild = False
+        self._pending_state_emit = False
+        self._pending_wheel_refresh = False
+        self._pending_list_categories: list[str] = []
+        self._pending_list_state: dict = {}
+        self._list_build_timer: QtCore.QTimer | None = None
+        self._update_delay_ms = 140
+        self._update_timer = QtCore.QTimer(self)
+        self._update_timer.setSingleShot(True)
+        self._update_timer.timeout.connect(self._flush_updates)
         self.container = self._build_ui()
 
     # ----- Build UI -----
@@ -56,6 +69,7 @@ class MapUI(QtCore.QObject):
         self.btn_edit_map_types = QtWidgets.QPushButton(i18n.t("map.edit_types"))
         ui_helpers.set_fixed_width_from_translations([self.btn_edit_map_types], ["map.edit_types"], padding=48)
         self.btn_edit_map_types.clicked.connect(lambda: self._show_map_type_editor(container))
+        self.btn_edit_map_types.setFocusPolicy(QtCore.Qt.ClickFocus)
         sb_layout.addWidget(self.btn_edit_map_types, 0, QtCore.Qt.AlignLeft)
         sb_layout.addStretch(1)
         self.map_sidebar = sidebar
@@ -71,6 +85,7 @@ class MapUI(QtCore.QObject):
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.map_grid_container)
         scroll.setObjectName("mapListScroll")
+        scroll.setFocusPolicy(QtCore.Qt.ClickFocus)
         self.map_lists_frame = scroll
         right_wrap = QtWidgets.QWidget()
         right_wrap.setObjectName("mapListsWrapper")
@@ -80,7 +95,12 @@ class MapUI(QtCore.QObject):
         self.map_lists_wrapper = right_wrap
 
         # Listen initial erstellen
-        self._build_map_lists(self.state_store.get_mode_state("maps") or {})
+        map_state = self.state_store.get_mode_state("maps") or {}
+        if self._defer_list_build:
+            self._pending_list_state = map_state
+            QtCore.QTimer.singleShot(0, self._start_list_build)
+        else:
+            self._build_map_lists(map_state)
 
         # zentrales Map-Rad
         self.map_main = WheelView("Map-Rad", [], pair_mode=False, allow_pair_toggle=False, title_key="map.wheel_title")
@@ -101,6 +121,7 @@ class MapUI(QtCore.QObject):
         self.map_main.view.setMinimumSize(base_canvas, base_canvas)
         self.map_main.view.setMaximumSize(QtCore.QSize(16777215, 16777215))
         self.map_main.view.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        self.map_main.btn_local_spin.setFocusPolicy(QtCore.Qt.ClickFocus)
 
         # Gesamt-Layout
         row = QtWidgets.QHBoxLayout()
@@ -115,45 +136,90 @@ class MapUI(QtCore.QObject):
         layout.addLayout(row, 1)
         layout.setStretchFactor(row, 1)
         QtCore.QTimer.singleShot(0, self._cap_heights)
-        QtCore.QTimer.singleShot(0, self.rebuild_combined)
+        if not self._defer_list_build:
+            QtCore.QTimer.singleShot(0, lambda: self.rebuild_combined(emit_state=False, force_wheel=True))
         return container
 
     # ----- Map lists -----
-    def _build_map_lists(self, map_state: dict):
-        # Clear existing
+    def _clear_map_lists(self) -> None:
+        # Clear existing list panels
         while self.map_grid.count():
             item = self.map_grid.takeAt(0)
             w = item.widget()
             if w:
-                w.setParent(None); w.deleteLater()
+                w.setParent(None)
+                w.deleteLater()
         self.map_lists.clear()
-        # clear sidebar checks
+        # Clear sidebar checks
         while self._map_type_list_layout.count():
             item = self._map_type_list_layout.takeAt(0)
             w = item.widget()
             if w:
-                w.setParent(None); w.deleteLater()
+                w.setParent(None)
+                w.deleteLater()
 
+    def _add_map_list(self, cat: str, role_state: dict) -> None:
+        include_checked = role_state.get("include_in_all", True)
+        parent = getattr(self, "map_grid_container", None)
+        w = ListPanel(cat, role_state.get("entries", []), parent=parent)
+        w.set_spin_button_text(i18n.t("wheel.spin_single_map"))
+        w.set_language(self.language)
+        w.set_interactive_enabled(include_checked)
+        w.setVisible(include_checked)
+        w.btn_include_in_all.setChecked(include_checked)
+        w.btn_include_in_all.setVisible(False)
+        if hasattr(w, "names_panel"):
+            w.names_panel.set_auto_focus_enabled(False)
+        w.btn_local_spin.setFocusPolicy(QtCore.Qt.ClickFocus)
+        w.btn_include_in_all.setFocusPolicy(QtCore.Qt.ClickFocus)
+        if hasattr(w, "names"):
+            w.names.setFocusPolicy(QtCore.Qt.ClickFocus)
+        if hasattr(w, "btn_sort_names"):
+            w.btn_sort_names.setFocusPolicy(QtCore.Qt.ClickFocus)
+        if hasattr(w, "btn_toggle_all_names"):
+            w.btn_toggle_all_names.setFocusPolicy(QtCore.Qt.ClickFocus)
+        w.btn_include_in_all.toggled.connect(lambda checked, c=cat: self._on_list_include_toggled(c, checked))
+        w.stateChanged.connect(self._schedule_update)
+        w.request_spin.connect(lambda _=None, c=cat: self.requestSpinCategory.emit(c))
+        self.map_lists[cat] = w
+        self.map_grid.addWidget(w)
+
+        cb = QtWidgets.QCheckBox(cat)
+        cb.setChecked(include_checked)
+        cb.setFocusPolicy(QtCore.Qt.ClickFocus)
+        cb.toggled.connect(lambda checked, c=cat: self._on_map_type_toggled(c, checked))
+        self.map_type_checks[cat] = cb
+        self._map_type_list_layout.addWidget(cb)
+
+    def _build_map_lists(self, map_state: dict):
+        self._clear_map_lists()
         for cat in self.map_categories:
             role_state = map_state.get(cat) or {"entries": [], "pair_mode": False, "use_subroles": False}
-            include_checked = role_state.get("include_in_all", True)
-            w = ListPanel(cat, role_state.get("entries", []))
-            w.set_spin_button_text(i18n.t("wheel.spin_single_map"))
-            w.set_language(self.language)
-            w.set_interactive_enabled(include_checked)
-            w.setVisible(include_checked)
-            w.btn_include_in_all.setChecked(include_checked)
-            w.stateChanged.connect(self.rebuild_combined)
-            w.request_spin.connect(lambda _=None, c=cat: self.requestSpinCategory.emit(c))
-            self.map_lists[cat] = w
-            self.map_grid.addWidget(w)
-
-            cb = QtWidgets.QCheckBox(cat)
-            cb.setChecked(include_checked)
-            cb.toggled.connect(lambda checked, c=cat: self._on_map_type_toggled(c, checked))
-            self.map_type_checks[cat] = cb
-            self._map_type_list_layout.addWidget(cb)
+            self._add_map_list(cat, role_state)
         self._map_type_list_layout.addStretch(1)
+        self.listsBuilt.emit()
+
+    def _start_list_build(self):
+        self._clear_map_lists()
+        self._pending_list_categories = list(self.map_categories)
+        if self._list_build_timer is None:
+            self._list_build_timer = QtCore.QTimer(self)
+            self._list_build_timer.setSingleShot(True)
+            self._list_build_timer.timeout.connect(self._build_list_step)
+        self._list_build_timer.start(0)
+
+    def _build_list_step(self):
+        if not self._pending_list_categories:
+            self._map_type_list_layout.addStretch(1)
+            self.rebuild_combined(emit_state=False, force_wheel=True)
+            self.listsBuilt.emit()
+            return
+        # Build one category per tick to keep UI responsive
+        cat = self._pending_list_categories.pop(0)
+        role_state = self._pending_list_state.get(cat) or {"entries": [], "pair_mode": False, "use_subroles": False}
+        self._add_map_list(cat, role_state)
+        if self._list_build_timer is not None:
+            self._list_build_timer.start(0)
 
     def _on_map_type_toggled(self, category: str, checked: bool):
         wheel = self.map_lists.get(category)
@@ -161,8 +227,18 @@ class MapUI(QtCore.QObject):
             wheel.btn_include_in_all.setChecked(checked)
             wheel.setVisible(checked)
             wheel.set_interactive_enabled(checked)
-        self.rebuild_combined()
-        self.stateChanged.emit()
+        # Rebuild kommt über stateChanged des ListPanels.
+
+    def _on_list_include_toggled(self, category: str, checked: bool):
+        if cb := self.map_type_checks.get(category):
+            if cb.isChecked() != checked:
+                blocker = QtCore.QSignalBlocker(cb)
+                cb.setChecked(checked)
+                del blocker
+        wheel = self.map_lists.get(category)
+        if wheel:
+            wheel.setVisible(checked)
+            wheel.set_interactive_enabled(checked)
 
     # ----- Map-Type-Editor -----
     def _show_map_type_editor(self, parent_widget: QtWidgets.QWidget):
@@ -282,7 +358,7 @@ class MapUI(QtCore.QObject):
         if not editors:
             return
         editor = editors[-1]
-        editor.setFocus()
+        # Kein erzwungener Fokus
         editor.deselect()
         editor.setCursorPosition(len(editor.text()))
 
@@ -330,8 +406,7 @@ class MapUI(QtCore.QObject):
             wheel.setVisible(wheel.btn_include_in_all.isChecked())
             if cb := self.map_type_checks.get(cat):
                 cb.setChecked(wheel.btn_include_in_all.isChecked())
-        self.rebuild_combined()
-        self.stateChanged.emit()
+        self.rebuild_combined(emit_state=True, force_wheel=True)
 
     # ----- State / Language / Theme -----
     def set_language(self, lang: str):
@@ -382,7 +457,7 @@ class MapUI(QtCore.QObject):
             wheel.setVisible(wheel.btn_include_in_all.isChecked())
             if cb := self.map_type_checks.get(cat):
                 cb.setChecked(wheel.btn_include_in_all.isChecked())
-        self.rebuild_combined()
+        self.rebuild_combined(emit_state=False, force_wheel=True)
 
     def capture_state(self):
         payload = {}
@@ -396,7 +471,43 @@ class MapUI(QtCore.QObject):
         self.state_store.set_mode_state("maps", payload)
 
     # ----- Data helpers -----
-    def rebuild_combined(self):
+    def set_active(self, active: bool) -> None:
+        self._active = bool(active)
+        if self._active:
+            if self._pending_wheel_refresh:
+                self.rebuild_combined(emit_state=False, force_wheel=True)
+        else:
+            if self._update_timer.isActive():
+                self._update_timer.stop()
+            self._pending_rebuild = False
+            self._pending_state_emit = False
+
+    def shutdown(self) -> None:
+        """Stop internal timers and prevent further wheel updates."""
+        self.set_active(False)
+        if self._update_timer.isActive():
+            self._update_timer.stop()
+        if self._list_build_timer is not None and self._list_build_timer.isActive():
+            self._list_build_timer.stop()
+        self._pending_list_categories = []
+        self._pending_rebuild = False
+        self._pending_state_emit = False
+
+    def _schedule_update(self):
+        self._pending_rebuild = True
+        self._pending_state_emit = True
+        if not self._update_timer.isActive():
+            self._update_timer.start(self._update_delay_ms)
+
+    def _flush_updates(self):
+        if not self._pending_rebuild:
+            return
+        emit_state = self._pending_state_emit
+        self._pending_rebuild = False
+        self._pending_state_emit = False
+        self._apply_combined_update(emit_state=emit_state, force_wheel=False)
+
+    def _apply_combined_update(self, emit_state: bool, force_wheel: bool):
         combined: list[str] = []
         for wheel in self.map_lists.values():
             if not wheel.btn_include_in_all.isChecked():
@@ -405,10 +516,25 @@ class MapUI(QtCore.QObject):
                 name = entry.get("name", "").strip()
                 if name:
                     combined.append(name)
+        changed = combined != self._map_combined
         self._map_combined = combined
-        if hasattr(self, "map_main"):
-            self.map_main.set_override_entries([{"name": n, "subroles": [], "active": True} for n in combined])
-        self.stateChanged.emit()
+        if changed or force_wheel or self._pending_wheel_refresh:
+            if hasattr(self, "map_main") and (self._active or force_wheel):
+                self.map_main.set_override_entries(
+                    [{"name": n, "subroles": [], "active": True} for n in combined]
+                )
+                self._pending_wheel_refresh = False
+            else:
+                self._pending_wheel_refresh = True
+        if emit_state:
+            self.stateChanged.emit()
+
+    def rebuild_combined(self, emit_state: bool = True, force_wheel: bool = False):
+        if self._update_timer.isActive():
+            self._update_timer.stop()
+        self._pending_rebuild = False
+        self._pending_state_emit = False
+        self._apply_combined_update(emit_state=emit_state, force_wheel=force_wheel)
 
     def combined_names(self) -> list[str]:
         return list(self._map_combined)

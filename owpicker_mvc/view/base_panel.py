@@ -21,8 +21,9 @@ class BasePanel(QtWidgets.QWidget):
         subrole_labels: list[str] | None = None,
         title_key: str | None = None,
         header_mode: str = "simple",
+        parent: QtWidgets.QWidget | None = None,
     ) -> None:
-        super().__init__()
+        super().__init__(parent)
         self._title_key = title_key
         self._title_fallback = title
         self._names_hint_key = names_hint_key

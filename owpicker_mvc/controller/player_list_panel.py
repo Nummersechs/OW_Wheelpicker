@@ -55,6 +55,14 @@ class PlayerListPanelController(QtCore.QObject):
         if self._panel:
             self._panel.hide()
 
+    def shutdown(self) -> None:
+        """Stop timers and hide the panel to release resources."""
+        if self._sync_timer and self._sync_timer.isActive():
+            self._sync_timer.stop()
+        self._sync_timer = None
+        self._syncing = False
+        self.hide_panel()
+
     def on_resize(self) -> None:
         if self._panel and self._panel.isVisible():
             self.position_panel()

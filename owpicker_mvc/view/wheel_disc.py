@@ -328,11 +328,6 @@ class WheelDisc(QtWidgets.QGraphicsObject):
             self._hide_floating_label()
             self._last_hover_idx = None
             return
-        if not self._tooltips_ready:
-            self._hide_hover_overlay()
-            self._hide_floating_label()
-            self._last_hover_idx = None
-            return
         pos = event.pos()
         x, y = pos.x(), pos.y()
         angle = (math.degrees(math.atan2(-y, x)) + 360.0) % 360.0
@@ -353,18 +348,21 @@ class WheelDisc(QtWidgets.QGraphicsObject):
             super().hoverMoveEvent(event)
             return
         # Tooltip nur anzeigen, wenn der Label-Text im Segment abgeschnitten ist.
-        # Ensure cache exists without rebuilding every hover event
-        self._ensure_cache(force=False)
-        cached_truncated = False
-        if 0 <= idx < len(self._label_truncated):
-            cached_truncated = bool(self._label_truncated[idx])
-        is_truncated = cached_truncated
-        if not is_truncated and idx not in self._runtime_truncation_checked:
-            self._runtime_truncation_checked.add(idx)
-            if self._needs_tooltip_runtime(idx, angle_step):
-                if 0 <= idx < len(self._label_truncated):
-                    self._label_truncated[idx] = True
-                is_truncated = True
+        cache_ready = self._cached is not None and len(self._label_truncated) == len(self.names)
+        if cache_ready:
+            cached_truncated = False
+            if 0 <= idx < len(self._label_truncated):
+                cached_truncated = bool(self._label_truncated[idx])
+            is_truncated = cached_truncated
+            if not is_truncated and idx not in self._runtime_truncation_checked:
+                self._runtime_truncation_checked.add(idx)
+                if self._needs_tooltip_runtime(idx, angle_step):
+                    if 0 <= idx < len(self._label_truncated):
+                        self._label_truncated[idx] = True
+                    is_truncated = True
+        else:
+            # Cache noch nicht stabil -> Laufzeitcheck ohne Cache-Aufbau
+            is_truncated = self._needs_tooltip_runtime(idx, angle_step)
         if not is_truncated:
             self._hide_hover_overlay()
             self._hide_floating_label()
@@ -373,11 +371,16 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         # Tooltip bei jeder Bewegung neu setzen, damit er der Maus folgt
         self._last_hover_idx = idx
         name = self.names[idx]
-        self._show_floating_label(name, event.screenPos())
+        if getattr(config, "DISABLE_TOOLTIPS", False):
+            # Use scene overlay when native tooltips are disabled (avoids extra window/focus).
+            self._show_hover_overlay(name, event.scenePos())
+        else:
+            self._show_floating_label(name, event.screenPos())
         super().hoverMoveEvent(event)
 
     def hoverLeaveEvent(self, event: QtWidgets.QGraphicsSceneHoverEvent) -> None:
         self._hide_floating_label()
+        self._hide_hover_overlay()
         self._last_hover_idx = None
         super().hoverLeaveEvent(event)
 
@@ -493,6 +496,8 @@ class WheelDisc(QtWidgets.QGraphicsObject):
 
     # ---- Floating label (custom tooltip) ----
     def _show_floating_label(self, text: str, screen_pos: QtCore.QPointF):
+        if getattr(config, "DISABLE_TOOLTIPS", False):
+            return
         if not getattr(self, "_floating_label", None):
             lbl = QtWidgets.QLabel()
             lbl.setWindowFlags(QtCore.Qt.ToolTip)

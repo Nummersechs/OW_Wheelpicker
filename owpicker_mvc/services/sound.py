@@ -28,6 +28,7 @@ class SoundManager:
         self.ding_base_volume = 0.7
         self.preview_base_volume = 0.35
         self.preview_effect: QSoundEffect | None = None
+        self._preview_tmp_path: Path | None = None
         self._warmup_timer: QtCore.QTimer | None = None
         self._warmup_items: list[tuple[Path, dict[Path, QSoundEffect], float]] = []
 
@@ -104,6 +105,50 @@ class SoundManager:
             self._warmup_timer.deleteLater()
             self._warmup_timer = None
         self._warmup_items = []
+
+    def _cleanup_preview_file(self) -> None:
+        path = self._preview_tmp_path
+        self._preview_tmp_path = None
+        if not path:
+            return
+        try:
+            if path.exists():
+                path.unlink()
+        except Exception:
+            pass
+
+    def shutdown(self) -> None:
+        """Stop sounds/timers and release audio resources."""
+        self._stop_warmup_timer()
+        try:
+            self.stop_spin()
+            self.stop_ding()
+        except Exception:
+            pass
+        if self.preview_effect:
+            try:
+                self.preview_effect.stop()
+            except Exception:
+                pass
+        # Delete cached effects to release audio backend resources
+        for eff in list(self.spin_effects.values()) + list(self.ding_effects.values()):
+            try:
+                eff.stop()
+            except Exception:
+                pass
+            try:
+                eff.deleteLater()
+            except Exception:
+                pass
+        if self.preview_effect:
+            try:
+                self.preview_effect.deleteLater()
+            except Exception:
+                pass
+        self.spin_effects.clear()
+        self.ding_effects.clear()
+        self.preview_effect = None
+        self._cleanup_preview_file()
 
     # --- Control ---
 
@@ -194,6 +239,8 @@ class SoundManager:
         mit moderater Lautstärke (nicht lauter als die Standard-WAVs).
         """
         try:
+            # Clean up any previous preview temp file to avoid leaks across runs.
+            self._cleanup_preview_file()
             sr = 44100
             duration = 0.25
             samples = int(sr * duration)
@@ -212,6 +259,7 @@ class SoundManager:
                     wf.setframerate(sr)
                     wf.writeframes(data)
                 tmp_path = Path(tmp.name)
+            self._preview_tmp_path = tmp_path
 
             eff = QSoundEffect()
             eff.setSource(QUrl.fromLocalFile(str(tmp_path)))

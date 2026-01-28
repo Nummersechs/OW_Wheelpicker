@@ -6,6 +6,15 @@ Hier kannst du das Verhalten und die Startdaten des Programms anpassen.
 # ---------- Logging/Debug ----------
 DEBUG = False
 QUIET = False
+TRACE_FLOW = True
+TRACE_FOCUS = True
+FOCUS_TRACE_DURATION_S = 12.0
+FOCUS_TRACE_MAX_EVENTS = 800
+DISABLE_TOOLTIPS = True
+FOCUS_TRACE_WINDOW_EVENTS = True
+FOCUS_TRACE_WINDOWS_ONLY = True
+FOCUS_TRACE_SNAPSHOT_INTERVAL_MS = 200
+FOCUS_TRACE_SNAPSHOT_COUNT = 20
 
 # ---------- Sprache ----------
 # Voreingestellte Sprache, wenn keine Auswahl gespeichert wurde

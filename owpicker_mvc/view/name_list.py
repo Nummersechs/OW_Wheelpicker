@@ -54,6 +54,9 @@ class NamesList(QtWidgets.QListWidget):
         super().__init__(parent)
         self.subrole_labels = subrole_labels or []
         self.has_subroles = bool(self.subrole_labels)
+        self._auto_focus_enabled = True
+        self._auto_focus_requires_active = False
+        self.setFocusPolicy(QtCore.Qt.NoFocus)
         self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.setItemDelegate(_NoPaintDelegate(self))
@@ -113,7 +116,7 @@ class NamesList(QtWidgets.QListWidget):
         self.setCurrentItem(item)
         if not text:
             widget = self.itemWidget(item)
-            if widget:
+            if widget and self._allow_auto_focus():
                 widget.focus_name()
 
     def insert_name_at(self, row: int, text: str = ""):
@@ -122,7 +125,7 @@ class NamesList(QtWidgets.QListWidget):
         self._attach_row_widget(item)
         self.setCurrentItem(item)
         widget = self.itemWidget(item)
-        if widget:
+        if widget and self._allow_auto_focus():
             widget.focus_name()
 
     def delete_row(self, row: int):
@@ -146,6 +149,22 @@ class NamesList(QtWidgets.QListWidget):
                     QtCore.QTimer.singleShot(0, widget.focus_name)
                 return
         super().mousePressEvent(ev)
+
+    def _allow_auto_focus(self) -> bool:
+        if not self._auto_focus_enabled:
+            return False
+        if not self._auto_focus_requires_active:
+            return True
+        app = QtWidgets.QApplication.instance()
+        if not app:
+            return False
+        focus_widget = app.focusWidget()
+        return focus_widget is not None and (focus_widget is self or self.isAncestorOf(focus_widget))
+
+    def set_auto_focus_enabled(self, enabled: bool, require_active_focus: bool | None = None) -> None:
+        self._auto_focus_enabled = bool(enabled)
+        if require_active_focus is not None:
+            self._auto_focus_requires_active = bool(require_active_focus)
 
     def keyPressEvent(self, ev: QtGui.QKeyEvent):
         key = ev.key()
@@ -234,6 +253,7 @@ class NameRowWidget(QtWidgets.QWidget):
         self.edit.setText(item.text())
         self.edit.setMinimumWidth(220)
         self.edit.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+        self.edit.setFocusPolicy(QtCore.Qt.ClickFocus)
         self.edit.textChanged.connect(self._on_text_changed)
         self.edit.deleteEmptyRequested.connect(self._delete_self_if_empty)
         self.edit.moveUpRequested.connect(self._focus_prev)
@@ -253,11 +273,10 @@ class NameRowWidget(QtWidgets.QWidget):
             layout.addWidget(cb, 0, QtCore.Qt.AlignVCenter)
 
         layout.addStretch(1)
-        if not self.edit.text().strip():
-            QtCore.QTimer.singleShot(0, self.focus_name)
+        # Kein automatischer Fokus auf neue/leer Zeilen
 
     def focus_name(self):
-        self.edit.setFocus()
+        # Fokus wird nicht erzwungen
         self.edit.deselect()
         self.edit.setCursorPosition(len(self.edit.text()))
 
@@ -381,6 +400,10 @@ class NamesListPanel(QtWidgets.QWidget):
             ["wheel.sort_names"],
             padding=44,
         )
+
+    def set_auto_focus_enabled(self, enabled: bool, require_active_focus: bool | None = None) -> None:
+        if hasattr(self, "names"):
+            self.names.set_auto_focus_enabled(enabled, require_active_focus=require_active_focus)
 
     def refresh_action_state(self):
         self._update_toggle_all_button_label()
