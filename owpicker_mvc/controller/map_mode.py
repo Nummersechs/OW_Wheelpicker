@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 
 import i18n
+import config
 
 
 class MapModeController:
@@ -44,6 +45,9 @@ class MapModeController:
         if hasattr(self._mw, "map_ui"):
             self._mw.map_ui.set_active(True)
         self.load_state()
+        if not getattr(config, "TOOLTIP_CACHE_ON_START", True):
+            if hasattr(self._mw, "_refresh_tooltip_caches_async"):
+                self._mw._refresh_tooltip_caches_async()
         self._mw._update_title()
         self._mw._apply_mode_results(self._mw._mode_key())
         self._mw._update_spin_all_enabled()

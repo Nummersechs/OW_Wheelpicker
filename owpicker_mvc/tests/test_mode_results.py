@@ -1,5 +1,4 @@
 import unittest
-from services import state_store
 
 
 class DummyWheel:

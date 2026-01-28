@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict
 from PySide6 import QtCore, QtWidgets
 import config
 import i18n

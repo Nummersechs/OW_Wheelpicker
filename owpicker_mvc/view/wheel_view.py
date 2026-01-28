@@ -1,12 +1,12 @@
 from contextlib import contextmanager
 from typing import List, Optional, Union
-import random, itertools, difflib
+import random
 from PySide6 import QtCore, QtWidgets
 from logic.spin_engine import plan_spin
 from view.base_panel import BasePanel
 from view.wheel_widget import WheelWidget
 from view.name_list import NameRowWidget
-import config
+from model.wheel_state import WheelState
 import i18n
 from utils import theme as theme_util, ui_helpers
 
@@ -31,16 +31,19 @@ class WheelView(BasePanel):
         self._suppress_wheel_render = False
         self._suppress_state_signal = False
         self._force_spin_enabled = False
-        self._override_entries: Optional[List[dict]] = None
+        self._wheel_state = WheelState(
+            pair_mode=self.pair_mode,
+            use_subrole_filter=self.use_subrole_filter,
+            subrole_labels=self.subrole_labels,
+        )
+        self._entries_cache: dict[str, list] | None = None
         self._subrole_controls_visible = True
         self._header_controls_visible = True
         self._show_names_visible = True
         self.view = WheelWidget(self._effective_names_from(defaults))
         self.view.segmentToggled.connect(self._on_segment_toggled)
         self.wheel = self.view.wheel
-        self._disabled_indices: set[int] = set()
-        self._disabled_labels: set[str] = set()
-        self._last_wheel_names: List[str] = list(self.wheel.names)
+        self._wheel_state.last_wheel_names = list(self.wheel.names)
         self._result_state: str = "empty"  # empty | value | too_few
         self._result_value: Optional[str] = None
 
@@ -195,6 +198,36 @@ class WheelView(BasePanel):
         finally:
             del blockers
             self._suppress_state_signal = prev
+
+    def _ensure_entries_cache(self) -> None:
+        if self._entries_cache is None:
+            self._rebuild_entries_cache()
+
+    def _rebuild_entries_cache(self) -> None:
+        entries: list[dict] = []
+        active_entries: list[dict] = []
+        base_names: list[str] = []
+        active_names: list[str] = []
+        for i in range(self.names.count()):
+            item = self.names.item(i)
+            if item is None:
+                continue
+            name = self._item_text(item)
+            if not name:
+                continue
+            subroles = list(self._item_subroles(item))
+            active = item.checkState() == QtCore.Qt.Checked
+            entries.append({"name": name, "subroles": subroles, "active": active})
+            base_names.append(name)
+            if active:
+                active_entries.append({"name": name, "subroles": subroles})
+                active_names.append(name)
+        self._entries_cache = {
+            "entries": entries,
+            "active_entries": active_entries,
+            "base_names": base_names,
+            "active_names": active_names,
+        }
 
     def set_language(self, lang: str):
         """Reapply translated labels for the current wheel."""
@@ -356,21 +389,31 @@ class WheelView(BasePanel):
         return self._result_value if self._result_state == "value" else None
 
     def _pair_parts_from_label(self, label: str) -> list[str]:
-        parts = [part.strip() for part in label.split(" + ") if part.strip()]
-        return parts if len(parts) == 2 else []
+        return self._wheel_state.pair_parts_from_label(label)
 
     def result_label_names(self, label: str) -> list[str]:
         """Return the underlying name(s) for a result label."""
-        if not label:
-            return []
-        cleaned = label.strip()
-        if not cleaned or cleaned == "–":
-            return []
-        if self.pair_mode:
-            parts = self._pair_parts_from_label(cleaned)
-            if parts:
-                return parts
-        return [cleaned]
+        return self._wheel_state.label_names(label)
+
+    @property
+    def _override_entries(self) -> Optional[List[dict]]:
+        return self._wheel_state.override_entries
+
+    @_override_entries.setter
+    def _override_entries(self, entries: Optional[List[dict]]) -> None:
+        self.set_override_entries(entries)
+
+    @property
+    def _disabled_indices(self) -> set[int]:
+        return set(self._wheel_state.disabled_indices)
+
+    @_disabled_indices.setter
+    def _disabled_indices(self, value: Optional[set[int]]) -> None:
+        self._wheel_state.disabled_indices = set(value or [])
+
+    @property
+    def _disabled_labels(self) -> set[str]:
+        return set(self._wheel_state.disabled_labels)
 
     def deactivate_names(self, names: set[str]) -> bool:
         """Uncheck matching names in the list so they drop from active selection."""
@@ -502,13 +545,11 @@ class WheelView(BasePanel):
         names = list(getattr(self.wheel, "names", []))
         if not names:
             return False
-        for idx, name in enumerate(names):
-            if name == label and idx not in self._disabled_indices:
-                self._disabled_indices.add(idx)
-                self._refresh_disabled_indices()
-                self.stateChanged.emit()
-                return True
-        return False
+        changed = self._wheel_state.disable_label(names, label, include_related_pairs=False)
+        if changed:
+            self._refresh_disabled_indices()
+            self.stateChanged.emit()
+        return changed
 
     def disable_label_with_related_pairs(self, label: str) -> bool:
         """Disable the label and all other pair segments that share a name."""
@@ -517,27 +558,7 @@ class WheelView(BasePanel):
         names = list(getattr(self.wheel, "names", []))
         if not names:
             return False
-        changed = False
-        found_label = False
-        for idx, name in enumerate(names):
-            if name == label:
-                found_label = True
-                if idx not in self._disabled_indices:
-                    self._disabled_indices.add(idx)
-                    changed = True
-        if not found_label:
-            return False
-        if self.pair_mode:
-            parts = self._pair_parts_from_label(label)
-            if parts:
-                parts_set = set(parts)
-                for idx, name in enumerate(names):
-                    if idx in self._disabled_indices:
-                        continue
-                    other_parts = self._pair_parts_from_label(name)
-                    if other_parts and parts_set.intersection(other_parts):
-                        self._disabled_indices.add(idx)
-                        changed = True
+        changed = self._wheel_state.disable_label(names, label, include_related_pairs=True)
         if changed:
             self._refresh_disabled_indices()
             self.stateChanged.emit()
@@ -552,8 +573,7 @@ class WheelView(BasePanel):
 
     def reset_disabled_segments(self) -> None:
         """Re-enable all segments on this wheel."""
-        self._disabled_indices.clear()
-        self._disabled_labels.clear()
+        self._wheel_state.reset_disabled()
         self._refresh_disabled_indices()
         self.stateChanged.emit()
 
@@ -599,32 +619,30 @@ class WheelView(BasePanel):
         Liefert alle Einträge (auch inaktive) mit Subrollen.
         Struktur: {"name": str, "subroles": [str], "active": bool}
         """
-        entries: list[dict] = []
-        for i in range(self.names.count()):
-            item = self.names.item(i)
-            name = self._item_text(item)
-            if not name:
-                continue
-            subroles = list(self._item_subroles(item))
-            active = item.checkState() == QtCore.Qt.Checked
-            entries.append({"name": name, "subroles": subroles, "active": active})
-        return entries
+        self._ensure_entries_cache()
+        return list(self._entries_cache["entries"]) if self._entries_cache else []
     def set_override_entries(self, entries: Optional[List[dict]]):
         """
         Externe Einträge für das Rad setzen (z.B. im Hero-Ban).
         Die sichtbare Namensliste bleibt unverändert.
         """
-        self._override_entries = list(entries) if entries is not None else None
+        if entries is None and self._wheel_state.override_entries is None:
+            return
+        if entries is not None and self._wheel_state.override_entries is not None:
+            if entries == self._wheel_state.override_entries:
+                return
+        self._wheel_state.set_override_entries(entries)
         self._apply_override()
     def get_effective_wheel_names(self, include_disabled: bool = True) -> List[str]:
         """
         Liefert die aktuell vom Rad genutzten Namen (Override falls gesetzt).
         """
-        base_entries = self._override_entries if self._override_entries is not None else self._active_entries()
-        names = self._effective_names_from(base_entries, include_disabled=True)
-        if not include_disabled and getattr(self, "_disabled_indices", None):
-            names = [n for i, n in enumerate(names) if i not in self._disabled_indices]
-        return names
+        base_entries = (
+            self._wheel_state.override_entries
+            if self._wheel_state.override_entries is not None
+            else self._active_entries()
+        )
+        return self._effective_names_from(base_entries, include_disabled=include_disabled)
     def _item_text(self, item: QtWidgets.QListWidgetItem) -> str:
         widget = self.names.itemWidget(item)
         if isinstance(widget, NameRowWidget):
@@ -640,57 +658,49 @@ class WheelView(BasePanel):
         return set()
     def _base_names(self) -> List[str]:
         """Alle Namen aus der Liste (ohne Leerzeilen, Häkchen egal)."""
-        names: list[str] = []
-        for i in range(self.names.count()):
-            text = self._item_text(self.names.item(i))
-            if text:
-                names.append(text)
-        return names
+        self._ensure_entries_cache()
+        return list(self._entries_cache["base_names"]) if self._entries_cache else []
 
     def _active_entries(self) -> List[dict]:
         """
         Nur die aktivierten Namen inklusive Subrollen-Auswahl.
         Rückgabe-Element: {"name": str, "subroles": set[str]}
         """
-        entries: list[dict] = []
-        for i in range(self.names.count()):
-            item = self.names.item(i)
-            text = self._item_text(item)
-            if not text or item.checkState() != QtCore.Qt.Checked:
-                continue
-            subroles = self._item_subroles(item)
-            entries.append({"name": text, "subroles": subroles})
-        return entries
+        self._ensure_entries_cache()
+        return list(self._entries_cache["active_entries"]) if self._entries_cache else []
 
     def _entries_for_spin(self) -> List[dict]:
         """Nutzt Override-Einträge, falls gesetzt, sonst die aktiven Einträge."""
-        if self._override_entries is not None:
-            return list(self._override_entries)
-        return self._active_entries()
+        return self._wheel_state.entries_for_spin(self._active_entries())
 
     def _active_names(self) -> List[str]:
-        return [entry["name"] for entry in self._active_entries()]
+        self._ensure_entries_cache()
+        return list(self._entries_cache["active_names"]) if self._entries_cache else []
 
     def _on_names_list_changed(self, *args):
         """Wenn Namen geändert, hinzugefügt oder entfernt werden."""
-        if self._override_entries is not None:
+        self._rebuild_entries_cache()
+        if self._wheel_state.override_entries is not None:
             # Override bestimmt das Rad – sichtbare Liste nur Anzeige
             self._apply_override()
             if not self._suppress_state_signal:
                 self.stateChanged.emit()
             return
-        old_names = list(getattr(self, "_last_wheel_names", []))
-        new_names = self._effective_names_from(self._active_entries(), include_disabled=True)
+        old_names = list(self._wheel_state.last_wheel_names)
+        active_entries = list(self._entries_cache.get("active_entries", [])) if self._entries_cache else []
+        new_names = self._effective_names_from(active_entries, include_disabled=True)
         # Rad mit aktiven Namen aktualisieren
         if getattr(self, "_suppress_wheel_render", False):
-            self.wheel.set_names([])
+            if getattr(self.wheel, "names", []):
+                self.wheel.set_names([])
             self._rebuild_disabled_indices([], [])
         else:
-            self.wheel.set_names(new_names)
-            self._rebuild_disabled_indices(old_names, new_names)
+            if new_names != old_names:
+                self.wheel.set_names(new_names)
+                self._rebuild_disabled_indices(old_names, new_names)
         self._refresh_disabled_indices()
         self._update_name_dependent_ui()
-        self._last_wheel_names = list(new_names)
+        self._wheel_state.last_wheel_names = list(new_names)
         self._apply_subrole_visibility()
         if not self._suppress_state_signal:
             self.stateChanged.emit()
@@ -700,40 +710,7 @@ class WheelView(BasePanel):
         Liefert die Labels, die tatsächlich auf dem Rad landen.
         Nutzt Subrollen-Filter, falls aktiviert.
         """
-        if not base:
-            return []
-
-        # Für Abwärtskompatibilität auch reine Namenslisten akzeptieren
-        if base and isinstance(base[0], str):
-            entries = [{"name": n, "subroles": set()} for n in base if n]
-        else:
-            entries = base  # type: ignore
-
-        base_names = [e["name"] for e in entries]
-        if not self.pair_mode:
-            names = base_names
-        else:
-            # Subrollen-Filter: nur Paare aus zwei unterschiedlichen Subrollen
-            if self.use_subrole_filter and len(self.subrole_labels) >= 2:
-                role_a, role_b = self.subrole_labels[:2]
-                pairs: list[str] = []
-                for a, b in itertools.combinations(entries, 2):
-                    roles_a = set(a.get("subroles", set()) or set())
-                    roles_b = set(b.get("subroles", set()) or set())
-                    if not roles_a or not roles_b:
-                        continue
-                    cond1 = role_a in roles_a and role_b in roles_b
-                    cond2 = role_b in roles_a and role_a in roles_b
-                    if cond1 or cond2:
-                        pairs.append(f"{a['name']} + {b['name']}")
-                names = pairs
-            else:
-                names = [f"{a['name']} + {b['name']}" for a,b in itertools.combinations(entries,2)]
-
-        # Segmente, die deaktiviert wurden, ausfiltern
-        if not include_disabled and getattr(self, "_disabled_indices", None):
-            names = [n for i, n in enumerate(names) if i not in self._disabled_indices]
-        return names
+        return self._wheel_state.effective_names_from(base, include_disabled=include_disabled)
     def _apply_subrole_visibility(self):
         """Blendet Subrollen-Checkboxen in den Zeilen ein/aus."""
         for i in range(self.names.count()):
@@ -743,30 +720,30 @@ class WheelView(BasePanel):
                     cb.setVisible(self._subrole_controls_visible)
     def _apply_override(self):
         """Wendet die Override-Liste auf das Rad an, ohne die sichtbare Liste zu ändern."""
-        if self._override_entries is None:
+        if self._wheel_state.override_entries is None:
             # Zurück zum normalen Rendering basierend auf der Liste
             self._on_names_list_changed()
             return
-        names = self._effective_names_from(self._override_entries, include_disabled=True)
-        # Bei neuem Override: deaktivierte Segmente zurücksetzen, damit Indizes passen
-        self._disabled_indices.clear()
-        self._disabled_labels.clear()
-        self.wheel.set_names(names)
+        names = self._effective_names_from(self._wheel_state.override_entries, include_disabled=True)
+        old_names = list(getattr(self.wheel, "names", []))
+        if names != old_names:
+            # Bei neuem Override: deaktivierte Segmente zurücksetzen, damit Indizes passen
+            self._wheel_state.reset_disabled()
+            self.wheel.set_names(names)
+            self._wheel_state.last_wheel_names = list(names)
         self._refresh_disabled_indices()
-        self._last_wheel_names = list(names)
 
     def _on_segment_toggled(self, idx: int, disabled: bool, label: str):
         if disabled:
-            self._disabled_indices.add(idx)
+            self._wheel_state.disabled_indices.add(idx)
         else:
-            self._disabled_indices.discard(idx)
+            self._wheel_state.disabled_indices.discard(idx)
         self._refresh_disabled_indices()
         self.stateChanged.emit()
 
     def _enabled_labels(self) -> set[str]:
-        if not getattr(self, "_disabled_indices", None):
-            return set(self.wheel.names if hasattr(self.wheel, "names") else [])
-        return {n for i, n in enumerate(getattr(self.wheel, "names", [])) if i not in self._disabled_indices}
+        names = list(getattr(self.wheel, "names", []))
+        return self._wheel_state.enabled_labels(names)
 
     def _rebuild_disabled_indices(self, old_names: List[str], new_names: List[str]):
         """
@@ -774,37 +751,26 @@ class WheelView(BasePanel):
         entfernt oder hinzugefügt wurden. Deaktivierte Einträge, die nicht mehr
         existieren, fallen dabei weg.
         """
-        if not getattr(self, "_disabled_indices", None):
-            self._disabled_indices = set()
-            self._disabled_labels = set()
-            return
-
-        sm = difflib.SequenceMatcher(a=old_names, b=new_names)
-        mapped: set[int] = set()
-        for tag, i1, i2, j1, j2 in sm.get_opcodes():
-            if tag == "equal":
-                for offset in range(i2 - i1):
-                    if (i1 + offset) in self._disabled_indices:
-                        mapped.add(j1 + offset)
-        self._disabled_indices = mapped
-        self._disabled_labels = {new_names[i] for i in self._disabled_indices}
+        self._wheel_state.remap_disabled_indices(old_names, new_names)
 
     def _refresh_disabled_indices(self):
         names = list(getattr(self.wheel, "names", []))
         if not names:
-            self._disabled_indices = set()
-            self._disabled_labels = set()
+            if self._wheel_state.disabled_indices or self._wheel_state.disabled_labels:
+                self._wheel_state.reset_disabled()
             self._update_reset_button_state()
             return
         # Nur valide Indizes behalten
-        self._disabled_indices = {i for i in self._disabled_indices if 0 <= i < len(names)}
-        self._disabled_labels = {names[i] for i in self._disabled_indices}
-        self.wheel.set_disabled_indices(self._disabled_indices)
+        self._wheel_state.sanitize_disabled_indices(names)
+        desired = set(self._wheel_state.disabled_indices)
+        current = set(getattr(self.wheel, "disabled_indices", set()))
+        if desired != current:
+            self.wheel.set_disabled_indices(desired)
         self._update_reset_button_state()
 
     def _update_reset_button_state(self):
         if hasattr(self, "btn_reset_segments"):
-            self.btn_reset_segments.setEnabled(bool(self._disabled_indices))
+            self.btn_reset_segments.setEnabled(bool(self._wheel_state.disabled_indices))
 
     def _on_names_changed(self):
         # Kompatibilitäts-Methode, falls sie anderswo noch aufgerufen wird
@@ -812,11 +778,11 @@ class WheelView(BasePanel):
 
     def _on_toggle_pair_mode(self, _state: int):
         self.pair_mode = bool(self.toggle.isChecked())
+        self._wheel_state.pair_mode = self.pair_mode
         if not self.pair_mode and self.chk_subroles:
             self.chk_subroles.setChecked(False)
         # Wechsel des Modus → Disabled-Segmente zurücksetzen
-        self._disabled_indices.clear()
-        self._disabled_labels.clear()
+        self._wheel_state.reset_disabled()
         self._update_subrole_toggle_state()
         self._apply_placeholder()
         self._on_names_changed()
@@ -827,9 +793,9 @@ class WheelView(BasePanel):
         self.stateChanged.emit()
     def _on_toggle_subroles(self, _state: int):
         self.use_subrole_filter = bool(self.pair_mode and self.chk_subroles and self.chk_subroles.isChecked())
+        self._wheel_state.use_subrole_filter = self.use_subrole_filter
         # Subrollenwechsel → Disabled-Segmente zurücksetzen
-        self._disabled_indices.clear()
-        self._disabled_labels.clear()
+        self._wheel_state.reset_disabled()
         self._apply_placeholder()
         self._on_names_changed()
         self.stateChanged.emit()
@@ -870,7 +836,7 @@ class WheelView(BasePanel):
 
         base_entries = self._entries_for_spin()
         names = self._effective_names_from(base_entries, include_disabled=True)
-        enabled_indices = [i for i in range(len(names)) if i not in self._disabled_indices]
+        enabled_indices = self._wheel_state.enabled_indices(names)
         if (self.pair_mode and len(base_entries) < 2) or not enabled_indices:
             self.set_result_too_few()
             return None
@@ -920,7 +886,7 @@ class WheelView(BasePanel):
 
         base_entries = self._entries_for_spin()
         names = self._effective_names_from(base_entries, include_disabled=True)
-        enabled_indices = [i for i in range(len(names)) if i not in self._disabled_indices]
+        enabled_indices = self._wheel_state.enabled_indices(names)
         if (self.pair_mode and len(base_entries) < 2) or not enabled_indices:
             self.set_result_too_few()
             return None
@@ -1001,6 +967,7 @@ class WheelView(BasePanel):
                     self.toggle.setChecked(False)
                 self.toggle.setEnabled(False)
                 self.pair_mode = False
+                self._wheel_state.pair_mode = False
                 self._apply_placeholder()
             else:
                 # Ab 2 Namen wieder aktivierbar
@@ -1033,6 +1000,7 @@ class WheelView(BasePanel):
             # deaktivieren, wenn Paare-Modus aus ist oder zu wenige Namen vorhanden sind
             self.chk_subroles.setChecked(False)
         self.use_subrole_filter = bool(can_use and self.chk_subroles.isChecked())
+        self._wheel_state.use_subrole_filter = self.use_subrole_filter
         self._apply_placeholder()
     def _update_clear_button_enabled(self):
         """
@@ -1086,24 +1054,7 @@ class WheelView(BasePanel):
         Macht aus verschiedenen Input-Formaten eine einheitliche Liste von
         {"name": str, "subroles": [str], "active": bool}.
         """
-        entries: List[dict] = []
-        for item in defaults or []:
-            if isinstance(item, str):
-                name = item.strip()
-                if name:
-                    entries.append({"name": name, "subroles": [], "active": True})
-            elif isinstance(item, dict) and "name" in item:
-                name = str(item.get("name", "")).strip()
-                if not name:
-                    continue
-                subs = item.get("subroles", [])
-                if isinstance(subs, (list, set, tuple)):
-                    subs_list = [str(s) for s in subs if str(s).strip()]
-                else:
-                    subs_list = []
-                active = bool(item.get("active", True))
-                entries.append({"name": name, "subroles": subs_list, "active": active})
-        return entries
+        return self._wheel_state.normalize_entries(defaults)
     def load_entries(self, entries: Union[List[str], List[dict]],
                      pair_mode: Optional[bool] = None,
                      include_in_all: Optional[bool] = None,
@@ -1132,15 +1083,15 @@ class WheelView(BasePanel):
             del blockers
 
         # Disabled-Segmente und Hilfswerte zurücksetzen
-        self._disabled_indices.clear()
-        self._disabled_labels.clear()
-        self._last_wheel_names = []
+        self._wheel_state.reset_disabled()
+        self._wheel_state.last_wheel_names = []
 
         # Pair-/Subrollen-Status setzen (Signale blocken, UI updaten)
         if pair_mode is not None and not getattr(self, "allow_pair_toggle", False):
             pair_mode = False
         if pair_mode is not None:
             self.pair_mode = bool(pair_mode)
+            self._wheel_state.pair_mode = self.pair_mode
             if getattr(self, "toggle", None):
                 blocker = QtCore.QSignalBlocker(self.toggle)
                 self.toggle.setChecked(self.pair_mode)
@@ -1154,6 +1105,7 @@ class WheelView(BasePanel):
             self.chk_subroles.setChecked(bool(use_subroles))
             del blocker
             self.use_subrole_filter = bool(self.chk_subroles.isChecked())
+            self._wheel_state.use_subrole_filter = self.use_subrole_filter
         self._update_subrole_toggle_state()
 
         if include_in_all is not None and hasattr(self, "btn_include_in_all"):

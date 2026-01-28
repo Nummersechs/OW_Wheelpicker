@@ -16,6 +16,11 @@ FOCUS_TRACE_WINDOWS_ONLY = True
 FOCUS_TRACE_SNAPSHOT_INTERVAL_MS = 200
 FOCUS_TRACE_SNAPSHOT_COUNT = 20
 
+# ---------- Performance / Resource policy ----------
+MAP_PREBUILD_ON_START = True
+SOUND_WARMUP_ON_START = True
+TOOLTIP_CACHE_ON_START = True
+
 # ---------- Sprache ----------
 # Voreingestellte Sprache, wenn keine Auswahl gespeichert wurde
 DEFAULT_LANGUAGE = "en"
