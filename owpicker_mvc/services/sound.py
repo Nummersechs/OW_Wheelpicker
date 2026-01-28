@@ -1,4 +1,5 @@
 from PySide6 import QtCore, QtWidgets
+from typing import Callable
 from PySide6.QtMultimedia import QSoundEffect
 from PySide6.QtCore import QUrl
 from pathlib import Path
@@ -31,6 +32,7 @@ class SoundManager:
         self._preview_tmp_path: Path | None = None
         self._warmup_timer: QtCore.QTimer | None = None
         self._warmup_items: list[tuple[Path, dict[Path, QSoundEffect], float]] = []
+        self._warmup_done_callbacks: list[Callable[[], None]] = []
 
         spin_dir = base_dir / "Spin"
         ding_dir = base_dir / "Ding"
@@ -69,8 +71,15 @@ class SoundManager:
         cache[path] = eff
         return eff
 
-    def warmup_async(self, parent: QtCore.QObject | None = None, step_ms: int = 15) -> None:
+    def warmup_async(
+        self,
+        parent: QtCore.QObject | None = None,
+        step_ms: int = 15,
+        on_done: Callable[[], None] | None = None,
+    ) -> None:
         """Warm up sounds incrementally to avoid blocking the UI thread."""
+        if on_done is not None:
+            self._warmup_done_callbacks.append(on_done)
         items: list[tuple[Path, dict[Path, QSoundEffect], float]] = []
         items.extend([(p, self.spin_effects, self.spin_base_volume) for p in self.spin_sources])
         items.extend([(p, self.ding_effects, self.ding_base_volume) for p in self.ding_sources])
@@ -105,6 +114,13 @@ class SoundManager:
             self._warmup_timer.deleteLater()
             self._warmup_timer = None
         self._warmup_items = []
+        callbacks = self._warmup_done_callbacks
+        self._warmup_done_callbacks = []
+        for cb in callbacks:
+            try:
+                cb()
+            except Exception:
+                pass
 
     def _cleanup_preview_file(self) -> None:
         path = self._preview_tmp_path

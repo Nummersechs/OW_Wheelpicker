@@ -808,6 +808,11 @@ class WheelView(BasePanel):
         if en:
             # Wenn allgemein aktiv → Feinsteuerung über _update_name_dependent_ui
             self._update_name_dependent_ui()
+            if hasattr(self, "view") and hasattr(self.view, "_rearm_hover_tracking"):
+                try:
+                    self.view._rearm_hover_tracking()
+                except Exception:
+                    pass
         else:
             # Alles aus, wenn global deaktiviert
             self.btn_local_spin.setEnabled(False)

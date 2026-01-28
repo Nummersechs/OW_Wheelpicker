@@ -23,10 +23,12 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         self.show_labels = True
         self._cache_key = (tuple(self.names), self.radius, tuple(sorted(self.disabled_indices)))
         self._cached = None
+        self._hover_cache_warmed = False
         self.setTransformOriginPoint(0, 0)
         self.setAcceptHoverEvents(True)
         self._last_hover_idx: int | None = None
         self._label_truncated: list[bool] = []
+        self._hover_trace_budget = int(getattr(config, "HOVER_TRACE_BUDGET_PER_VIEW", 0))
         # Own hover overlay inside the scene (more reliable than native tooltips)
         self._hover_item: QtWidgets.QGraphicsTextItem | None = None
         self._hover_bg: QtWidgets.QGraphicsRectItem | None = None
@@ -39,6 +41,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         self.prepareGeometryChange()
         self.radius = int(radius)
         self._cached = None
+        self._hover_cache_warmed = False
         self._cache_key = (tuple(self.names), self.radius, tuple(sorted(self.disabled_indices)))
         self.update()
 
@@ -72,6 +75,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
             p.drawEllipse(center, r, r)
             p.end()
             self._cached = pm
+            self._hover_cache_warmed = True
             return
 
         # ----- Segmente -----
@@ -109,6 +113,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         if not getattr(self, "show_labels", True):
             p.end()
             self._cached = pm
+            self._hover_cache_warmed = True
             return
         base_font = QtGui.QFont()
         base_size = float(getattr(config, 'LABEL_FONT_SIZE', 10))
@@ -295,6 +300,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
 
         p.end()
         self._cached = pm
+        self._hover_cache_warmed = True
 
     def paint(self, painter: QtGui.QPainter, *_):
         self._ensure_cache()
@@ -317,12 +323,31 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         else:
             self.disabled_indices.remove(idx)
         self._cached = None
+        self._hover_cache_warmed = False
         self.update()
         self.segmentToggled.emit(idx, disabled, label)
         super().mousePressEvent(event)
 
     def hoverMoveEvent(self, event: QtWidgets.QGraphicsSceneHoverEvent) -> None:
         """Zeigt beim Hover den vollen Namen an der Maus, wenn das Segment aktiv ist."""
+        if getattr(config, "TRACE_HOVER", False) and self._hover_trace_budget > 0:
+            self._hover_trace_budget -= 1
+            try:
+                view = None
+                if self.scene() and self.scene().views():
+                    view = self.scene().views()[0]
+                win = view.window() if view else None
+                if win and hasattr(win, "_trace_hover_event"):
+                    pos = event.pos()
+                    win._trace_hover_event(
+                        "disc_hover_move",
+                        idx=self._last_hover_idx,
+                        pos=f"{round(pos.x(),1)},{round(pos.y(),1)}",
+                        names=len(self.names),
+                        show_labels=self.show_labels,
+                    )
+            except Exception:
+                pass
         if not self.names:
             self._hide_hover_overlay()
             self._hide_floating_label()
@@ -349,6 +374,10 @@ class WheelDisc(QtWidgets.QGraphicsObject):
             return
         # Tooltip nur anzeigen, wenn der Label-Text im Segment abgeschnitten ist.
         cache_ready = self._cached is not None and len(self._label_truncated) == len(self.names)
+        if not cache_ready and not self._hover_cache_warmed:
+            # Defer cache build to avoid blocking hover events on startup.
+            self._hover_cache_warmed = True
+            QtCore.QTimer.singleShot(0, lambda: self._ensure_cache(force=True))
         if cache_ready:
             cached_truncated = False
             if 0 <= idx < len(self._label_truncated):
@@ -361,8 +390,8 @@ class WheelDisc(QtWidgets.QGraphicsObject):
                         self._label_truncated[idx] = True
                     is_truncated = True
         else:
-            # Cache noch nicht stabil -> Laufzeitcheck ohne Cache-Aufbau
-            is_truncated = self._needs_tooltip_runtime(idx, angle_step)
+            # Cache noch nicht stabil -> Tooltip trotzdem zeigen
+            is_truncated = True
         if not is_truncated:
             self._hide_hover_overlay()
             self._hide_floating_label()
@@ -530,10 +559,12 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         self.show_labels = show
         # Cache verwerfen, damit neu gezeichnet wird
         self._cached = None
+        self._hover_cache_warmed = False
         self.update()
     def set_disabled_indices(self, indices: set[int]):
         self.disabled_indices = {i for i in indices if 0 <= i < len(self.names)}
         self._cached = None
+        self._hover_cache_warmed = False
         self._cache_key = (tuple(self.names), self.radius, tuple(sorted(self.disabled_indices)))
         self.update()
 
@@ -542,4 +573,5 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         self.disabled_indices.clear()
         self._label_truncated = []
         self._cached = None
+        self._hover_cache_warmed = False
         self.update()

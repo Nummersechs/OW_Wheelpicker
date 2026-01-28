@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from PySide6 import QtCore
+from typing import Callable
 import config
 
 
@@ -13,6 +14,7 @@ class TooltipManager:
         self._timer = QtCore.QTimer(main_window)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._run_cache_refresh)
+        self._done_callbacks: list[Callable[[], None]] = []
 
     def shutdown(self) -> None:
         if self._timer.isActive():
@@ -51,7 +53,7 @@ class TooltipManager:
                 except Exception:
                     pass
 
-    def refresh_caches_async(self, delay_step_ms: int = 80) -> None:
+    def refresh_caches_async(self, delay_step_ms: int = 80, on_done: Callable[[], None] | None = None) -> None:
         """Rebuild tooltip caches in small slices to keep UI responsive."""
         if getattr(self._mw, "_closing", False):
             return
@@ -59,6 +61,8 @@ class TooltipManager:
             return
         self._mw._trace_event("refresh_tooltip_caches:async", step_ms=delay_step_ms)
         self._step_ms = max(0, int(delay_step_ms))
+        if on_done is not None:
+            self._done_callbacks.append(on_done)
         # debounce
         self._timer.start(60)
 
@@ -87,7 +91,17 @@ class TooltipManager:
         for idx, w in enumerate(wheels):
             QtCore.QTimer.singleShot(idx * step_ms, lambda _w=w: rebuild_single(_w))
         total_delay = len(wheels) * step_ms + 40
-        QtCore.QTimer.singleShot(total_delay, lambda: self.ensure_hover_cache(ready=True))
+        QtCore.QTimer.singleShot(total_delay, self._finish_cache_refresh)
+
+    def _finish_cache_refresh(self) -> None:
+        self.ensure_hover_cache(ready=True)
+        callbacks = self._done_callbacks
+        self._done_callbacks = []
+        for cb in callbacks:
+            try:
+                cb()
+            except Exception:
+                pass
 
     def reset_hover_cache_under_cursor(self) -> None:
         for w in self._wheels():

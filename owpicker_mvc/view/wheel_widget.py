@@ -19,7 +19,8 @@ class WheelWidget(QtWidgets.QGraphicsView):
         self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.setStyleSheet("QGraphicsView { background: transparent; border: none; }")
-        self.setMouseTracking(True)
+        self._hover_trace_budget = int(getattr(config, "HOVER_TRACE_BUDGET_PER_VIEW", 0))
+        self._rearm_hover_tracking()
         self.scene = QtWidgets.QGraphicsScene()
         self.setScene(self.scene)
 
@@ -70,10 +71,92 @@ class WheelWidget(QtWidgets.QGraphicsView):
 
     def showEvent(self, event):
         super().showEvent(event)
+        # Ensure hover events remain active after show/hide cycles.
+        self._rearm_hover_tracking()
         # Sobald der View sichtbar ist, Cache/Geometrie auf finale Größe bringen
         self._refit_view()
         if hasattr(self, "wheel") and hasattr(self.wheel, "_ensure_cache"):
             self.wheel._ensure_cache(force=False)
+
+    def enterEvent(self, event):
+        # On some platforms, mouse tracking can drop after activation changes.
+        self._rearm_hover_tracking()
+        super().enterEvent(event)
+
+    def viewportEvent(self, event: QtCore.QEvent) -> bool:
+        try:
+            etype = int(event.type())
+            if getattr(config, "TRACE_HOVER", False) and getattr(self, "_hover_trace_budget", 0) > 0:
+                if etype in (
+                    QtCore.QEvent.MouseMove,
+                    QtCore.QEvent.HoverMove,
+                    QtCore.QEvent.Enter,
+                    QtCore.QEvent.Leave,
+                ):
+                    self._hover_trace_budget -= 1
+                    win = self.window()
+                    if hasattr(win, "_trace_hover_event"):
+                        try:
+                            vp = self.viewport()
+                            pos = None
+                            if hasattr(event, "position"):
+                                try:
+                                    p = event.position()
+                                    pos = f"{round(p.x(),1)},{round(p.y(),1)}"
+                                except Exception:
+                                    pos = None
+                            active = False
+                            try:
+                                active = bool(win and win.isActiveWindow())
+                            except Exception:
+                                active = False
+                            win._trace_hover_event(
+                                "viewport_event",
+                                etype=etype,
+                                etype_name=QtCore.QEvent.Type(etype).name,
+                                view=type(self).__name__,
+                                pos=pos,
+                                active=active,
+                                visible=vp.isVisible() if vp else None,
+                            )
+                        except Exception:
+                            pass
+            if getattr(config, "HOVER_PUMP_ON_START", False):
+                try:
+                    if etype in (QtCore.QEvent.MouseMove, QtCore.QEvent.HoverMove):
+                        if hasattr(event, "spontaneous") and event.spontaneous():
+                            win = self.window()
+                            if hasattr(win, "_mark_hover_seen"):
+                                win._mark_hover_seen(source="viewport_spontaneous")
+                except Exception:
+                    pass
+            if etype in (QtCore.QEvent.MouseMove, QtCore.QEvent.HoverMove):
+                try:
+                    win = self.window()
+                    if hasattr(event, "spontaneous") and event.spontaneous():
+                        if hasattr(win, "_mark_hover_user_move"):
+                            win._mark_hover_user_move()
+                    elif hasattr(win, "_mark_hover_activity"):
+                        win._mark_hover_activity()
+                except Exception:
+                    pass
+        except Exception:
+            return super().viewportEvent(event)
+        return super().viewportEvent(event)
+
+    def _rearm_hover_tracking(self) -> None:
+        self.setMouseTracking(True)
+        self.setInteractive(True)
+        try:
+            self.setAttribute(QtCore.Qt.WA_Hover, True)
+        except Exception:
+            pass
+        try:
+            vp = self.viewport()
+            vp.setMouseTracking(True)
+            vp.setAttribute(QtCore.Qt.WA_Hover, True)
+        except Exception:
+            pass
 
     def _update_wheel_radius(self):
         if not hasattr(self, "wheel") or not hasattr(self, "scene"):
