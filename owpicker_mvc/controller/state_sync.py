@@ -22,6 +22,16 @@ class StateSyncController(QtCore.QObject):
         super().__init__(main_window)
         self._mw = main_window
         self._state_file = state_file
+        self._pending_state: Dict[str, Any] | None = None
+        self._pending_save_sync = False
+        self._save_debounce_ms = max(0, int(getattr(config, "STATE_SAVE_DEBOUNCE_MS", 160)))
+        self._last_saved_signature: str | None = None
+        existing = self._load_state(state_file)
+        if existing:
+            self._last_saved_signature = self._state_signature(existing)
+        self._save_timer = QtCore.QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.timeout.connect(self._flush_pending_save)
         self._pending_sync_payload: list[dict] | None = None
         self._sync_timer = QtCore.QTimer(self)
         self._sync_timer.setSingleShot(True)
@@ -47,15 +57,23 @@ class StateSyncController(QtCore.QObject):
         return {}
 
     @staticmethod
-    def _save_state(path: Path, data: Dict[str, Any]) -> None:
-        """Write state as JSON. Errors are swallowed on purpose."""
+    def _save_state(path: Path, data: Dict[str, Any]) -> bool:
+        """Write state as JSON. Returns True on success."""
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            return True
         except Exception:
             # Quiet failure; callers decide on logging
-            pass
+            return False
+
+    @staticmethod
+    def _state_signature(data: Dict[str, Any]) -> str | None:
+        try:
+            return json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        except Exception:
+            return None
 
     @staticmethod
     def load_saved_state(state_file: Path) -> dict:
@@ -82,22 +100,56 @@ class StateSyncController(QtCore.QObject):
         state["theme"] = self._mw.theme
         return state
 
-    def save_state(self, sync: bool = True) -> None:
+    def save_state(self, sync: bool = True, immediate: bool = False) -> None:
         if getattr(self._mw, "_restoring_state", False):
             return
         if getattr(self._mw, "_closing", False):
             sync = False
+            immediate = True
         state = self.gather_state()
-        self._save_state(self._state_file, state)
-        if sync:
-            self.sync_all_roles()
+        if immediate:
+            if self._save_timer.isActive():
+                self._save_timer.stop()
+            self._pending_state = None
+            self._pending_save_sync = False
+            self._persist_state(state)
+            if sync:
+                self.sync_all_roles()
+        else:
+            self._pending_state = state
+            self._pending_save_sync = bool(self._pending_save_sync or sync)
+            self._save_timer.start(self._save_debounce_ms)
         if self._mw.hero_ban_active and not getattr(self._mw, "_closing", False):
             self._mw._update_hero_ban_wheel()
 
-    def shutdown(self) -> None:
+    def _persist_state(self, state: Dict[str, Any]) -> None:
+        signature = self._state_signature(state)
+        if signature is not None and signature == self._last_saved_signature:
+            return
+        if self._save_state(self._state_file, state) and signature is not None:
+            self._last_saved_signature = signature
+
+    def _flush_pending_save(self) -> None:
+        state = self._pending_state
+        sync = self._pending_save_sync
+        self._pending_state = None
+        self._pending_save_sync = False
+        if state is None:
+            return
+        self._persist_state(state)
+        if sync:
+            self.sync_all_roles()
+
+    def shutdown(self, flush: bool = True) -> None:
         """Stop pending timers and clear queued sync payloads."""
+        if flush:
+            self._flush_pending_save()
+        if self._save_timer.isActive():
+            self._save_timer.stop()
         if self._sync_timer.isActive():
             self._sync_timer.stop()
+        self._pending_state = None
+        self._pending_save_sync = False
         self._pending_sync_payload = None
 
     def send_spin_result(self, tank: str, damage: str, support: str) -> None:

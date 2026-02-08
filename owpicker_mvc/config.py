@@ -37,6 +37,7 @@ MAP_PREBUILD_ON_START = False
 SOUND_WARMUP_ON_START = False
 TOOLTIP_CACHE_ON_START = False
 SOUND_WARMUP_LAZY_STEP_MS = 25
+STATE_SAVE_DEBOUNCE_MS = 160
 
 # ---------- Sprache ----------
 # Voreingestellte Sprache, wenn keine Auswahl gespeichert wurde

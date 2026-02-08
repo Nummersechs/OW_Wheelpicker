@@ -846,8 +846,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._rearm_hover_tracking(reason="overlay_closed", force=True)
         QtCore.QTimer.singleShot(200, lambda: self._rearm_hover_tracking(reason="overlay_closed:late"))
         # Tooltip/Truncation nach finalem Layout aktualisieren
-        QtCore.QTimer.singleShot(0, self._refresh_tooltip_caches)
-        QtCore.QTimer.singleShot(200, self._refresh_tooltip_caches)
+        if not getattr(config, "DISABLE_TOOLTIPS", False):
+            self._set_tooltips_ready(False)
+            QtCore.QTimer.singleShot(
+                120,
+                lambda: self._refresh_tooltip_caches_async(reason="overlay_closed"),
+            )
 
     def _on_overlay_disable_results(self):
         last_view = getattr(self.overlay, "_last_view", {}) or {}
@@ -2571,8 +2575,8 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
         try:
-            self.state_sync.save_state(sync=False)
-            self.state_sync.shutdown()
+            self.state_sync.save_state(sync=False, immediate=True)
+            self.state_sync.shutdown(flush=False)
         except Exception:
             pass
         try:
