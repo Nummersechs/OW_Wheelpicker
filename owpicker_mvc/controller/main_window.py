@@ -209,6 +209,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._hover_watchdog_timer = self._timers.register(self._hover_watchdog_timer) or self._hover_watchdog_timer
         self._tooltip_manager = TooltipManager(self)
         self._focus_policy = FocusPolicyManager(self)
+        self._pending_delete_names_panel = None
         central, root = self._build_root()
         self._build_header(root, saved)
         self._build_mode_switcher(root)
@@ -400,6 +401,10 @@ class MainWindow(QtWidgets.QMainWindow):
             allow_pair_toggle=True,
             subrole_labels=["MS", "FS"],
         )
+        for panel in (self.tank.names_panel, self.dps.names_panel, self.support.names_panel):
+            panel.set_delete_confirm_handler(
+                lambda count, _panel=panel: self._request_delete_names_confirm(_panel, count)
+            )
         self.role_mode = RoleModeController(self)
 
         grid.addWidget(self.tank, 0, 0)
@@ -553,9 +558,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self.overlay.closed.connect(self._on_overlay_closed)
         self.overlay.languageToggleRequested.connect(self._toggle_language)
         self.overlay.disableResultsRequested.connect(self._on_overlay_disable_results)
+        self.overlay.deleteNamesConfirmed.connect(self._on_overlay_delete_names_confirmed)
+        self.overlay.deleteNamesCancelled.connect(self._on_overlay_delete_names_cancelled)
 
         self.online_mode = False  # Standard
         self.overlay.modeChosen.connect(self._on_mode_chosen)
+
+    def _request_delete_names_confirm(self, panel, count: int) -> bool:
+        overlay = getattr(self, "overlay", None)
+        if overlay is None:
+            return False
+        self._pending_delete_names_panel = panel
+        try:
+            overlay.show_delete_names_confirm(int(count))
+        except Exception:
+            self._pending_delete_names_panel = None
+            return False
+        return True
 
     def _install_event_filters(self) -> None:
         self.installEventFilter(self)
@@ -925,6 +944,19 @@ class MainWindow(QtWidgets.QMainWindow):
         for wheel in (self.tank, self.dps, self.support):
             if hasattr(wheel, "deactivate_names"):
                 wheel.deactivate_names(names_to_remove)
+
+    def _on_overlay_delete_names_confirmed(self):
+        panel = getattr(self, "_pending_delete_names_panel", None)
+        self._pending_delete_names_panel = None
+        if panel is None:
+            return
+        try:
+            panel.confirm_delete_marked()
+        except Exception:
+            return
+
+    def _on_overlay_delete_names_cancelled(self):
+        self._pending_delete_names_panel = None
 
     def eventFilter(self, obj, event):
         etype = event.type()

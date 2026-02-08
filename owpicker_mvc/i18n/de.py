@@ -73,6 +73,13 @@ TRANSLATIONS_DE = {
     "names.context_new": "Neuer Name",
     "names.context_delete": "Ausgewählte löschen",
     "names.subrole_tooltip": "Subrolle {label}",
+    "names.mark_for_delete_tooltip": "Diesen Namen für Sammellöschen markieren",
+    "names.delete_marked_tooltip": "Markierte Namen löschen",
+    "names.delete_marked_tooltip_active": "{count} markierte Namen löschen",
+    "names.delete_confirm_title": "Namen löschen",
+    "names.delete_confirm_message": "Willst du wirklich {count} markierte Namen löschen?",
+    "names.delete_confirm_cancel": "Abbrechen",
+    "names.delete_confirm_delete": "Löschen",
     # Map UI
     "map.types": "Map-Typen",
     "map.edit_types": "Typen bearbeiten",

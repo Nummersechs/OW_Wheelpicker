@@ -151,6 +151,8 @@ class BasePanel(QtWidgets.QWidget):
             self.btn_sort_names.setEnabled(enabled)
         if hasattr(self, "btn_toggle_all_names"):
             self.btn_toggle_all_names.setEnabled(enabled)
+        if hasattr(self, "names_panel"):
+            self.names_panel.set_interactive_enabled(enabled)
 
     def apply_theme(self, theme: theme_util.Theme) -> None:
         self.card.setStyleSheet(

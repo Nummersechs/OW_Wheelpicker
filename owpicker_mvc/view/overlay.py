@@ -2,12 +2,15 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from html import escape
 import i18n
 from utils import flag_icons, theme as theme_util
+from . import style_helpers
 
 class ResultOverlay(QtWidgets.QWidget):
     closed = QtCore.Signal()
     modeChosen = QtCore.Signal(bool)
     languageToggleRequested = QtCore.Signal()
     disableResultsRequested = QtCore.Signal()
+    deleteNamesConfirmed = QtCore.Signal()
+    deleteNamesCancelled = QtCore.Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -62,17 +65,26 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_online.setFixedHeight(40)
         self.btn_offline = QtWidgets.QPushButton(i18n.t("overlay.button_offline"))
         self.btn_offline.setFixedHeight(40)
+
+        self.btn_delete_cancel = QtWidgets.QPushButton(i18n.t("names.delete_confirm_cancel"))
+        self.btn_delete_cancel.setFixedHeight(40)
+        self.btn_delete_confirm = QtWidgets.QPushButton(i18n.t("names.delete_confirm_delete"))
+        self.btn_delete_confirm.setFixedHeight(40)
         self._apply_button_labels()
         self._set_min_widths()
 
         self.btn_online.clicked.connect(self._choose_online)
         self.btn_offline.clicked.connect(self._choose_offline)
+        self.btn_delete_cancel.clicked.connect(self._cancel_delete_names)
+        self.btn_delete_confirm.clicked.connect(self._confirm_delete_names)
 
         # Buttons in einer Zeile anordnen
         btn_row = QtWidgets.QHBoxLayout()
         btn_row.addStretch(1)
         btn_row.addWidget(self.btn_offline)
         btn_row.addWidget(self.btn_online)
+        btn_row.addWidget(self.btn_delete_cancel)
+        btn_row.addWidget(self.btn_delete_confirm)
         btn_row.addWidget(self.btn_disable)
         btn_row.addWidget(self.btn_close)
         btn_row.addStretch(1)
@@ -113,6 +125,8 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_disable.show()
         self.btn_online.hide()
         self.btn_offline.hide()
+        self.btn_delete_cancel.hide()
+        self.btn_delete_confirm.hide()
         self._last_view = {"type": "result", "data": (tank, dps, sup)}
         self._show()
 
@@ -127,6 +141,8 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_disable.hide()
         self.btn_online.hide()
         self.btn_offline.hide()
+        self.btn_delete_cancel.hide()
+        self.btn_delete_confirm.hide()
         self._last_view = {"type": "message", "data": (title, list(lines))}
         self._show()
 
@@ -145,8 +161,26 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_disable.hide()
         self.btn_online.show()
         self.btn_offline.show()
+        self.btn_delete_cancel.hide()
+        self.btn_delete_confirm.hide()
 
         self._last_view = {"type": "online_choice"}
+        self._show()
+
+    def show_delete_names_confirm(self, count: int):
+        self._apply_button_labels()
+        count_value = max(0, int(count))
+        self.title.setText(i18n.t("names.delete_confirm_title"))
+        self.lab_tank.setText(i18n.t("names.delete_confirm_message", count=count_value))
+        self.lab_dps.setText("")
+        self.lab_sup.setText("")
+        self.btn_close.hide()
+        self.btn_disable.hide()
+        self.btn_online.hide()
+        self.btn_offline.hide()
+        self.btn_delete_cancel.show()
+        self.btn_delete_confirm.show()
+        self._last_view = {"type": "delete_names_confirm", "data": count_value}
         self._show()
 
     def set_choice_enabled(self, enabled: bool):
@@ -161,6 +195,14 @@ class ResultOverlay(QtWidgets.QWidget):
     def _choose_offline(self):
         self.hide()
         self.modeChosen.emit(False)  # False = Offline
+
+    def _cancel_delete_names(self):
+        self.hide()
+        self.deleteNamesCancelled.emit()
+
+    def _confirm_delete_names(self):
+        self.hide()
+        self.deleteNamesConfirmed.emit()
 
 
     def _close(self):
@@ -189,6 +231,12 @@ class ResultOverlay(QtWidgets.QWidget):
             self.show_online_choice()
             if prev_choice_enabled:
                 self.set_choice_enabled(True)
+        elif kind == "delete_names_confirm":
+            try:
+                count_value = int(data)
+            except Exception:
+                count_value = 0
+            self.show_delete_names_confirm(count_value)
 
     def apply_theme(self, theme: theme_util.Theme, tool_style: str | None = None) -> None:
         """Update overlay colors to match the active theme."""
@@ -204,12 +252,16 @@ class ResultOverlay(QtWidgets.QWidget):
             lab.setStyleSheet(f"font-size:17px; margin:4px 0; color:{theme.text};")
         if tool_style:
             self.btn_language.setStyleSheet(tool_style)
+        style_helpers.style_primary_button(self.btn_delete_cancel, theme)
+        style_helpers.style_danger_button(self.btn_delete_confirm, theme)
 
     def _apply_button_labels(self):
         self.btn_close.setText(i18n.t("overlay.button_ok"))
         self.btn_disable.setText(i18n.t("overlay.button_disable_results"))
         self.btn_online.setText(i18n.t("overlay.button_online"))
         self.btn_offline.setText(i18n.t("overlay.button_offline"))
+        self.btn_delete_cancel.setText(i18n.t("names.delete_confirm_cancel"))
+        self.btn_delete_confirm.setText(i18n.t("names.delete_confirm_delete"))
 
     def _set_min_widths(self):
         """Fix widths so language switch doesn't move layout."""
@@ -238,6 +290,11 @@ class ResultOverlay(QtWidgets.QWidget):
         ):
             btn.setMinimumWidth(choice_width)
             btn.setMaximumWidth(choice_width)
+
+        delete_width = max_width(("names.delete_confirm_cancel", "names.delete_confirm_delete"))
+        for btn in (self.btn_delete_cancel, self.btn_delete_confirm):
+            btn.setMinimumWidth(delete_width)
+            btn.setMaximumWidth(delete_width)
 
     def _apply_flag(self):
         """Aktualisiert Text/Tooltip des Sprache-Buttons."""

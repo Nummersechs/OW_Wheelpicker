@@ -73,6 +73,13 @@ TRANSLATIONS_EN = {
     "names.context_new": "New name",
     "names.context_delete": "Delete selected",
     "names.subrole_tooltip": "Subrole {label}",
+    "names.mark_for_delete_tooltip": "Mark this name for bulk delete",
+    "names.delete_marked_tooltip": "Delete marked names",
+    "names.delete_marked_tooltip_active": "Delete {count} marked name(s)",
+    "names.delete_confirm_title": "Delete names",
+    "names.delete_confirm_message": "Do you really want to delete {count} marked name(s)?",
+    "names.delete_confirm_cancel": "Cancel",
+    "names.delete_confirm_delete": "Delete",
     # Map UI
     "map.types": "Map Types",
     "map.edit_types": "Edit types",
