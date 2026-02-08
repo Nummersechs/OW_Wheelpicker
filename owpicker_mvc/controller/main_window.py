@@ -2291,9 +2291,23 @@ class MainWindow(QtWidgets.QMainWindow):
                 merged_lines.append(line)
         merged_text = "\n".join(merged_lines)
 
-        names = ocr_import.extract_candidate_names(
-            merged_text,
+        names = ocr_import.extract_candidate_names_multi(
+            all_texts,
             min_chars=int(getattr(config, "OCR_NAME_MIN_CHARS", 2)),
+            max_chars=int(getattr(config, "OCR_NAME_MAX_CHARS", 24)),
+            max_words=int(getattr(config, "OCR_NAME_MAX_WORDS", 2)),
+            max_digit_ratio=float(getattr(config, "OCR_NAME_MAX_DIGIT_RATIO", 0.45)),
+            min_support=int(getattr(config, "OCR_NAME_MIN_SUPPORT", 1)),
+            high_count_threshold=int(getattr(config, "OCR_NAME_HIGH_COUNT_THRESHOLD", 8)),
+            high_count_min_support=int(getattr(config, "OCR_NAME_HIGH_COUNT_MIN_SUPPORT", 2)),
+            max_candidates=int(getattr(config, "OCR_NAME_MAX_CANDIDATES", 12)),
+            near_dup_min_chars=int(getattr(config, "OCR_NAME_NEAR_DUP_MIN_CHARS", 8)),
+            near_dup_max_len_delta=int(getattr(config, "OCR_NAME_NEAR_DUP_MAX_LEN_DELTA", 1)),
+            near_dup_similarity=float(getattr(config, "OCR_NAME_NEAR_DUP_SIMILARITY", 0.90)),
+            near_dup_tail_min_chars=int(getattr(config, "OCR_NAME_NEAR_DUP_TAIL_MIN_CHARS", 3)),
+            near_dup_tail_head_similarity=float(
+                getattr(config, "OCR_NAME_NEAR_DUP_TAIL_HEAD_SIMILARITY", 0.70)
+            ),
         )
         error_text = "; ".join(errors) if errors else None
         return names, merged_text, error_text
