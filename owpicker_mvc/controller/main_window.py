@@ -1,6 +1,7 @@
 from pathlib import Path
 import os
 import sys
+import tempfile
 import time
 from typing import Callable
 
@@ -9,10 +10,15 @@ from PySide6 import QtCore, QtGui, QtWidgets
 import config
 import i18n
 from . import mode_manager, spin_service
+from . import ocr_import
 from services import state_store
 from services.sound import SoundManager
 from utils import flag_icons, theme as theme_util, ui_helpers
 from view.overlay import ResultOverlay
+from view.screen_region_selector import (
+    select_region_from_primary_screen,
+    select_region_with_macos_screencapture,
+)
 from view.wheel_view import WheelView
 from view.spin_mode_toggle import SpinModeToggle
 from controller.map_ui import MapUI
@@ -377,6 +383,16 @@ class MainWindow(QtWidgets.QMainWindow):
             allow_pair_toggle=True,
             subrole_labels=["HS", "FDPS"],
         )
+        self.btn_dps_ocr_import = QtWidgets.QPushButton(i18n.t("ocr.dps_button"))
+        self.btn_dps_ocr_import.setFixedHeight(30)
+        self.btn_dps_ocr_import.setToolTip(i18n.t("ocr.dps_button_tooltip"))
+        ui_helpers.set_fixed_width_from_translations(
+            [self.btn_dps_ocr_import],
+            ["ocr.dps_button"],
+            padding=24,
+        )
+        self.btn_dps_ocr_import.clicked.connect(self._on_dps_ocr_import_clicked)
+        self.dps.header_layout.addWidget(self.btn_dps_ocr_import, 0, QtCore.Qt.AlignVCenter)
         self.support = WheelView(
             "Support",
             support_state.get("entries", []),
@@ -395,6 +411,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.player_list_panel = PlayerListPanelController(self, self.btn_all_players)
         self.btn_all_players.clicked.connect(self.player_list_panel.toggle_panel)
         grid.addWidget(self.btn_all_players, 1, 0, QtCore.Qt.AlignLeft)
+        self._update_dps_ocr_button_enabled()
         # Basisbreiten nach dem ersten Layout ermitteln
         QtCore.QTimer.singleShot(0, self._capture_role_base_widths)
         return role_container
@@ -1818,6 +1835,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.spin_mode_toggle.apply_theme(theme)
         if hasattr(self, "btn_all_players"):
             style_helpers.style_primary_button(self.btn_all_players, theme)
+        if hasattr(self, "btn_dps_ocr_import"):
+            style_helpers.style_primary_button(self.btn_dps_ocr_import, theme)
         if hasattr(self, "btn_cancel_spin"):
             style_helpers.style_danger_button(self.btn_cancel_spin, theme)
         if hasattr(self, "player_list_panel"):
@@ -1922,6 +1941,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.player_list_panel.update_button()
         self.open_queue.apply_preview(open_names)
         self._update_cancel_enabled()
+        self._update_dps_ocr_button_enabled()
 
     def _update_spin_mode_ui(self):
         if not hasattr(self, "spin_mode_toggle"):
@@ -2061,6 +2081,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._update_cancel_enabled()
         if self.hero_ban_active and en:
             self._set_hero_ban_visuals(True)
+        self._update_dps_ocr_button_enabled()
         # Kein automatischer Hover-Refresh beim Aktivieren
     def _stop_all_wheels(self):
         for w in (self.tank, self.dps, self.support):
@@ -2072,6 +2093,294 @@ class MainWindow(QtWidgets.QMainWindow):
                 pass
     def _update_cancel_enabled(self):
         self.btn_cancel_spin.setEnabled(self.pending > 0)
+
+    def _dps_ocr_import_available(self) -> bool:
+        if getattr(self, "_closing", False):
+            return False
+        if getattr(self, "pending", 0) > 0:
+            return False
+        if getattr(self, "current_mode", "") == "maps":
+            return False
+        if getattr(self, "hero_ban_active", False):
+            return False
+        return hasattr(self, "dps")
+
+    def _update_dps_ocr_button_enabled(self) -> None:
+        btn = getattr(self, "btn_dps_ocr_import", None)
+        if btn is None:
+            return
+        enabled = self._dps_ocr_import_available()
+        if self._overlay_choice_active():
+            enabled = False
+        btn.setEnabled(enabled)
+
+    def _capture_region_for_ocr(self) -> tuple[QtGui.QPixmap | None, str | None]:
+        use_native_mac_capture = bool(getattr(config, "OCR_USE_NATIVE_MAC_CAPTURE", True)) and sys.platform == "darwin"
+        if not use_native_mac_capture:
+            return select_region_from_primary_screen(
+                hint_text=i18n.t("ocr.select_hint"),
+                parent=self,
+            )
+
+        QtWidgets.QMessageBox.information(
+            self,
+            i18n.t("ocr.capture_title"),
+            i18n.t("ocr.capture_prepare_hint"),
+        )
+
+        was_visible = self.isVisible()
+        was_minimized = self.isMinimized()
+        if was_visible:
+            self.hide()
+            QtWidgets.QApplication.processEvents()
+
+        delay_ms = max(0, int(getattr(config, "OCR_CAPTURE_PREPARE_DELAY_MS", 120)))
+        if delay_ms > 0:
+            time.sleep(delay_ms / 1000.0)
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            capture_path = Path(tmp.name)
+
+        try:
+            selected_pixmap, select_error = select_region_with_macos_screencapture(
+                capture_path,
+                timeout_s=float(getattr(config, "OCR_CAPTURE_TIMEOUT_S", 45.0)),
+            )
+        finally:
+            try:
+                capture_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            if was_visible and not getattr(self, "_closing", False):
+                if was_minimized:
+                    self.showMinimized()
+                else:
+                    self.show()
+                    self.raise_()
+                    self.activateWindow()
+                QtWidgets.QApplication.processEvents()
+
+        if selected_pixmap is None and select_error == "screencapture-not-found":
+            return select_region_from_primary_screen(
+                hint_text=i18n.t("ocr.select_hint"),
+                parent=self,
+            )
+        return selected_pixmap, select_error
+
+    def _build_ocr_pixmap_variants(self, source: QtGui.QPixmap) -> list[QtGui.QPixmap]:
+        variants: list[QtGui.QPixmap] = []
+        seen: set[tuple[int, int, int]] = set()
+
+        def _add_variant(pix: QtGui.QPixmap | None) -> None:
+            if pix is None or pix.isNull():
+                return
+            key = (pix.width(), pix.height(), int(pix.cacheKey()))
+            if key in seen:
+                return
+            seen.add(key)
+            variants.append(pix)
+
+        _add_variant(source)
+        scale_factor = max(1, int(getattr(config, "OCR_SCALE_FACTOR", 2)))
+        if scale_factor > 1 and not source.isNull():
+            scaled = source.scaled(
+                max(1, source.width() * scale_factor),
+                max(1, source.height() * scale_factor),
+                QtCore.Qt.IgnoreAspectRatio,
+                QtCore.Qt.SmoothTransformation,
+            )
+            _add_variant(scaled)
+
+        if not source.isNull():
+            gray_image = source.toImage().convertToFormat(QtGui.QImage.Format_Grayscale8)
+            gray_pix = QtGui.QPixmap.fromImage(gray_image)
+            _add_variant(gray_pix)
+            if scale_factor > 1 and not gray_pix.isNull():
+                gray_scaled = gray_pix.scaled(
+                    max(1, gray_pix.width() * scale_factor),
+                    max(1, gray_pix.height() * scale_factor),
+                    QtCore.Qt.IgnoreAspectRatio,
+                    QtCore.Qt.SmoothTransformation,
+                )
+                _add_variant(gray_scaled)
+        return variants
+
+    def _extract_names_from_ocr_pixmap(
+        self,
+        pixmap: QtGui.QPixmap,
+        *,
+        tesseract_cmd: str,
+    ) -> tuple[list[str], str, str | None]:
+        all_texts: list[str] = []
+        errors: list[str] = []
+        psm_primary = int(getattr(config, "OCR_TESSERACT_PSM", 6))
+        psm_fallback = int(getattr(config, "OCR_TESSERACT_FALLBACK_PSM", 11))
+        psm_values = [psm_primary]
+        if psm_fallback not in psm_values:
+            psm_values.append(psm_fallback)
+        lang = str(getattr(config, "OCR_TESSERACT_LANG", "eng")).strip() or None
+        timeout_s = float(getattr(config, "OCR_TESSERACT_TIMEOUT_S", 8.0))
+
+        for variant in self._build_ocr_pixmap_variants(pixmap):
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+            try:
+                if not variant.save(str(tmp_path), "PNG"):
+                    errors.append("image-save-failed")
+                    continue
+                run_result = ocr_import.run_tesseract_multi(
+                    tmp_path,
+                    cmd=tesseract_cmd,
+                    psm_values=psm_values,
+                    timeout_s=timeout_s,
+                    lang=lang,
+                )
+                if run_result.text:
+                    all_texts.append(run_result.text)
+                elif run_result.error:
+                    errors.append(run_result.error)
+            finally:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        merged_lines: list[str] = []
+        seen_lines: set[str] = set()
+        for text in all_texts:
+            for raw_line in text.splitlines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                key = line.lower()
+                if key in seen_lines:
+                    continue
+                seen_lines.add(key)
+                merged_lines.append(line)
+        merged_text = "\n".join(merged_lines)
+
+        names = ocr_import.extract_candidate_names(
+            merged_text,
+            min_chars=int(getattr(config, "OCR_NAME_MIN_CHARS", 2)),
+        )
+        error_text = "; ".join(errors) if errors else None
+        return names, merged_text, error_text
+
+    def _ocr_preview_text(self, text: str, max_chars: int = 420) -> str:
+        if not text:
+            return ""
+        normalized_lines = [line.strip() for line in text.splitlines() if line.strip()]
+        collapsed = "\n".join(normalized_lines)
+        if len(collapsed) <= max_chars:
+            return collapsed
+        return collapsed[:max_chars].rstrip() + "…"
+
+    def _on_dps_ocr_import_clicked(self) -> None:
+        if not self._dps_ocr_import_available():
+            return
+        self._update_dps_ocr_button_enabled()
+        btn = getattr(self, "btn_dps_ocr_import", None)
+        if btn is None:
+            return
+        btn.setEnabled(False)
+        try:
+            selected_pixmap, select_error = self._capture_region_for_ocr()
+            if selected_pixmap is None:
+                if select_error == "cancelled":
+                    QtWidgets.QMessageBox.information(
+                        self,
+                        i18n.t("ocr.result_title"),
+                        i18n.t("ocr.capture_cancelled"),
+                    )
+                    return
+                if select_error == "selection-too-small":
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        i18n.t("ocr.error_title"),
+                        i18n.t("ocr.capture_selection_too_small"),
+                    )
+                    return
+                if select_error == "no-screen":
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        i18n.t("ocr.error_title"),
+                        i18n.t("ocr.error_no_screen"),
+                    )
+                    return
+                extra_hint = ""
+                if sys.platform == "darwin":
+                    extra_hint = "\n\n" + i18n.t("ocr.error_screen_permission_hint")
+                detail = ""
+                if isinstance(select_error, str) and select_error:
+                    detail = f"\n\n[{select_error}]"
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    i18n.t("ocr.error_title"),
+                    i18n.t("ocr.error_selection_failed") + extra_hint + detail,
+                )
+                return
+
+            tesseract_cmd = str(getattr(config, "OCR_TESSERACT_CMD", "tesseract"))
+            if not ocr_import.tesseract_available(tesseract_cmd):
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    i18n.t("ocr.error_title"),
+                    i18n.t("ocr.error_tesseract_missing", cmd=tesseract_cmd),
+                )
+                return
+
+            QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+            try:
+                names, raw_text, ocr_error = self._extract_names_from_ocr_pixmap(
+                    selected_pixmap,
+                    tesseract_cmd=tesseract_cmd,
+                )
+            finally:
+                try:
+                    QtWidgets.QApplication.restoreOverrideCursor()
+                except Exception:
+                    pass
+            if not names:
+                message = i18n.t("ocr.result_no_names")
+                preview = self._ocr_preview_text(raw_text)
+                if preview:
+                    message += "\n\n" + i18n.t("ocr.result_raw_preview", preview=preview)
+                elif ocr_error:
+                    message += "\n\n" + i18n.t("ocr.error_run_failed", reason=ocr_error)
+                QtWidgets.QMessageBox.information(
+                    self,
+                    i18n.t("ocr.result_title"),
+                    message,
+                )
+                return
+
+            added = 0
+            for name in names:
+                if self.dps.add_name(name, active=True):
+                    added += 1
+
+            if added > 0:
+                self.state_sync.save_state()
+                self._update_spin_all_enabled()
+                QtWidgets.QMessageBox.information(
+                    self,
+                    i18n.t("ocr.result_title"),
+                    i18n.t("ocr.result_added", added=added, total=len(names)),
+                )
+            else:
+                QtWidgets.QMessageBox.information(
+                    self,
+                    i18n.t("ocr.result_title"),
+                    i18n.t("ocr.result_duplicates_only", total=len(names)),
+                )
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(
+                self,
+                i18n.t("ocr.error_title"),
+                i18n.t("ocr.error_unexpected", reason=repr(exc)),
+            )
+        finally:
+            self._update_dps_ocr_button_enabled()
     
     def spin_all(self):
         """Dreht alle selektierten Räder auf faire Weise."""
@@ -2420,6 +2729,14 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "btn_all_players"):
             self.btn_all_players.setText(i18n.t("players.list_button"))
             ui_helpers.set_fixed_width_from_translations([self.btn_all_players], ["players.list_button"], padding=40)
+        if hasattr(self, "btn_dps_ocr_import"):
+            self.btn_dps_ocr_import.setText(i18n.t("ocr.dps_button"))
+            self.btn_dps_ocr_import.setToolTip(i18n.t("ocr.dps_button_tooltip"))
+            ui_helpers.set_fixed_width_from_translations(
+                [self.btn_dps_ocr_import],
+                ["ocr.dps_button"],
+                padding=24,
+            )
         if hasattr(self, "player_list_panel"):
             self.player_list_panel.set_language(self.language)
         self._update_title()

@@ -42,6 +42,18 @@ TOOLTIP_CACHE_ON_START = False
 SOUND_WARMUP_LAZY_STEP_MS = 25
 STATE_SAVE_DEBOUNCE_MS = 160
 
+# ---------- OCR Import (prototype) ----------
+OCR_TESSERACT_CMD = "tesseract"
+OCR_TESSERACT_LANG = "eng"
+OCR_TESSERACT_PSM = 6
+OCR_TESSERACT_FALLBACK_PSM = 11
+OCR_TESSERACT_TIMEOUT_S = 8.0
+OCR_NAME_MIN_CHARS = 2
+OCR_SCALE_FACTOR = 2
+OCR_USE_NATIVE_MAC_CAPTURE = True
+OCR_CAPTURE_PREPARE_DELAY_MS = 120
+OCR_CAPTURE_TIMEOUT_S = 45.0
+
 # ---------- Sprache ----------
 # Voreingestellte Sprache, wenn keine Auswahl gespeichert wurde
 DEFAULT_LANGUAGE = "en"
