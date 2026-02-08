@@ -33,9 +33,10 @@ HOVER_WATCHDOG_COOLDOWN_MS = 700
 HOVER_WATCHDOG_REQUIRE_MOVE_MS = 0
 
 # ---------- Performance / Resource policy ----------
-MAP_PREBUILD_ON_START = True
-SOUND_WARMUP_ON_START = True
-TOOLTIP_CACHE_ON_START = True
+MAP_PREBUILD_ON_START = False
+SOUND_WARMUP_ON_START = False
+TOOLTIP_CACHE_ON_START = False
+SOUND_WARMUP_LAZY_STEP_MS = 25
 
 # ---------- Sprache ----------
 # Voreingestellte Sprache, wenn keine Auswahl gespeichert wurde

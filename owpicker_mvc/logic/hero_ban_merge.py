@@ -1,10 +1,10 @@
 """Helpers for Hero-Ban: merge selected roles into a single list."""
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Any, Dict, List
 
 
-def merge_selected_roles(selected_roles: List[str], wheel_map: Dict[str, any]) -> List[dict]:
+def merge_selected_roles(selected_roles: List[str], wheel_map: Dict[str, Any]) -> List[dict]:
     """
     selected_roles: list of role names (e.g., Tank/Damage/Support) to include.
     wheel_map: role -> WheelView (must provide get_current_entries).

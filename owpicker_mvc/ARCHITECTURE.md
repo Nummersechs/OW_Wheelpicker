@@ -18,14 +18,14 @@
   - `spin_service.py` (Spin-All/Single, Snapshot/Restore)
 - `model/` – Zustandsmodelle
   - `roles.py` (bestehend)
-  - `state_models.py` (neu: Entry/Role/Mode-Snapshot)
+  - `wheel_state.py` (Wheel-Listen/Disable-Logik)
+- `logic/` – UI‑freie Logik
+  - `spin_engine.py` (Spin‑Physik)
+  - `spin_planner.py` (Backtracking‑Zuordnung für Spins)
+  - `hero_ban_merge.py` (Hero‑Ban: Rollen-Auswahl zusammenführen)
 - `services/` – wiederverwendbare Dienste
   - `sound.py` (bestehend)
-  - `persistence.py` (Load/Save saved_state.json)
   - `state_store.py` (Mode-States, Defaults, Capture)
-  - `sync_service.py` (HTTP für Spin-Result & Rollen-Sync)
-  - `spin_planner.py` (Backtracking-Zuordnung für Spins)
-  - `hero_ban_merge.py` (Hero-Ban: Rollen-Auswahl zusammenführen)
 - `i18n/` – Übersetzungen
   - `__init__.py` (Helper), `de.py`, `en.py`
 - `config.py` – Konstanten, Defaults, API-Endpoints

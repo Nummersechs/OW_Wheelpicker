@@ -4,6 +4,7 @@ from PySide6.QtMultimedia import QSoundEffect
 from PySide6.QtCore import QUrl
 from pathlib import Path
 import random, math, tempfile, wave
+import config
 
 AUDIO_EXTENSIONS = {".wav", ".ogg", ".mp3"}
 
@@ -33,6 +34,7 @@ class SoundManager:
         self._warmup_timer: QtCore.QTimer | None = None
         self._warmup_items: list[tuple[Path, dict[Path, QSoundEffect], float]] = []
         self._warmup_done_callbacks: list[Callable[[], None]] = []
+        self._lazy_warmup_started = False
 
         spin_dir = base_dir / "Spin"
         ding_dir = base_dir / "Ding"
@@ -54,6 +56,28 @@ class SoundManager:
             sources.append(default_path)
 
         return sources
+
+    def _warmup_complete(self) -> bool:
+        total_spin = len(self.spin_sources)
+        total_ding = len(self.ding_sources)
+        if total_spin == 0 and total_ding == 0:
+            return True
+        if len(self.spin_effects) < total_spin:
+            return False
+        if len(self.ding_effects) < total_ding:
+            return False
+        return True
+
+    def _maybe_start_lazy_warmup(self) -> None:
+        if self._lazy_warmup_started:
+            return
+        if self._warmup_timer is not None:
+            return
+        if self._warmup_complete():
+            return
+        self._lazy_warmup_started = True
+        step_ms = int(getattr(config, "SOUND_WARMUP_LAZY_STEP_MS", 25))
+        self.warmup_async(parent=None, step_ms=step_ms)
 
     def _get_or_create_effect(
         self,
@@ -171,6 +195,7 @@ class SoundManager:
     def play_spin(self):
         """Spielt einen zufälligen Spin-Sound oder Beep, falls nichts geladen."""
         try:
+            self._maybe_start_lazy_warmup()
             if self.spin_sources:
                 path = random.choice(self.spin_sources)
                 eff = self._get_or_create_effect(self.spin_effects, path, self.spin_base_volume)
@@ -206,6 +231,7 @@ class SoundManager:
     def play_ding(self):
         """Spielt einen zufälligen Ding-Sound oder Beep, falls nichts geladen."""
         try:
+            self._maybe_start_lazy_warmup()
             if self.ding_sources:
                 path = random.choice(self.ding_sources)
                 eff = self._get_or_create_effect(self.ding_effects, path, self.ding_base_volume)
@@ -225,6 +251,7 @@ class SoundManager:
     def play_preview(self):
         """Kurzer Test-Sound für Lautstärkevorschau."""
         try:
+            self._maybe_start_lazy_warmup()
             if not self.preview_effect:
                 self.preview_effect = self._create_preview_effect()
             if self.preview_effect:

@@ -3,7 +3,7 @@ All functions expect `mw` to be the MainWindow instance."""
 from __future__ import annotations
 
 import random
-from services import spin_planner
+from logic import spin_planner
 import i18n
 
 

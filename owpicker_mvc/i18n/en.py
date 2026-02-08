@@ -8,6 +8,7 @@ TRANSLATIONS_EN = {
     "mode.heroes": "Hero Selection",
     "mode.hero_ban": "Hero Ban",
     "mode.maps": "Map pick/ban",
+    "mode.maps_loading": "Loading maps…",
     # Volume
     "volume.icon_tooltip": "Volume for sound effects",
     "volume.slider_tooltip": "Sound effects volume",

@@ -1,5 +1,5 @@
 import unittest
-from services import hero_ban_merge
+from logic import hero_ban_merge
 
 
 class DummyWheel:

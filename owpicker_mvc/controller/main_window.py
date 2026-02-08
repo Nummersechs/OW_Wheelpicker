@@ -9,7 +9,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 import config
 import i18n
 from . import mode_manager, spin_service
-from services import persistence, state_store
+from services import state_store
 from services.sound import SoundManager
 from utils import flag_icons, theme as theme_util, ui_helpers
 from view.overlay import ResultOverlay
@@ -112,6 +112,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._hover_user_move_last: float | None = None
         self._hover_watchdog_last: float | None = None
         self._hover_watchdog_started = False
+        self._hover_prime_pending = False
+        self._hover_prime_reason: str | None = None
         self._hover_pump_until: float | None = None
         self._hover_pump_timer: QtCore.QTimer | None = None
         self._hover_watchdog_timer: QtCore.QTimer | None = None
@@ -158,6 +160,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._hover_pump_timer.setInterval(max(20, int(getattr(config, "HOVER_PUMP_INTERVAL_MS", 40))))
         self._hover_pump_timer.timeout.connect(self._hover_pump_tick)
         self._hover_pump_timer = self._timers.register(self._hover_pump_timer) or self._hover_pump_timer
+        self._map_button_loading = False
+        self._pending_map_mode_switch = False
         self._hover_watchdog_timer = QtCore.QTimer(self)
         self._hover_watchdog_timer.setInterval(max(100, int(getattr(config, "HOVER_WATCHDOG_INTERVAL_MS", 250))))
         self._hover_watchdog_timer.timeout.connect(self._hover_watchdog_tick)
@@ -273,7 +277,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.btn_mode_heroban,
                 self.btn_mode_maps,
             ],
-            ["mode.players", "mode.heroes", "mode.hero_ban", "mode.maps"],
+            ["mode.players", "mode.heroes", "mode.hero_ban", "mode.maps", "mode.maps_loading"],
             padding=48,
         )
         self._mode_buttons = [
@@ -639,6 +643,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sync_mode_stack()
         self._trace_event("startup_warmup:done")
         self._rearm_hover_tracking(reason="startup_warmup:done")
+        if not getattr(config, "DISABLE_TOOLTIPS", False) and not getattr(config, "TOOLTIP_CACHE_ON_START", True):
+            self._refresh_tooltip_caches_async(reason="startup_warmup_done")
 
     def _record_blocked_input_event(self, etype: int) -> None:
         now = time.monotonic()
@@ -717,6 +723,15 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
         self._rearm_hover_tracking(reason="startup_drain:done")
+        if getattr(self, "_hover_prime_pending", False) and not self._overlay_choice_active():
+            self._hover_prime_pending = False
+            reason = self._hover_prime_reason or "startup_drain:prime"
+            self._hover_prime_reason = None
+            self._hover_seen = False
+            self._hover_forward_last = None
+            self._trace_hover_event("hover_prime_after_drain", reason=reason)
+            self._hover_poke_under_cursor(reason=reason)
+            self._start_hover_pump(reason=reason, duration_ms=1200, force=True)
 
     def _restart_startup_drain_timer(self) -> None:
         drain_ms = 350
@@ -945,6 +960,18 @@ class MainWindow(QtWidgets.QMainWindow):
             return QtCore.QEvent.Type(etype).name  # type: ignore[attr-defined]
         except Exception:
             return str(etype)
+
+    def _set_map_button_loading(self, loading: bool, reason: str | None = None) -> None:
+        if getattr(self, "_map_button_loading", False) == bool(loading):
+            return
+        self._map_button_loading = bool(loading)
+        if hasattr(self, "btn_mode_maps"):
+            label_key = "mode.maps_loading" if self._map_button_loading else "mode.maps"
+            try:
+                self.btn_mode_maps.setText(i18n.t(label_key))
+            except Exception:
+                pass
+        self._trace_event("map_button_loading", active=self._map_button_loading, reason=reason)
 
     def _focus_trace_delta(self, now: float) -> float | None:
         last = getattr(self, "_focus_trace_last_t", None)
@@ -1332,6 +1359,12 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         if getattr(self, "_closing", False):
             return
+        if getattr(self, "_startup_block_input", False) or getattr(self, "_startup_drain_active", False):
+            self._hover_prime_pending = True
+            if reason:
+                self._hover_prime_reason = reason
+                self._trace_hover_event("hover_pump_deferred", reason=reason)
+            return
         if self._overlay_choice_active():
             return
         if self._hover_seen:
@@ -1490,6 +1523,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _hover_poke_at_global(self, pos: QtCore.QPoint, reason: str | None = None) -> bool:
         if getattr(self, "_closing", False):
             return False
+        if getattr(self, "_startup_block_input", False) or getattr(self, "_startup_drain_active", False):
+            return False
         if self._overlay_choice_active():
             return False
         views = self._iter_hover_views()
@@ -1507,6 +1542,24 @@ class MainWindow(QtWidgets.QMainWindow):
                 if not vp.rect().contains(local):
                     continue
                 hit = True
+                if not bool(getattr(vp, "_hover_entered", False)):
+                    try:
+                        QtWidgets.QApplication.sendEvent(vp, QtCore.QEvent(QtCore.QEvent.Enter))
+                    except Exception:
+                        pass
+                    try:
+                        hover_enter = QtGui.QHoverEvent(
+                            QtCore.QEvent.HoverEnter,
+                            QtCore.QPointF(local),
+                            QtCore.QPointF(local),
+                        )
+                        QtWidgets.QApplication.sendEvent(vp, hover_enter)
+                    except Exception:
+                        pass
+                    try:
+                        setattr(vp, "_hover_entered", True)
+                    except Exception:
+                        pass
                 if reason:
                     self._trace_hover_event(
                         "hover_poke",
@@ -1615,11 +1668,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if reason:
             self._hover_poke_under_cursor(reason=reason)
             self._start_hover_pump(reason=reason, duration_ms=1200)
-
-    def _ensure_hover_cache(self, ready: bool | None = None, refresh_hover: bool = False) -> None:
-        """Ensure hover caches exist and optionally refresh hover or ready state."""
-        if hasattr(self, "_tooltip_manager"):
-            self._tooltip_manager.ensure_hover_cache(ready=ready, refresh_hover=refresh_hover)
 
     def _apply_theme(self, defer_heavy: bool = False):
         """Apply the selected light/dark theme without freezing the UI."""
@@ -1826,23 +1874,27 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.summary.setText("")
 
-    def _refresh_tooltip_caches(self):
-        """Baut die Label-/Tooltip-Caches nach finalem Layout neu auf und schaltet sie frei."""
-        if hasattr(self, "_tooltip_manager"):
-            self._tooltip_manager.refresh_caches_sync()
-    def _refresh_tooltip_caches_async(self, delay_step_ms: int = 80, on_done: Callable[[], None] | None = None):
+    def _refresh_tooltip_caches_async(
+        self,
+        delay_step_ms: int = 80,
+        on_done: Callable[[], None] | None = None,
+        reason: str | None = None,
+        force: bool = False,
+    ):
         """
         Baut die Tooltip-Caches in kleinen Scheiben (per Timer) neu auf,
         damit der UI-Thread beim Online/Offline-Klick nicht blockiert.
         Mehrfachaufrufe werden kurz gesammelt, um die Render-Last zu drosseln.
         """
+        if getattr(config, "DISABLE_TOOLTIPS", False):
+            return
         if hasattr(self, "_tooltip_manager"):
-            self._tooltip_manager.refresh_caches_async(delay_step_ms=delay_step_ms, on_done=on_done)
-
-    def _run_tooltip_cache_refresh(self):
-        """Führt den eigentlichen Cache-Rebuild sequenziell aus."""
-        if hasattr(self, "_tooltip_manager"):
-            self._tooltip_manager._run_cache_refresh()
+            self._tooltip_manager.refresh_caches_async(
+                delay_step_ms=delay_step_ms,
+                on_done=on_done,
+                reason=reason,
+                force=force,
+            )
 
     def _reset_hover_cache_under_cursor(self):
         """Stellt sicher, dass Tooltip-Caches vorhanden sind, ohne Voll-Rebuild zu erzwingen."""
@@ -2026,7 +2078,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _get_state_file(self) -> Path:
         """Gibt den Pfad zur saved_state.json zurück."""
-        return persistence.state_file(self._state_dir)
+        return StateSyncController.state_file(self._state_dir)
 
     def _on_volume_changed(self, value: int):
         factor = max(0.0, min(1.0, value / 100.0))
@@ -2114,10 +2166,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self._trace_event("mode_button_clicked", target=target)
         if not self._post_choice_init_done and not self._overlay_choice_active():
             self._ensure_post_choice_ready()
+        if target != "maps" and getattr(self, "_pending_map_mode_switch", False):
+            self._pending_map_mode_switch = False
+            self._trace_event("mode_switch_cancelled", target=target)
         if target == "maps" and not getattr(self, "_map_lists_ready", False):
             self._trace_event("mode_switch_deferred", target=target)
+            self._pending_map_mode_switch = True
+            self._schedule_map_prebuild(force=True)
+            self._set_map_button_loading(True, reason="mode_switch_deferred")
             self._set_map_button_enabled(False)
             return
+        if target == "maps":
+            self._pending_map_mode_switch = False
         # Aktuelle Ergebnisse für den Modus merken, bevor wir wechseln
         self._snapshot_mode_results()
         if target == "maps":
@@ -2150,6 +2210,8 @@ class MainWindow(QtWidgets.QMainWindow):
         mode_manager.on_mode_button_clicked(self, target)
         self._sync_mode_stack()
         self._trace_event("mode_switch:roles_done", target=target)
+        if not getattr(config, "DISABLE_TOOLTIPS", False) and not getattr(config, "TOOLTIP_CACHE_ON_START", True):
+            self._refresh_tooltip_caches_async()
 
     def _update_title(self):
         if self.current_mode == "maps":
@@ -2210,7 +2272,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_mode_players.setText(i18n.t("mode.players"))
         self.btn_mode_heroes.setText(i18n.t("mode.heroes"))
         self.btn_mode_heroban.setText(i18n.t("mode.hero_ban"))
-        self.btn_mode_maps.setText(i18n.t("mode.maps"))
+        if getattr(self, "_map_button_loading", False):
+            self.btn_mode_maps.setText(i18n.t("mode.maps_loading"))
+        else:
+            self.btn_mode_maps.setText(i18n.t("mode.maps"))
         self.lbl_volume_icon.setToolTip(i18n.t("volume.icon_tooltip"))
         self.volume_slider.setToolTip(i18n.t("volume.slider_tooltip"))
         self.btn_spin_all.setText(i18n.t("controls.spin_all"))
@@ -2389,14 +2454,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sync_mode_stack()
         self._trace_event("run_post_choice_init:done")
 
-    def _schedule_map_prebuild(self) -> None:
+    def _schedule_map_prebuild(self, force: bool = False) -> None:
         if getattr(self, "_closing", False):
             return
-        if not getattr(config, "MAP_PREBUILD_ON_START", True):
+        if not getattr(config, "MAP_PREBUILD_ON_START", True) and not force:
             return
         if getattr(self, "_map_initialized", False) or getattr(self, "_map_prebuild_in_progress", False):
             return
         self._set_map_button_enabled(False)
+        self._set_map_button_loading(True, reason="prebuild_start")
         self._map_prebuild_in_progress = True
         QtCore.QTimer.singleShot(0, self._run_map_prebuild)
 
@@ -2414,10 +2480,14 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_map_lists_ready(self) -> None:
         self._map_lists_ready = True
         self._map_prebuild_in_progress = False
+        self._set_map_button_loading(False, reason="lists_ready")
         self._set_map_button_enabled(True)
         self._trace_event("map_prebuild:done")
         self._apply_focus_policy_defaults()
         self._rearm_hover_tracking(reason="map_prebuild:done")
+        if getattr(self, "_pending_map_mode_switch", False):
+            self._pending_map_mode_switch = False
+            QtCore.QTimer.singleShot(0, lambda: self._on_mode_button_clicked("maps"))
         if getattr(self, "_startup_waiting_for_map", False):
             self._startup_waiting_for_map = False
             self._startup_task_done("map_prebuild")

@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
+import threading
+from typing import Any, Dict, List
 
 from PySide6 import QtCore
 
 import config
-from services import persistence, sync_service
+
+try:
+    import requests  # type: ignore
+except Exception:
+    requests = None  # type: ignore
 
 
 class StateSyncController(QtCore.QObject):
@@ -21,8 +28,38 @@ class StateSyncController(QtCore.QObject):
         self._sync_timer.timeout.connect(self._flush_role_sync)
 
     @staticmethod
+    def state_file(base_dir: Path) -> Path:
+        """Return the path to saved_state.json relative to the running package."""
+        return base_dir / "saved_state.json"
+
+    @staticmethod
+    def _load_state(path: Path) -> Dict[str, Any]:
+        """Load saved state or return an empty dict on failure."""
+        try:
+            if path.exists():
+                with path.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            # Quiet failure; callers decide on logging/fallback
+            pass
+        return {}
+
+    @staticmethod
+    def _save_state(path: Path, data: Dict[str, Any]) -> None:
+        """Write state as JSON. Errors are swallowed on purpose."""
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            # Quiet failure; callers decide on logging
+            pass
+
+    @staticmethod
     def load_saved_state(state_file: Path) -> dict:
-        data = persistence.load_state(state_file)
+        data = StateSyncController._load_state(state_file)
         if isinstance(data, dict):
             return data
         return {}
@@ -51,7 +88,7 @@ class StateSyncController(QtCore.QObject):
         if getattr(self._mw, "_closing", False):
             sync = False
         state = self.gather_state()
-        persistence.save_state(self._state_file, state)
+        self._save_state(self._state_file, state)
         if sync:
             self.sync_all_roles()
         if self._mw.hero_ban_active and not getattr(self._mw, "_closing", False):
@@ -72,7 +109,7 @@ class StateSyncController(QtCore.QObject):
             "Damage": getattr(self._mw.dps, "pair_mode", False),
             "Support": getattr(self._mw.support, "pair_mode", False),
         }
-        sync_service.send_spin_result(tank, damage, support, pair_modes)
+        self._send_spin_result(tank, damage, support, pair_modes)
 
     def sync_all_roles(self) -> None:
         if not getattr(self._mw, "online_mode", False):
@@ -98,4 +135,79 @@ class StateSyncController(QtCore.QObject):
         payload = self._pending_sync_payload
         self._pending_sync_payload = None
         if payload:
-            sync_service.sync_roles(payload)
+            self._sync_roles(payload)
+
+    @staticmethod
+    def _split_pair_label(label: str, is_pair_mode: bool) -> tuple[str, str]:
+        label = (label or "").strip()
+        if not label:
+            return "", ""
+        if not is_pair_mode:
+            return label, ""
+        parts = [p.strip() for p in label.split("+") if p.strip()]
+        if not parts:
+            return "", ""
+        if len(parts) == 1:
+            return parts[0], ""
+        return parts[0], " + ".join(parts[1:])
+
+    def _post_json_async(
+        self,
+        *,
+        endpoint: str,
+        payload: Dict[str, Any],
+        payload_log: str,
+        success_log: str,
+        error_log: str,
+        missing_requests_log: str,
+    ) -> None:
+        """Post JSON payload in a daemon thread."""
+
+        def _worker() -> None:
+            if requests is None:
+                config.debug_print(missing_requests_log)
+                return
+            try:
+                base = config.API_BASE_URL
+                url = base.rstrip("/") + endpoint
+                config.debug_print(payload_log, payload)
+                resp = requests.post(url, json=payload, timeout=3)
+                resp.raise_for_status()
+                config.debug_print(success_log, resp.json())
+            except Exception as e:
+                config.debug_print(error_log, e)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _send_spin_result(self, tank: str, damage: str, support: str, pair_modes: Dict[str, bool]) -> None:
+        """Send spin result to the server in a background thread."""
+        tank1, tank2 = self._split_pair_label(tank, pair_modes.get("Tank", False))
+        dps1, dps2 = self._split_pair_label(damage, pair_modes.get("Damage", False))
+        sup1, sup2 = self._split_pair_label(support, pair_modes.get("Support", False))
+        payload = {
+            "tank1": tank1,
+            "tank2": tank2,
+            "dps1": dps1,
+            "dps2": dps2,
+            "support1": sup1,
+            "support2": sup2,
+        }
+        self._post_json_async(
+            endpoint="/spin-result",
+            payload=payload,
+            payload_log="Sende Payload:",
+            success_log="Spin-Ergebnis erfolgreich an Server gesendet:",
+            error_log="Fehler beim Senden des Spin-Ergebnisses:",
+            missing_requests_log="Requests not available – spin result not sent.",
+        )
+
+    def _sync_roles(self, roles: List[Dict[str, Any]]) -> None:
+        """Sync role lists to the server in a background thread."""
+        self._post_json_async(
+            endpoint="/roles-sync",
+            payload={"roles": roles},
+            payload_log="SYNC →",
+            success_log="SYNC OK:",
+            error_log="Fehler beim Rollen-Sync:",
+            missing_requests_log="Requests not available – roles not synced.",
+        )

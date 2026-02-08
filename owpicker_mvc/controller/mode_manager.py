@@ -3,7 +3,7 @@ All helpers expect the MainWindow instance as the first parameter."""
 from __future__ import annotations
 
 from typing import List
-from services import hero_ban_merge
+from logic import hero_ban_merge
 from PySide6 import QtWidgets, QtCore
 import i18n
 

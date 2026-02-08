@@ -1,5 +1,5 @@
 import unittest
-from services import spin_planner
+from logic import spin_planner
 
 
 class TestSpinPlanner(unittest.TestCase):

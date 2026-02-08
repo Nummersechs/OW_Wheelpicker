@@ -40,6 +40,9 @@ class WheelView(BasePanel):
         self._subrole_controls_visible = True
         self._header_controls_visible = True
         self._show_names_visible = True
+        self._names_change_timer: QtCore.QTimer | None = None
+        self._subrole_visibility_applied: tuple[bool, int] | None = None
+        self._tooltip_rev = 0
         self.view = WheelWidget(self._effective_names_from(defaults))
         self.view.segmentToggled.connect(self._on_segment_toggled)
         self.wheel = self.view.wheel
@@ -388,6 +391,10 @@ class WheelView(BasePanel):
     def get_result_value(self) -> Optional[str]:
         return self._result_value if self._result_state == "value" else None
 
+    def tooltip_revision(self) -> int:
+        """Monotonic revision for tooltip cache invalidation."""
+        return self._tooltip_rev
+
     def _pair_parts_from_label(self, label: str) -> list[str]:
         return self._wheel_state.pair_parts_from_label(label)
 
@@ -456,7 +463,7 @@ class WheelView(BasePanel):
                 return False
         with self._suspend_list_signals() as prev:
             self.names.add_name(name, active=active)
-            self._on_names_list_changed()
+            self._apply_names_list_changes()
         if not prev:
             self.stateChanged.emit()
         return True
@@ -476,7 +483,7 @@ class WheelView(BasePanel):
                     self.names.delete_row(i)
                     changed = True
             if changed:
-                self._on_names_list_changed()
+                self._apply_names_list_changes()
         if changed and not prev:
             self.stateChanged.emit()
         return changed
@@ -501,7 +508,7 @@ class WheelView(BasePanel):
                 item.setText(new)
                 changed = True
             if changed:
-                self._on_names_list_changed()
+                self._apply_names_list_changes()
         if changed and not prev:
             self.stateChanged.emit()
         return changed
@@ -533,7 +540,7 @@ class WheelView(BasePanel):
                         item.setCheckState(target_state)
                         changed = True
             if changed:
-                self._on_names_list_changed()
+                self._apply_names_list_changes()
         if changed and not prev:
             self.stateChanged.emit()
         return changed
@@ -678,7 +685,19 @@ class WheelView(BasePanel):
         return list(self._entries_cache["active_names"]) if self._entries_cache else []
 
     def _on_names_list_changed(self, *args):
-        """Wenn Namen geändert, hinzugefügt oder entfernt werden."""
+        """Wenn Namen geändert, hinzugefügt oder entfernt werden (debounced)."""
+        if self._names_change_timer is None:
+            self._names_change_timer = QtCore.QTimer(self)
+            self._names_change_timer.setSingleShot(True)
+            self._names_change_timer.timeout.connect(self._apply_names_list_changes)
+        if not self._names_change_timer.isActive():
+            # Debounce to avoid repeated heavy rebuilds while typing.
+            self._names_change_timer.start(30)
+
+    def _apply_names_list_changes(self):
+        """Apply list changes immediately (heavy path)."""
+        if self._names_change_timer is not None and self._names_change_timer.isActive():
+            self._names_change_timer.stop()
         self._rebuild_entries_cache()
         if self._wheel_state.override_entries is not None:
             # Override bestimmt das Rad – sichtbare Liste nur Anzeige
@@ -702,6 +721,7 @@ class WheelView(BasePanel):
         self._update_name_dependent_ui()
         self._wheel_state.last_wheel_names = list(new_names)
         self._apply_subrole_visibility()
+        self._tooltip_rev += 1
         if not self._suppress_state_signal:
             self.stateChanged.emit()
 
@@ -713,6 +733,10 @@ class WheelView(BasePanel):
         return self._wheel_state.effective_names_from(base, include_disabled=include_disabled)
     def _apply_subrole_visibility(self):
         """Blendet Subrollen-Checkboxen in den Zeilen ein/aus."""
+        desired = (self._subrole_controls_visible, self.names.count())
+        if self._subrole_visibility_applied == desired:
+            return
+        self._subrole_visibility_applied = desired
         for i in range(self.names.count()):
             widget = self.names.itemWidget(self.names.item(i))
             if isinstance(widget, NameRowWidget):
@@ -722,7 +746,7 @@ class WheelView(BasePanel):
         """Wendet die Override-Liste auf das Rad an, ohne die sichtbare Liste zu ändern."""
         if self._wheel_state.override_entries is None:
             # Zurück zum normalen Rendering basierend auf der Liste
-            self._on_names_list_changed()
+            self._apply_names_list_changes()
             return
         names = self._effective_names_from(self._wheel_state.override_entries, include_disabled=True)
         old_names = list(getattr(self.wheel, "names", []))
@@ -732,6 +756,7 @@ class WheelView(BasePanel):
             self.wheel.set_names(names)
             self._wheel_state.last_wheel_names = list(names)
         self._refresh_disabled_indices()
+        self._tooltip_rev += 1
 
     def _on_segment_toggled(self, idx: int, disabled: bool, label: str):
         if disabled:
@@ -774,7 +799,7 @@ class WheelView(BasePanel):
 
     def _on_names_changed(self):
         # Kompatibilitäts-Methode, falls sie anderswo noch aufgerufen wird
-        self._on_names_list_changed()
+        self._apply_names_list_changes()
 
     def _on_toggle_pair_mode(self, _state: int):
         self.pair_mode = bool(self.toggle.isChecked())
@@ -786,10 +811,12 @@ class WheelView(BasePanel):
         self._update_subrole_toggle_state()
         self._apply_placeholder()
         self._on_names_changed()
+        self._tooltip_rev += 1
         self.stateChanged.emit()
     def _on_toggle_show_names(self, _state: int):
         show = bool(self.chk_show_names.isChecked())
         self.wheel.set_show_labels(show)
+        self._tooltip_rev += 1
         self.stateChanged.emit()
     def _on_toggle_subroles(self, _state: int):
         self.use_subrole_filter = bool(self.pair_mode and self.chk_subroles and self.chk_subroles.isChecked())
@@ -798,6 +825,7 @@ class WheelView(BasePanel):
         self._wheel_state.reset_disabled()
         self._apply_placeholder()
         self._on_names_changed()
+        self._tooltip_rev += 1
         self.stateChanged.emit()
     def set_interactive_enabled(self, en: bool):
         # Statt self.edit:
@@ -1040,7 +1068,11 @@ class WheelView(BasePanel):
             self.chk_subroles.setVisible(visible)
     def set_subrole_controls_visible(self, visible: bool):
         """Blendet Subrollen-Kästchen in den Zeilen ein/aus."""
-        self._subrole_controls_visible = bool(visible)
+        new_val = bool(visible)
+        if new_val == self._subrole_controls_visible:
+            return
+        self._subrole_controls_visible = new_val
+        self._tooltip_rev += 1
         self._apply_subrole_visibility()
     def set_wheel_render_enabled(self, enabled: bool):
         """
@@ -1051,7 +1083,7 @@ class WheelView(BasePanel):
         prev = self._suppress_state_signal
         self._suppress_state_signal = True
         try:
-            self._on_names_list_changed()
+            self._apply_names_list_changes()
         finally:
             self._suppress_state_signal = prev
     def _normalize_entries(self, defaults: Union[List[str], List[dict]]) -> List[dict]:
@@ -1120,7 +1152,7 @@ class WheelView(BasePanel):
             self._on_include_in_all_toggled(self.btn_include_in_all.isChecked())
 
         self._apply_placeholder()
-        self._on_names_list_changed()
+        self._apply_names_list_changes()
         if hasattr(self, "names_panel"):
             self.names_panel.refresh_action_state()
         # Sichtbarkeit der Subrollen-Kästchen nach einem vollständigen Neuaufbau anwenden
