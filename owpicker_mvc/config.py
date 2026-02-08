@@ -7,6 +7,7 @@ Hier kannst du das Verhalten und die Startdaten des Programms anpassen.
 DEBUG = False
 QUIET = False
 TRACE_FLOW = True
+TRACE_SHUTDOWN = False
 TRACE_FOCUS = True
 TRACE_HOVER = True
 TRACE_CLEAR_ON_START = False
@@ -22,6 +23,8 @@ HOVER_TRACE_BUDGET_PER_VIEW = 20
 HOVER_POKE_ON_REARM = True
 HOVER_FORWARD_MOUSEMOVE = True
 HOVER_FORWARD_INTERVAL_MS = 50
+STARTUP_DROP_CHOICE_POINTER_EVENTS = True
+MODE_CHOICE_INPUT_GUARD_MS = 260
 HOVER_PUMP_ON_START = False
 # 0 = kein Timeout (läuft bis echte Hover-Events erkannt werden)
 HOVER_PUMP_DURATION_MS = 0

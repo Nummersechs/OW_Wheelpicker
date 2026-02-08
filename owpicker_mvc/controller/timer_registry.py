@@ -28,3 +28,17 @@ class TimerRegistry:
             except Exception:
                 pass
         self._timers.clear()
+
+    def snapshot(self) -> dict:
+        """Return a lightweight registry snapshot for diagnostics."""
+        active = 0
+        for timer in list(self._timers):
+            try:
+                if timer.isActive():
+                    active += 1
+            except Exception:
+                pass
+        return {
+            "registered": len(self._timers),
+            "active": active,
+        }

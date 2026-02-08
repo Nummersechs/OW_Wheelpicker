@@ -493,6 +493,29 @@ class MapUI(QtCore.QObject):
         self._pending_rebuild = False
         self._pending_state_emit = False
 
+    def resource_snapshot(self) -> dict:
+        update_timer_active = False
+        list_build_timer_active = False
+        try:
+            update_timer_active = bool(self._update_timer.isActive())
+        except Exception:
+            pass
+        if self._list_build_timer is not None:
+            try:
+                list_build_timer_active = bool(self._list_build_timer.isActive())
+            except Exception:
+                pass
+        return {
+            "active": bool(self._active),
+            "map_lists": len(self.map_lists),
+            "pending_rebuild": bool(self._pending_rebuild),
+            "pending_state_emit": bool(self._pending_state_emit),
+            "pending_wheel_refresh": bool(self._pending_wheel_refresh),
+            "pending_list_categories": len(self._pending_list_categories),
+            "update_timer_active": update_timer_active,
+            "list_build_timer_active": list_build_timer_active,
+        }
+
     def _schedule_update(self):
         self._pending_rebuild = True
         self._pending_state_emit = True

@@ -63,6 +63,27 @@ class PlayerListPanelController(QtCore.QObject):
         self._syncing = False
         self.hide_panel()
 
+    def resource_snapshot(self) -> dict:
+        sync_timer_active = False
+        if self._sync_timer is not None:
+            try:
+                sync_timer_active = bool(self._sync_timer.isActive())
+            except Exception:
+                pass
+        panel_visible = False
+        if self._panel is not None:
+            try:
+                panel_visible = bool(self._panel.isVisible())
+            except Exception:
+                pass
+        return {
+            "panel_exists": bool(self._panel is not None),
+            "panel_visible": panel_visible,
+            "sync_timer_active": sync_timer_active,
+            "syncing": bool(self._syncing),
+            "snapshot_entries": len(self._snapshot),
+        }
+
     def on_resize(self) -> None:
         if self._panel and self._panel.isVisible():
             self.position_panel()

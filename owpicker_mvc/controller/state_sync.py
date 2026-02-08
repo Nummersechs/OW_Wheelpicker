@@ -22,6 +22,9 @@ class StateSyncController(QtCore.QObject):
         super().__init__(main_window)
         self._mw = main_window
         self._state_file = state_file
+        self._closed = False
+        self._network_threads_active = 0
+        self._network_threads_lock = threading.Lock()
         self._pending_state: Dict[str, Any] | None = None
         self._pending_save_sync = False
         self._save_debounce_ms = max(0, int(getattr(config, "STATE_SAVE_DEBOUNCE_MS", 160)))
@@ -101,6 +104,8 @@ class StateSyncController(QtCore.QObject):
         return state
 
     def save_state(self, sync: bool = True, immediate: bool = False) -> None:
+        if self._closed:
+            return
         if getattr(self._mw, "_restoring_state", False):
             return
         if getattr(self._mw, "_closing", False):
@@ -142,6 +147,7 @@ class StateSyncController(QtCore.QObject):
 
     def shutdown(self, flush: bool = True) -> None:
         """Stop pending timers and clear queued sync payloads."""
+        self._closed = True
         if flush:
             self._flush_pending_save()
         if self._save_timer.isActive():
@@ -152,7 +158,32 @@ class StateSyncController(QtCore.QObject):
         self._pending_save_sync = False
         self._pending_sync_payload = None
 
+    def resource_snapshot(self) -> dict:
+        save_timer_active = False
+        sync_timer_active = False
+        try:
+            save_timer_active = bool(self._save_timer.isActive())
+        except Exception:
+            pass
+        try:
+            sync_timer_active = bool(self._sync_timer.isActive())
+        except Exception:
+            pass
+        with self._network_threads_lock:
+            active_threads = int(self._network_threads_active)
+        return {
+            "closed": bool(self._closed),
+            "save_timer_active": save_timer_active,
+            "sync_timer_active": sync_timer_active,
+            "has_pending_state": bool(self._pending_state is not None),
+            "pending_save_sync": bool(self._pending_save_sync),
+            "has_pending_sync_payload": bool(self._pending_sync_payload is not None),
+            "network_threads_active": active_threads,
+        }
+
     def send_spin_result(self, tank: str, damage: str, support: str) -> None:
+        if self._closed:
+            return
         if not getattr(self._mw, "online_mode", False):
             config.debug_print("Spin-Result: Offline-Modus - kein Senden.")
             return
@@ -164,6 +195,8 @@ class StateSyncController(QtCore.QObject):
         self._send_spin_result(tank, damage, support, pair_modes)
 
     def sync_all_roles(self) -> None:
+        if self._closed:
+            return
         if not getattr(self._mw, "online_mode", False):
             config.debug_print("Sync uebersprungen: Offline-Modus.")
             self._pending_sync_payload = None
@@ -216,8 +249,14 @@ class StateSyncController(QtCore.QObject):
         """Post JSON payload in a daemon thread."""
 
         def _worker() -> None:
+            with self._network_threads_lock:
+                self._network_threads_active += 1
             if requests is None:
-                config.debug_print(missing_requests_log)
+                try:
+                    config.debug_print(missing_requests_log)
+                finally:
+                    with self._network_threads_lock:
+                        self._network_threads_active = max(0, self._network_threads_active - 1)
                 return
             try:
                 base = config.API_BASE_URL
@@ -228,7 +267,12 @@ class StateSyncController(QtCore.QObject):
                 config.debug_print(success_log, resp.json())
             except Exception as e:
                 config.debug_print(error_log, e)
+            finally:
+                with self._network_threads_lock:
+                    self._network_threads_active = max(0, self._network_threads_active - 1)
 
+        if self._closed:
+            return
         threading.Thread(target=_worker, daemon=True).start()
 
     def _send_spin_result(self, tank: str, damage: str, support: str, pair_modes: Dict[str, bool]) -> None:

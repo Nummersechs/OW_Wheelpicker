@@ -311,6 +311,12 @@ class WheelDisc(QtWidgets.QGraphicsObject):
             return
         pos = event.pos()
         x, y = pos.x(), pos.y()
+        r = float(self.radius)
+        # Ignore clicks outside the circle. Without this, clicks in the square
+        # around the wheel can toggle random segments.
+        if (x * x + y * y) > (r * r):
+            event.ignore()
+            return
         # CW-Winkel (0° = rechts, zunehmende Winkel im Uhrzeigersinn)
         angle = (math.degrees(math.atan2(-y, x)) + 360.0) % 360.0
         n = len(self.names)

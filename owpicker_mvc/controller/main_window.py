@@ -28,6 +28,33 @@ from view import style_helpers
 
 # Fallback für "unbegrenzt" bei Widgetbreiten/Höhen (PySide6 exportiert QWIDGETSIZE_MAX nicht immer)
 QWIDGETSIZE_MAX = getattr(QtWidgets, "QWIDGETSIZE_MAX", getattr(QtCore, "QWIDGETSIZE_MAX", 16777215))
+_MOUSE_CLICK_EVENT_TYPES = (
+    int(QtCore.QEvent.MouseButtonPress),
+    int(QtCore.QEvent.MouseButtonRelease),
+    int(QtCore.QEvent.MouseButtonDblClick),
+)
+_POST_CHOICE_GUARD_EVENT_TYPES = _MOUSE_CLICK_EVENT_TYPES + (int(QtCore.QEvent.Wheel),)
+_CHOICE_POINTER_DROP_EVENT_TYPES = (
+    int(QtCore.QEvent.MouseMove),
+    int(QtCore.QEvent.HoverMove),
+    int(QtCore.QEvent.Wheel),
+)
+_STARTUP_BLOCKED_INPUT_EVENT_TYPES = _POST_CHOICE_GUARD_EVENT_TYPES + (
+    int(QtCore.QEvent.KeyPress),
+    int(QtCore.QEvent.KeyRelease),
+    int(QtCore.QEvent.HoverEnter),
+    int(QtCore.QEvent.HoverLeave),
+    int(QtCore.QEvent.TouchBegin),
+    int(QtCore.QEvent.TouchUpdate),
+    int(QtCore.QEvent.TouchEnd),
+    int(QtCore.QEvent.ToolTip),
+    int(QtCore.QEvent.HelpRequest),
+)
+_FOCUS_ACTIVATION_EVENT_TYPES = (
+    int(QtCore.QEvent.WindowActivate),
+    int(QtCore.QEvent.ApplicationActivate),
+    int(QtCore.QEvent.ActivationChange),
+)
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
@@ -72,6 +99,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._theme_heavy_pending = False
         self._language_heavy_pending = False
         self._post_choice_init_done = False
+        self._post_choice_input_guard_until: float | None = None
         self._stack_switching = False
         self._stack_switch_timer = QtCore.QTimer(self)
         self._stack_switch_timer.setSingleShot(True)
@@ -114,6 +142,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._hover_watchdog_started = False
         self._hover_prime_pending = False
         self._hover_prime_reason: str | None = None
+        self._hover_prime_deferred_count = 0
+        self._hover_prime_first_reason: str | None = None
+        self._hover_prime_last_reason: str | None = None
         self._hover_pump_until: float | None = None
         self._hover_pump_timer: QtCore.QTimer | None = None
         self._hover_watchdog_timer: QtCore.QTimer | None = None
@@ -143,7 +174,11 @@ class MainWindow(QtWidgets.QMainWindow):
                     f.write(f"=== run {self._run_id} ===\n")
             except Exception:
                 pass
-        self._trace_enabled = bool(getattr(config, "TRACE_FLOW", False) or getattr(config, "DEBUG", False))
+        self._trace_enabled = bool(
+            getattr(config, "TRACE_FLOW", False)
+            or getattr(config, "TRACE_SHUTDOWN", False)
+            or getattr(config, "DEBUG", False)
+        )
         self._trace_last_t: float | None = None
         self._trace_file = self._state_dir / "flow_trace.log"
         if self._trace_enabled:
@@ -727,6 +762,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._hover_prime_pending = False
             reason = self._hover_prime_reason or "startup_drain:prime"
             self._hover_prime_reason = None
+            self._flush_hover_prime_deferred_trace()
             self._hover_seen = False
             self._hover_forward_last = None
             self._trace_hover_event("hover_prime_after_drain", reason=reason)
@@ -875,89 +911,149 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def eventFilter(self, obj, event):
         etype = event.type()
+        etype_int = int(etype)
+        if self._should_drop_post_choice_clickthrough_event(etype_int, obj):
+            return True
+        if self._should_drop_disabled_choice_pointer_event(etype_int):
+            return True
+        if self._should_drop_disabled_choice_mouse_event(etype_int):
+            return True
         if getattr(self, "_startup_block_input", False):
-            if etype in (
-                QtCore.QEvent.MouseMove,
-                QtCore.QEvent.MouseButtonPress,
-                QtCore.QEvent.MouseButtonRelease,
-                QtCore.QEvent.MouseButtonDblClick,
-                QtCore.QEvent.Wheel,
-                QtCore.QEvent.KeyPress,
-                QtCore.QEvent.KeyRelease,
-                QtCore.QEvent.HoverMove,
-                QtCore.QEvent.HoverEnter,
-                QtCore.QEvent.HoverLeave,
-                QtCore.QEvent.TouchBegin,
-                QtCore.QEvent.TouchUpdate,
-                QtCore.QEvent.TouchEnd,
-                QtCore.QEvent.ToolTip,
-                QtCore.QEvent.HelpRequest,
-            ):
+            if etype_int in _STARTUP_BLOCKED_INPUT_EVENT_TYPES:
                 self._record_blocked_input_event(int(etype))
                 return True
         if getattr(self, "_startup_drain_active", False):
-            if etype in (
-                QtCore.QEvent.MouseMove,
-                QtCore.QEvent.MouseButtonPress,
-                QtCore.QEvent.MouseButtonRelease,
-                QtCore.QEvent.MouseButtonDblClick,
-                QtCore.QEvent.Wheel,
-                QtCore.QEvent.KeyPress,
-                QtCore.QEvent.KeyRelease,
-                QtCore.QEvent.HoverMove,
-                QtCore.QEvent.HoverEnter,
-                QtCore.QEvent.HoverLeave,
-                QtCore.QEvent.TouchBegin,
-                QtCore.QEvent.TouchUpdate,
-                QtCore.QEvent.TouchEnd,
-                QtCore.QEvent.ToolTip,
-                QtCore.QEvent.HelpRequest,
-            ):
+            if etype_int in _STARTUP_BLOCKED_INPUT_EVENT_TYPES:
                 self._record_drained_input_event(int(etype))
                 self._restart_startup_drain_timer()
                 return True
         if getattr(self, "_focus_trace_enabled", False):
             self._trace_focus_event(obj, event)
-        if etype in (
-            QtCore.QEvent.WindowActivate,
-            QtCore.QEvent.ApplicationActivate,
-            QtCore.QEvent.ActivationChange,
-        ):
+        if etype_int in _FOCUS_ACTIVATION_EVENT_TYPES:
             if self.isActiveWindow():
                 reason = self._event_type_name(int(etype))
-                self._rearm_hover_tracking(reason=reason)
-                # After focus/activation changes, re-prime hover even if a prior pump marked "seen".
-                self._hover_seen = False
-                self._hover_forward_last = None
-                self._start_hover_pump(reason=reason, duration_ms=900, force=True)
+                if getattr(self, "_startup_block_input", False) or getattr(self, "_startup_drain_active", False):
+                    self._record_hover_prime_deferred(reason=reason)
+                else:
+                    self._rearm_hover_tracking(reason=reason)
+                    # After focus/activation changes, re-prime hover even if a prior pump marked "seen".
+                    self._hover_seen = False
+                    self._hover_forward_last = None
+                    self._start_hover_pump(reason=reason, duration_ms=900, force=True)
         if etype == QtCore.QEvent.MouseMove and getattr(config, "HOVER_FORWARD_MOUSEMOVE", False):
             try:
                 if isinstance(event, QtGui.QMouseEvent):
                     self._forward_hover_from_app_mousemove(event)
             except Exception:
                 pass
-        if etype in (
-            QtCore.QEvent.MouseButtonPress,
-            QtCore.QEvent.MouseButtonRelease,
-            QtCore.QEvent.MouseButtonDblClick,
-        ):
+        if etype_int in _MOUSE_CLICK_EVENT_TYPES:
             if not getattr(self, "_closing", False) and not self._overlay_choice_active():
                 try:
                     if isinstance(event, QtGui.QMouseEvent):
                         if not hasattr(event, "spontaneous") or event.spontaneous():
-                            # Clicks should not start the watchdog; just rearm and mark activity.
+                            # Click spam should not trigger expensive hover rearm/pump cycles.
+                            # We only mark activity; watchdog/activation paths recover hover.
                             self._mark_hover_activity()
-                            self._rearm_hover_tracking(reason=self._event_type_name(int(etype)))
                 except Exception:
                     pass
         if getattr(self, "_closing", False):
             return super().eventFilter(obj, event)
         if self._overlay_choice_active():
             return super().eventFilter(obj, event)
-        if etype == QtCore.QEvent.MouseButtonPress:
+        if etype_int == int(QtCore.QEvent.MouseButtonPress):
             if hasattr(self, "player_list_panel"):
                 self.player_list_panel.maybe_close_on_click(obj, event)
         return super().eventFilter(obj, event)
+
+    def _should_drop_disabled_choice_mouse_event(self, etype: int) -> bool:
+        if etype not in _MOUSE_CLICK_EVENT_TYPES:
+            return False
+        return self._choice_overlay_buttons_locked()
+
+    def _post_choice_input_guard_active(self) -> bool:
+        until = getattr(self, "_post_choice_input_guard_until", None)
+        if until is None:
+            return False
+        if time.monotonic() >= until:
+            self._post_choice_input_guard_until = None
+            return False
+        return True
+
+    def _arm_post_choice_input_guard(self, reason: str | None = None, duration_ms: int | None = None) -> None:
+        ms = int(
+            duration_ms
+            if duration_ms is not None
+            else getattr(config, "MODE_CHOICE_INPUT_GUARD_MS", 220)
+        )
+        if ms <= 0:
+            self._post_choice_input_guard_until = None
+            return
+        self._post_choice_input_guard_until = time.monotonic() + (ms / 1000.0)
+        self._trace_event("mode_choice_input_guard", active=True, duration_ms=ms, reason=reason)
+
+    def _is_wheel_view_event_target(self, obj) -> bool:
+        if obj is None:
+            return False
+        try:
+            views = self._iter_hover_views(include_maps=True)
+        except Exception:
+            views = []
+        for view in views:
+            if view is None:
+                continue
+            if obj is view:
+                return True
+            try:
+                vp = view.viewport()
+            except Exception:
+                continue
+            if obj is vp:
+                return True
+            if isinstance(obj, QtWidgets.QWidget):
+                try:
+                    if vp.isAncestorOf(obj):
+                        return True
+                except Exception:
+                    pass
+        return False
+
+    def _should_drop_post_choice_clickthrough_event(self, etype: int, obj=None) -> bool:
+        if etype not in _POST_CHOICE_GUARD_EVENT_TYPES:
+            return False
+        if self._overlay_choice_active():
+            return False
+        # Segment toggles on wheel views should remain responsive even directly
+        # after mode choice; spin/mode actions are guarded separately.
+        if self._is_wheel_view_event_target(obj):
+            return False
+        return self._post_choice_input_guard_active()
+
+    def _should_drop_disabled_choice_pointer_event(self, etype: int) -> bool:
+        if not bool(getattr(config, "STARTUP_DROP_CHOICE_POINTER_EVENTS", True)):
+            return False
+        if etype not in _CHOICE_POINTER_DROP_EVENT_TYPES:
+            return False
+        return self._choice_overlay_buttons_locked()
+
+    def _choice_overlay_buttons_locked(self) -> bool:
+        if not (getattr(self, "_startup_block_input", False) or getattr(self, "_startup_drain_active", False)):
+            return False
+        if not self._overlay_choice_active():
+            return False
+        overlay = getattr(self, "overlay", None)
+        if overlay is None:
+            return False
+        btn_offline = getattr(overlay, "btn_offline", None)
+        btn_online = getattr(overlay, "btn_online", None)
+        if btn_offline is None or btn_online is None:
+            return False
+        try:
+            locked = (not btn_offline.isEnabled()) and (not btn_online.isEnabled())
+        except Exception:
+            return False
+        # During startup warmup/drain the mode-choice buttons are intentionally locked.
+        # Drop click and pointer move events globally so spam doesn't keep re-queueing input.
+        return bool(locked)
 
     def _event_type_name(self, etype: int) -> str:
         try:
@@ -1353,6 +1449,37 @@ class MainWindow(QtWidgets.QMainWindow):
         if source:
             self._trace_hover_event("hover_seen", source=source)
 
+    def _record_hover_prime_deferred(self, reason: str | None = None) -> None:
+        self._hover_prime_pending = True
+        if reason:
+            self._hover_prime_reason = reason
+        count = int(getattr(self, "_hover_prime_deferred_count", 0)) + 1
+        self._hover_prime_deferred_count = count
+        if count == 1:
+            self._hover_prime_first_reason = reason
+            self._hover_prime_last_reason = reason
+            if reason:
+                self._trace_hover_event("hover_pump_deferred", reason=reason)
+            else:
+                self._trace_hover_event("hover_pump_deferred")
+        elif reason:
+            self._hover_prime_last_reason = reason
+
+    def _flush_hover_prime_deferred_trace(self) -> None:
+        count = int(getattr(self, "_hover_prime_deferred_count", 0))
+        if count > 1:
+            first_reason = getattr(self, "_hover_prime_first_reason", None)
+            last_reason = getattr(self, "_hover_prime_last_reason", None)
+            extra = {"count": count}
+            if first_reason:
+                extra["first_reason"] = first_reason
+            if last_reason and last_reason != first_reason:
+                extra["last_reason"] = last_reason
+            self._trace_hover_event("hover_pump_deferred_coalesced", **extra)
+        self._hover_prime_deferred_count = 0
+        self._hover_prime_first_reason = None
+        self._hover_prime_last_reason = None
+
     def _start_hover_pump(
         self,
         reason: str | None = None,
@@ -1364,11 +1491,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if getattr(self, "_closing", False):
             return
         if getattr(self, "_startup_block_input", False) or getattr(self, "_startup_drain_active", False):
-            self._hover_prime_pending = True
-            if reason:
-                self._hover_prime_reason = reason
-                self._trace_hover_event("hover_pump_deferred", reason=reason)
+            self._record_hover_prime_deferred(reason=reason)
             return
+        self._flush_hover_prime_deferred_trace()
         if self._overlay_choice_active():
             return
         if self._hover_seen:
@@ -1958,6 +2083,9 @@ class MainWindow(QtWidgets.QMainWindow):
             spin_service.spin_all(self)
 
     def _spin_single(self, wheel: WheelView, mult: float = 1.0, hero_ban_override: bool = True):
+        if self._post_choice_input_guard_active():
+            self._trace_event("spin_single_ignored", reason="mode_choice_input_guard")
+            return
         if self.current_mode == "maps":
             self.map_mode.spin_single()
         else:
@@ -2168,6 +2296,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_mode_button_clicked(self, target: str):
         self._trace_event("mode_button_clicked", target=target)
+        if self._post_choice_input_guard_active():
+            self._trace_event("mode_switch_ignored", target=target, reason="mode_choice_input_guard")
+            return
         if not self._post_choice_init_done and not self._overlay_choice_active():
             self._ensure_post_choice_ready()
         if target != "maps" and getattr(self, "_pending_map_mode_switch", False):
@@ -2342,6 +2473,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if getattr(self, "_closing", False):
             return
         self._flush_blocked_input_stats("mode_choice")
+        self._flush_hover_prime_deferred_trace()
+        self._arm_post_choice_input_guard(reason="mode_choice")
+        self._hover_prime_pending = False
+        self._hover_prime_reason = None
         self.online_mode = online
         self._set_controls_enabled(True)
         self._set_heavy_ui_updates_enabled(True)
@@ -2545,50 +2680,132 @@ class MainWindow(QtWidgets.QMainWindow):
         self._trace_event("sync_mode_stack:after", force_vis=True)
         self._trace_event("sync_mode_stack:after")
 
+    def _merge_shutdown_snapshot(self, prefix: str, payload: dict | None, target: dict) -> None:
+        if not isinstance(payload, dict):
+            return
+        for key, value in payload.items():
+            target[f"{prefix}_{key}"] = value
+
+    def _shutdown_resource_snapshot(self) -> dict:
+        snap: dict[str, object] = {}
+        try:
+            timers = self.findChildren(QtCore.QTimer)
+            active = 0
+            for timer in timers:
+                try:
+                    if timer.isActive():
+                        active += 1
+                except Exception:
+                    pass
+            snap["qt_timers_total"] = len(timers)
+            snap["qt_timers_active"] = active
+        except Exception:
+            snap["qt_timers_total"] = None
+            snap["qt_timers_active"] = None
+
+        registry = getattr(self, "_timers", None)
+        if registry is not None and hasattr(registry, "snapshot"):
+            try:
+                self._merge_shutdown_snapshot("registry", registry.snapshot(), snap)
+            except Exception:
+                pass
+
+        state_sync = getattr(self, "state_sync", None)
+        if state_sync is not None and hasattr(state_sync, "resource_snapshot"):
+            try:
+                self._merge_shutdown_snapshot("state_sync", state_sync.resource_snapshot(), snap)
+            except Exception:
+                pass
+
+        tooltip = getattr(self, "_tooltip_manager", None)
+        if tooltip is not None and hasattr(tooltip, "resource_snapshot"):
+            try:
+                self._merge_shutdown_snapshot("tooltip", tooltip.resource_snapshot(), snap)
+            except Exception:
+                pass
+
+        sound = getattr(self, "sound", None)
+        if sound is not None and hasattr(sound, "resource_snapshot"):
+            try:
+                self._merge_shutdown_snapshot("sound", sound.resource_snapshot(), snap)
+            except Exception:
+                pass
+
+        panel = getattr(self, "player_list_panel", None)
+        if panel is not None and hasattr(panel, "resource_snapshot"):
+            try:
+                self._merge_shutdown_snapshot("player_panel", panel.resource_snapshot(), snap)
+            except Exception:
+                pass
+
+        map_ui = getattr(self, "map_ui", None)
+        if map_ui is not None and hasattr(map_ui, "resource_snapshot"):
+            try:
+                self._merge_shutdown_snapshot("map_ui", map_ui.resource_snapshot(), snap)
+            except Exception:
+                pass
+
+        return snap
+
+    def _run_shutdown_step(self, step: str, callback: Callable[[], None]) -> None:
+        self._trace_event("shutdown_step:start", step=step)
+        try:
+            callback()
+            self._trace_event("shutdown_step:ok", step=step)
+        except Exception as exc:
+            self._trace_event("shutdown_step:error", step=step, error=repr(exc))
+
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         self._closing = True
         self._trace_event("close_event")
-        try:
+
+        if bool(getattr(config, "TRACE_SHUTDOWN", False)):
+            self._trace_event("shutdown_snapshot", stage="begin", **self._shutdown_resource_snapshot())
+
+        def _stop_wheels() -> None:
             self._stop_all_wheels()
             if getattr(self, "map_main", None):
                 self.map_main.hard_stop()
-        except Exception:
-            pass
-        try:
+
+        def _shutdown_map_ui() -> None:
             if hasattr(self, "map_ui"):
                 self.map_ui.shutdown()
-        except Exception:
-            pass
-        try:
+
+        def _shutdown_player_panel() -> None:
             if hasattr(self, "player_list_panel"):
                 self.player_list_panel.shutdown()
-        except Exception:
-            pass
-        try:
+
+        def _shutdown_tooltips() -> None:
             if hasattr(self, "_tooltip_manager"):
                 self._tooltip_manager.shutdown()
-        except Exception:
-            pass
-        try:
+
+        def _stop_registered_timers() -> None:
             if hasattr(self, "_timers"):
                 self._timers.stop_all()
-        except Exception:
-            pass
-        try:
+
+        def _shutdown_state_sync() -> None:
             self.state_sync.save_state(sync=False, immediate=True)
             self.state_sync.shutdown(flush=False)
-        except Exception:
-            pass
-        try:
+
+        def _shutdown_sound() -> None:
             self.sound.shutdown()
-        except Exception:
-            pass
-        app = QtWidgets.QApplication.instance()
-        if app:
-            try:
+
+        def _remove_app_filter() -> None:
+            app = QtWidgets.QApplication.instance()
+            if app:
                 app.removeEventFilter(self)
-            except Exception:
-                pass
+        self._run_shutdown_step("stop_wheels", _stop_wheels)
+        self._run_shutdown_step("map_ui", _shutdown_map_ui)
+        self._run_shutdown_step("player_list_panel", _shutdown_player_panel)
+        self._run_shutdown_step("tooltip_manager", _shutdown_tooltips)
+        self._run_shutdown_step("timer_registry", _stop_registered_timers)
+        self._run_shutdown_step("state_sync", _shutdown_state_sync)
+        self._run_shutdown_step("sound", _shutdown_sound)
+        self._run_shutdown_step("remove_event_filter", _remove_app_filter)
+
+        if bool(getattr(config, "TRACE_SHUTDOWN", False)):
+            self._trace_event("shutdown_snapshot", stage="pre_super", **self._shutdown_resource_snapshot())
+
         super().closeEvent(event)
 
     def _trace_event(self, name: str, **extra) -> None:

@@ -190,6 +190,32 @@ class SoundManager:
         self.preview_effect = None
         self._cleanup_preview_file()
 
+    def resource_snapshot(self) -> dict:
+        warmup_active = False
+        if self._warmup_timer is not None:
+            try:
+                warmup_active = bool(self._warmup_timer.isActive())
+            except Exception:
+                warmup_active = False
+        preview_tmp_exists = False
+        if self._preview_tmp_path is not None:
+            try:
+                preview_tmp_exists = bool(self._preview_tmp_path.exists())
+            except Exception:
+                preview_tmp_exists = False
+        return {
+            "spin_sources": len(self.spin_sources),
+            "ding_sources": len(self.ding_sources),
+            "spin_effects": len(self.spin_effects),
+            "ding_effects": len(self.ding_effects),
+            "has_preview_effect": bool(self.preview_effect is not None),
+            "warmup_timer_active": warmup_active,
+            "warmup_items": len(self._warmup_items),
+            "warmup_callbacks": len(self._warmup_done_callbacks),
+            "preview_tmp_exists": preview_tmp_exists,
+            "lazy_warmup_started": bool(self._lazy_warmup_started),
+        }
+
     # --- Control ---
 
     def play_spin(self):

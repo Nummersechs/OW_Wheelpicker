@@ -22,6 +22,19 @@ class TooltipManager:
         if self._timer.isActive():
             self._timer.stop()
 
+    def resource_snapshot(self) -> dict:
+        timer_active = False
+        try:
+            timer_active = bool(self._timer.isActive())
+        except Exception:
+            timer_active = False
+        return {
+            "timer_active": timer_active,
+            "done_callbacks": len(self._done_callbacks),
+            "has_last_signature": bool(self._last_signature is not None),
+            "has_pending_signature": bool(self._pending_signature is not None),
+        }
+
     def _wheels(self):
         current_mode = getattr(self._mw, "current_mode", "")
         if current_mode == "maps":
