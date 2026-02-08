@@ -35,6 +35,26 @@ class TestHeroBanMerge(unittest.TestCase):
         # Rein nur einmal
         self.assertEqual(names.count("Rein"), 1)
 
+    def test_merge_ignores_missing_roles_and_blank_names(self):
+        wheels = {
+            "Tank": DummyWheel(
+                [
+                    {"name": "  ", "active": True, "subroles": []},
+                    {"name": "Sigma", "active": True, "subroles": []},
+                ]
+            ),
+        }
+        merged = hero_ban_merge.merge_selected_roles(["Tank", "Damage"], wheels)
+        self.assertEqual([m["name"] for m in merged], ["Sigma"])
+
+    def test_merge_respects_role_order(self):
+        wheels = {
+            "Support": DummyWheel([{"name": "Ana", "active": True, "subroles": []}]),
+            "Damage": DummyWheel([{"name": "Echo", "active": True, "subroles": []}]),
+        }
+        merged = hero_ban_merge.merge_selected_roles(["Support", "Damage"], wheels)
+        self.assertEqual([m["name"] for m in merged], ["Ana", "Echo"])
+
 
 if __name__ == "__main__":
     unittest.main()
