@@ -43,7 +43,11 @@ class WheelView(BasePanel):
         self._names_change_timer: QtCore.QTimer | None = None
         self._subrole_visibility_applied: tuple[bool, int] | None = None
         self._tooltip_rev = 0
+        self._wheel_overlay_widget: QtWidgets.QWidget | None = None
+        self._wheel_overlay_margin_top = 8
+        self._wheel_overlay_margin_right = 8
         self.view = WheelWidget(self._effective_names_from(defaults))
+        self.view.viewport().installEventFilter(self)
         self.view.segmentToggled.connect(self._on_segment_toggled)
         self.wheel = self.view.wheel
         self._wheel_state.last_wheel_names = list(self.wheel.names)
@@ -187,6 +191,48 @@ class WheelView(BasePanel):
         # Default theme; main window reapplies the persisted choice.
         self.apply_theme(theme_util.get_theme("light"))
         QtCore.QTimer.singleShot(0, self._refit_view)
+
+    def set_wheel_overlay_widget(
+        self,
+        widget: QtWidgets.QWidget,
+        *,
+        margin_top: int = 8,
+        margin_right: int = 8,
+    ) -> None:
+        if widget is None:
+            return
+        self._wheel_overlay_widget = widget
+        self._wheel_overlay_margin_top = max(0, int(margin_top))
+        self._wheel_overlay_margin_right = max(0, int(margin_right))
+        widget.setParent(self.view.viewport())
+        widget.show()
+        widget.raise_()
+        widget.installEventFilter(self)
+        QtCore.QTimer.singleShot(0, self._position_wheel_overlay_widget)
+
+    def _position_wheel_overlay_widget(self) -> None:
+        widget = self._wheel_overlay_widget
+        if widget is None:
+            return
+        viewport = self.view.viewport()
+        x = max(0, viewport.width() - widget.width() - self._wheel_overlay_margin_right)
+        y = max(0, self._wheel_overlay_margin_top)
+        widget.move(x, y)
+        widget.raise_()
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent):
+        if obj is self.view.viewport() and event.type() in (
+            QtCore.QEvent.Resize,
+            QtCore.QEvent.Show,
+            QtCore.QEvent.LayoutRequest,
+        ):
+            QtCore.QTimer.singleShot(0, self._position_wheel_overlay_widget)
+        elif obj is self._wheel_overlay_widget and event.type() in (
+            QtCore.QEvent.Resize,
+            QtCore.QEvent.Show,
+        ):
+            QtCore.QTimer.singleShot(0, self._position_wheel_overlay_widget)
+        return super().eventFilter(obj, event)
 
     @contextmanager
     def _suspend_list_signals(self):

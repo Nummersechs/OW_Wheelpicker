@@ -394,7 +394,11 @@ class MainWindow(QtWidgets.QMainWindow):
             padding=24,
         )
         self.btn_dps_ocr_import.clicked.connect(self._on_dps_ocr_import_clicked)
-        self.dps.header_layout.addWidget(self.btn_dps_ocr_import, 0, QtCore.Qt.AlignVCenter)
+        self.dps.set_wheel_overlay_widget(
+            self.btn_dps_ocr_import,
+            margin_top=8,
+            margin_right=8,
+        )
         self.support = WheelView(
             "Support",
             support_state.get("entries", []),
