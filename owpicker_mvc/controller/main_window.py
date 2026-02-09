@@ -385,6 +385,17 @@ class MainWindow(QtWidgets.QMainWindow):
             allow_pair_toggle=True,
             subrole_labels=["MT", "OT"],
         )
+        self.btn_tank_ocr_import = QtWidgets.QPushButton(i18n.t("ocr.tank_button"))
+        self.btn_tank_ocr_import.setFixedHeight(36)
+        self.btn_tank_ocr_import.clicked.connect(
+            lambda _checked=False: self._on_role_ocr_import_clicked("tank")
+        )
+        self.tank.set_wheel_overlay_widget(
+            self.btn_tank_ocr_import,
+            margin_top=8,
+            margin_right=8,
+        )
+        self._register_role_ocr_button("tank", self.btn_tank_ocr_import)
         self.dps = WheelView(
             "Damage",
             dps_state.get("entries", []),
@@ -393,7 +404,7 @@ class MainWindow(QtWidgets.QMainWindow):
             subrole_labels=["HS", "FDPS"],
         )
         self.btn_dps_ocr_import = QtWidgets.QPushButton(i18n.t("ocr.dps_button"))
-        self.btn_dps_ocr_import.setFixedHeight(30)
+        self.btn_dps_ocr_import.setFixedHeight(36)
         self.btn_dps_ocr_import.clicked.connect(
             lambda _checked=False: self._on_role_ocr_import_clicked("dps")
         )
@@ -410,6 +421,17 @@ class MainWindow(QtWidgets.QMainWindow):
             allow_pair_toggle=True,
             subrole_labels=["MS", "FS"],
         )
+        self.btn_support_ocr_import = QtWidgets.QPushButton(i18n.t("ocr.support_button"))
+        self.btn_support_ocr_import.setFixedHeight(36)
+        self.btn_support_ocr_import.clicked.connect(
+            lambda _checked=False: self._on_role_ocr_import_clicked("support")
+        )
+        self.support.set_wheel_overlay_widget(
+            self.btn_support_ocr_import,
+            margin_top=8,
+            margin_right=8,
+        )
+        self._register_role_ocr_button("support", self.btn_support_ocr_import)
         for panel in (self.tank.names_panel, self.dps.names_panel, self.support.names_panel):
             panel.set_delete_confirm_handler(
                 lambda count, _panel=panel: self._request_delete_names_confirm(_panel, count)
@@ -990,9 +1012,11 @@ class MainWindow(QtWidgets.QMainWindow):
     def _ocr_role_button_meta(self, role_key: str) -> tuple[str, str, int]:
         key = str(role_key or "").strip().casefold()
         meta = {
-            "dps": ("ocr.dps_button", "ocr.dps_button_tooltip", 24),
+            "tank": ("ocr.tank_button", "ocr.tank_button_tooltip", 44),
+            "dps": ("ocr.dps_button", "ocr.dps_button_tooltip", 44),
+            "support": ("ocr.support_button", "ocr.support_button_tooltip", 44),
         }
-        return meta.get(key, ("ocr.dps_button", "ocr.dps_button_tooltip", 24))
+        return meta.get(key, ("ocr.dps_button", "ocr.dps_button_tooltip", 44))
 
     def _refresh_role_ocr_button_text(self, role_key: str) -> None:
         key = str(role_key or "").strip().casefold()
@@ -1070,11 +1094,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self._update_spin_all_enabled()
         return added
 
-    def _show_ocr_import_result(self, *, added: int, total: int) -> None:
+    def _show_ocr_import_result(self, *, role_key: str, added: int, total: int) -> None:
+        role_text_key, _, _ = self._ocr_role_button_meta(role_key)
+        role_label = i18n.t(role_text_key).replace("📸", "").replace("OCR", "").strip() or role_key.upper()
         if added > 0:
-            message = i18n.t("ocr.result_added", added=added, total=total)
+            message = i18n.t("ocr.result_added_role", role=role_label, added=added, total=total)
         else:
-            message = i18n.t("ocr.result_duplicates_only", total=total)
+            message = i18n.t("ocr.result_duplicates_only_role", role=role_label, total=total)
         QtWidgets.QMessageBox.information(
             self,
             i18n.t("ocr.result_title"),
@@ -1095,7 +1121,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return
         added = self._add_ocr_names_to_role(pending.role_key, names_to_add)
-        self._show_ocr_import_result(added=added, total=len(names_to_add))
+        self._show_ocr_import_result(role_key=pending.role_key, added=added, total=len(names_to_add))
 
     def _on_overlay_ocr_import_cancelled(self):
         self._pending_ocr_import = None
@@ -2525,10 +2551,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
             new_names = self._collect_new_ocr_names_for_role(role, names)
             if not new_names:
+                role_text_key, _, _ = self._ocr_role_button_meta(role)
+                role_label = i18n.t(role_text_key).replace("📸", "").replace("OCR", "").strip() or role.upper()
                 QtWidgets.QMessageBox.information(
                     self,
                     i18n.t("ocr.result_title"),
-                    i18n.t("ocr.result_duplicates_only", total=len(names)),
+                    i18n.t("ocr.result_duplicates_only_role", role=role_label, total=len(names)),
                 )
                 return
             if self._request_ocr_import_selection(role, new_names):
@@ -2536,7 +2564,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
             # Fallback if overlay is not available.
             added = self._add_ocr_names_to_role(role, new_names)
-            self._show_ocr_import_result(added=added, total=len(new_names))
+            self._show_ocr_import_result(role_key=role, added=added, total=len(new_names))
         except Exception as exc:
             QtWidgets.QMessageBox.warning(
                 self,
