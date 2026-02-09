@@ -210,6 +210,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._tooltip_manager = TooltipManager(self)
         self._focus_policy = FocusPolicyManager(self)
         self._pending_delete_names_panel = None
+        self._pending_ocr_import_candidates: list[str] = []
         central, root = self._build_root()
         self._build_header(root, saved)
         self._build_mode_switcher(root)
@@ -560,6 +561,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.overlay.disableResultsRequested.connect(self._on_overlay_disable_results)
         self.overlay.deleteNamesConfirmed.connect(self._on_overlay_delete_names_confirmed)
         self.overlay.deleteNamesCancelled.connect(self._on_overlay_delete_names_cancelled)
+        self.overlay.ocrImportConfirmed.connect(self._on_overlay_ocr_import_confirmed)
+        self.overlay.ocrImportCancelled.connect(self._on_overlay_ocr_import_cancelled)
 
         self.online_mode = False  # Standard
         self.overlay.modeChosen.connect(self._on_mode_chosen)
@@ -957,6 +960,111 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_overlay_delete_names_cancelled(self):
         self._pending_delete_names_panel = None
+
+    def _normalize_name_key(self, value: str) -> str:
+        return str(value or "").strip().casefold()
+
+    def _name_key_set(self, values) -> set[str]:
+        keys: set[str] = set()
+        for value in values or []:
+            key = self._normalize_name_key(value)
+            if key:
+                keys.add(key)
+        return keys
+
+    def _collect_new_ocr_names(self, names: list[str]) -> list[str]:
+        existing_names = []
+        if hasattr(self, "dps") and hasattr(self.dps, "get_current_names"):
+            try:
+                existing_names = self.dps.get_current_names()
+            except Exception:
+                existing_names = []
+        existing_keys = self._name_key_set(existing_names)
+        new_names: list[str] = []
+        seen_keys: set[str] = set()
+        for raw in names:
+            name = str(raw or "").strip()
+            if not name:
+                continue
+            key = self._normalize_name_key(name)
+            if not key or key in existing_keys or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            new_names.append(name)
+        return new_names
+
+    def _request_ocr_import_selection(self, names: list[str]) -> bool:
+        overlay = getattr(self, "overlay", None)
+        if overlay is None:
+            return False
+        display_names = [str(name).strip() for name in names if str(name).strip()]
+        if not display_names:
+            return False
+        self._pending_ocr_import_candidates = list(display_names)
+        try:
+            overlay.show_ocr_name_picker(display_names)
+        except Exception:
+            self._pending_ocr_import_candidates = []
+            return False
+        return True
+
+    def _resolve_selected_ocr_candidates(
+        self,
+        pending_names: list[str],
+        selected_names,
+    ) -> list[str]:
+        selected_keys = self._name_key_set(selected_names)
+        if not selected_keys:
+            return []
+        names_to_add: list[str] = []
+        seen_keys: set[str] = set()
+        for name in pending_names:
+            key = self._normalize_name_key(name)
+            if not key or key not in selected_keys or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            names_to_add.append(name)
+        return names_to_add
+
+    def _add_ocr_names_to_dps(self, names: list[str]) -> int:
+        added = 0
+        for name in names:
+            if self.dps.add_name(name, active=True):
+                added += 1
+        if added > 0:
+            self.state_sync.save_state()
+            self._update_spin_all_enabled()
+        return added
+
+    def _show_ocr_import_result(self, *, added: int, total: int) -> None:
+        if added > 0:
+            message = i18n.t("ocr.result_added", added=added, total=total)
+        else:
+            message = i18n.t("ocr.result_duplicates_only", total=total)
+        QtWidgets.QMessageBox.information(
+            self,
+            i18n.t("ocr.result_title"),
+            message,
+        )
+
+    def _on_overlay_ocr_import_confirmed(self, selected_names):
+        pending = list(getattr(self, "_pending_ocr_import_candidates", []) or [])
+        self._pending_ocr_import_candidates = []
+        if not pending:
+            return
+        names_to_add = self._resolve_selected_ocr_candidates(pending, selected_names)
+        if not names_to_add:
+            QtWidgets.QMessageBox.information(
+                self,
+                i18n.t("ocr.result_title"),
+                i18n.t("ocr.result_none_selected"),
+            )
+            return
+        added = self._add_ocr_names_to_dps(names_to_add)
+        self._show_ocr_import_result(added=added, total=len(names_to_add))
+
+    def _on_overlay_ocr_import_cancelled(self):
+        self._pending_ocr_import_candidates = []
 
     def eventFilter(self, obj, event):
         etype = event.type()
@@ -2400,25 +2508,20 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
                 return
 
-            added = 0
-            for name in names:
-                if self.dps.add_name(name, active=True):
-                    added += 1
-
-            if added > 0:
-                self.state_sync.save_state()
-                self._update_spin_all_enabled()
-                QtWidgets.QMessageBox.information(
-                    self,
-                    i18n.t("ocr.result_title"),
-                    i18n.t("ocr.result_added", added=added, total=len(names)),
-                )
-            else:
+            new_names = self._collect_new_ocr_names(names)
+            if not new_names:
                 QtWidgets.QMessageBox.information(
                     self,
                     i18n.t("ocr.result_title"),
                     i18n.t("ocr.result_duplicates_only", total=len(names)),
                 )
+                return
+            if self._request_ocr_import_selection(new_names):
+                return
+
+            # Fallback if overlay is not available.
+            added = self._add_ocr_names_to_dps(new_names)
+            self._show_ocr_import_result(added=added, total=len(new_names))
         except Exception as exc:
             QtWidgets.QMessageBox.warning(
                 self,

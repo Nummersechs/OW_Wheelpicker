@@ -43,6 +43,11 @@ TRANSLATIONS_DE = {
     "ocr.result_raw_preview": "OCR-Rohtext (Vorschau):\n{preview}",
     "ocr.result_added": "{added} DPS-Name(n) aus {total} erkannten Kandidaten hinzugefügt.",
     "ocr.result_duplicates_only": "{total} Kandidat(en) erkannt, aber alle waren bereits in DPS vorhanden.",
+    "ocr.result_none_selected": "Keine Namen ausgewählt.",
+    "ocr.pick_title": "OCR-Namen auswählen",
+    "ocr.pick_hint": "Neue OCR-Namen ({count}). Haken entfernen, wenn ein Name nicht übernommen werden soll.",
+    "ocr.pick_cancel": "Abbrechen",
+    "ocr.pick_confirm": "Ausgewählte übernehmen",
     # Wheel / Names
     "wheel.spin_role": "🔁 Diese Rolle drehen",
     "wheel.spin_map": "🔁 Karte drehen",

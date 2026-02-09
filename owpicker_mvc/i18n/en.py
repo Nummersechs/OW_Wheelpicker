@@ -43,6 +43,11 @@ TRANSLATIONS_EN = {
     "ocr.result_raw_preview": "OCR raw text (preview):\n{preview}",
     "ocr.result_added": "Added {added} DPS name(s) from {total} recognized candidate(s).",
     "ocr.result_duplicates_only": "Recognized {total} candidate(s), but all already exist in DPS.",
+    "ocr.result_none_selected": "No names selected.",
+    "ocr.pick_title": "Select OCR names",
+    "ocr.pick_hint": "New OCR names ({count}). Uncheck names you do not want to import.",
+    "ocr.pick_cancel": "Cancel",
+    "ocr.pick_confirm": "Import selected",
     # Wheel / Names
     "wheel.spin_role": "🔁 Spin this role",
     "wheel.spin_map": "🔁 Spin map",

@@ -457,20 +457,23 @@ class NamesListPanel(QtWidgets.QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        top_row = QtWidgets.QHBoxLayout()
+        self._top_row_widget = QtWidgets.QWidget(self)
+        top_row = QtWidgets.QHBoxLayout(self._top_row_widget)
         top_row.setContentsMargins(0, 0, 0, 0)
         top_row.addStretch(1)
         top_row.addWidget(self.btn_delete_marked, 0, QtCore.Qt.AlignRight)
-        layout.addLayout(top_row)
+        layout.addWidget(self._top_row_widget)
 
         layout.addWidget(self.names)
 
-        action_row = QtWidgets.QHBoxLayout()
+        self._action_row_widget = QtWidgets.QWidget(self)
+        action_row = QtWidgets.QHBoxLayout(self._action_row_widget)
+        action_row.setContentsMargins(0, 0, 0, 0)
         action_row.setSpacing(8)
         action_row.addWidget(self.btn_toggle_all_names, 0, QtCore.Qt.AlignLeft)
         action_row.addStretch(1)
         action_row.addWidget(self.btn_sort_names, 0, QtCore.Qt.AlignRight)
-        layout.addLayout(action_row)
+        layout.addWidget(self._action_row_widget)
 
         self.names.itemChanged.connect(self._update_toggle_all_button_label)
         self.names.model().rowsInserted.connect(self._update_toggle_all_button_label)
@@ -545,6 +548,13 @@ class NamesListPanel(QtWidgets.QWidget):
         self.btn_sort_names.setEnabled(bool(enabled))
         self._update_toggle_all_button_label()
         self._update_delete_marked_button_state()
+
+    def set_aux_controls_visible(self, visible: bool) -> None:
+        show = bool(visible)
+        if hasattr(self, "_top_row_widget"):
+            self._top_row_widget.setVisible(show)
+        if hasattr(self, "_action_row_widget"):
+            self._action_row_widget.setVisible(show)
 
     def _item_text(self, item: QtWidgets.QListWidgetItem) -> str:
         widget = self.names.itemWidget(item)

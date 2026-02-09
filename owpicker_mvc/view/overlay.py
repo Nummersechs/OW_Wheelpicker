@@ -3,6 +3,7 @@ from html import escape
 import i18n
 from utils import flag_icons, theme as theme_util
 from . import style_helpers
+from .name_list import NamesListPanel
 
 class ResultOverlay(QtWidgets.QWidget):
     closed = QtCore.Signal()
@@ -11,6 +12,8 @@ class ResultOverlay(QtWidgets.QWidget):
     disableResultsRequested = QtCore.Signal()
     deleteNamesConfirmed = QtCore.Signal()
     deleteNamesCancelled = QtCore.Signal()
+    ocrImportConfirmed = QtCore.Signal(object)
+    ocrImportCancelled = QtCore.Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -53,6 +56,13 @@ class ResultOverlay(QtWidgets.QWidget):
             lab.setWordWrap(True)
             v.addWidget(lab)
 
+        self.ocr_names_panel = NamesListPanel(subrole_labels=None)
+        self.ocr_names_panel.set_auto_focus_enabled(False)
+        self.ocr_names_panel.set_aux_controls_visible(False)
+        self.ocr_names_panel.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        self.ocr_names_panel.hide()
+        v.addWidget(self.ocr_names_panel, 1)
+
         self.btn_close = QtWidgets.QPushButton(i18n.t("overlay.button_ok"))
         self.btn_close.setFixedHeight(40)
         self.btn_close.clicked.connect(self._close)
@@ -70,6 +80,10 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_delete_cancel.setFixedHeight(40)
         self.btn_delete_confirm = QtWidgets.QPushButton(i18n.t("names.delete_confirm_delete"))
         self.btn_delete_confirm.setFixedHeight(40)
+        self.btn_ocr_cancel = QtWidgets.QPushButton(i18n.t("ocr.pick_cancel"))
+        self.btn_ocr_cancel.setFixedHeight(40)
+        self.btn_ocr_confirm = QtWidgets.QPushButton(i18n.t("ocr.pick_confirm"))
+        self.btn_ocr_confirm.setFixedHeight(40)
         self._apply_button_labels()
         self._set_min_widths()
 
@@ -77,6 +91,8 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_offline.clicked.connect(self._choose_offline)
         self.btn_delete_cancel.clicked.connect(self._cancel_delete_names)
         self.btn_delete_confirm.clicked.connect(self._confirm_delete_names)
+        self.btn_ocr_cancel.clicked.connect(self._cancel_ocr_import)
+        self.btn_ocr_confirm.clicked.connect(self._confirm_ocr_import)
 
         # Buttons in einer Zeile anordnen
         btn_row = QtWidgets.QHBoxLayout()
@@ -85,6 +101,8 @@ class ResultOverlay(QtWidgets.QWidget):
         btn_row.addWidget(self.btn_online)
         btn_row.addWidget(self.btn_delete_cancel)
         btn_row.addWidget(self.btn_delete_confirm)
+        btn_row.addWidget(self.btn_ocr_cancel)
+        btn_row.addWidget(self.btn_ocr_confirm)
         btn_row.addWidget(self.btn_disable)
         btn_row.addWidget(self.btn_close)
         btn_row.addStretch(1)
@@ -104,8 +122,14 @@ class ResultOverlay(QtWidgets.QWidget):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        w = max(520, int(self.width() * 0.45))
-        h = max(280, int(self.height() * 0.30))
+        view = getattr(self, "_last_view", {}) or {}
+        view_type = view.get("type")
+        if view_type == "ocr_name_picker":
+            w = max(560, int(self.width() * 0.50))
+            h = max(460, int(self.height() * 0.70))
+        else:
+            w = max(520, int(self.width() * 0.45))
+            h = max(280, int(self.height() * 0.30))
         self.card.setGeometry((self.width() - w) // 2, (self.height() - h) // 2, w, h)
 
     def _show(self):
@@ -115,34 +139,54 @@ class ResultOverlay(QtWidgets.QWidget):
         self.raise_()
         # Keine Fokus-Erzwingung, damit kein unerwarteter Refokus entsteht.
 
+    def _set_info_labels_visible(self, *, tank: bool, dps: bool, sup: bool) -> None:
+        self.lab_tank.setVisible(bool(tank))
+        self.lab_dps.setVisible(bool(dps))
+        self.lab_sup.setVisible(bool(sup))
+
+    def _set_action_buttons_visible(
+        self,
+        *,
+        close: bool = False,
+        disable: bool = False,
+        online: bool = False,
+        offline: bool = False,
+        delete_cancel: bool = False,
+        delete_confirm: bool = False,
+        ocr_cancel: bool = False,
+        ocr_confirm: bool = False,
+    ) -> None:
+        self.btn_close.setVisible(bool(close))
+        self.btn_disable.setVisible(bool(disable))
+        self.btn_online.setVisible(bool(online))
+        self.btn_offline.setVisible(bool(offline))
+        self.btn_delete_cancel.setVisible(bool(delete_cancel))
+        self.btn_delete_confirm.setVisible(bool(delete_confirm))
+        self.btn_ocr_cancel.setVisible(bool(ocr_cancel))
+        self.btn_ocr_confirm.setVisible(bool(ocr_confirm))
+
     def show_result(self, tank, dps, sup):
         self._apply_button_labels()
         self.title.setText(i18n.t("overlay.title_result"))
+        self._set_info_labels_visible(tank=True, dps=True, sup=True)
         self.lab_tank.setText(f"Tank: <b>{escape(tank)}</b>")
         self.lab_dps.setText(f"Damage: <b>{escape(dps)}</b>")
         self.lab_sup.setText(f"Support: <b>{escape(sup)}</b>")
-        self.btn_close.show()
-        self.btn_disable.show()
-        self.btn_online.hide()
-        self.btn_offline.hide()
-        self.btn_delete_cancel.hide()
-        self.btn_delete_confirm.hide()
+        self.ocr_names_panel.setVisible(False)
+        self._set_action_buttons_visible(close=True, disable=True)
         self._last_view = {"type": "result", "data": (tank, dps, sup)}
         self._show()
 
     def show_message(self, title, lines):
         self._apply_button_labels()
         self.title.setText(escape(title))
+        self._set_info_labels_visible(tank=True, dps=True, sup=True)
         texts = list(lines) + ["", "", ""]
         self.lab_tank.setText(escape(texts[0]))
         self.lab_dps.setText(escape(texts[1]))
         self.lab_sup.setText(escape(texts[2]))
-        self.btn_close.show()
-        self.btn_disable.hide()
-        self.btn_online.hide()
-        self.btn_offline.hide()
-        self.btn_delete_cancel.hide()
-        self.btn_delete_confirm.hide()
+        self.ocr_names_panel.setVisible(False)
+        self._set_action_buttons_visible(close=True)
         self._last_view = {"type": "message", "data": (title, list(lines))}
         self._show()
 
@@ -150,19 +194,14 @@ class ResultOverlay(QtWidgets.QWidget):
         """Overlay zur Wahl von Online/Offline anzeigen."""
         self._apply_button_labels()
         self.title.setText(i18n.t("overlay.mode_title"))
+        self._set_info_labels_visible(tank=True, dps=True, sup=True)
 
         # Deine drei Zeilen im bekannten Stil
         self.lab_tank.setText(i18n.t("overlay.mode_line1"))
         self.lab_dps.setText(i18n.t("overlay.mode_line2"))
         self.lab_sup.setText(i18n.t("overlay.mode_line3"))
-
-        # Online/Offline-Buttons anzeigen, OK ausblenden
-        self.btn_close.hide()
-        self.btn_disable.hide()
-        self.btn_online.show()
-        self.btn_offline.show()
-        self.btn_delete_cancel.hide()
-        self.btn_delete_confirm.hide()
+        self.ocr_names_panel.setVisible(False)
+        self._set_action_buttons_visible(online=True, offline=True)
 
         self._last_view = {"type": "online_choice"}
         self._show()
@@ -171,16 +210,45 @@ class ResultOverlay(QtWidgets.QWidget):
         self._apply_button_labels()
         count_value = max(0, int(count))
         self.title.setText(i18n.t("names.delete_confirm_title"))
+        self._set_info_labels_visible(tank=True, dps=False, sup=False)
         self.lab_tank.setText(i18n.t("names.delete_confirm_message", count=count_value))
         self.lab_dps.setText("")
         self.lab_sup.setText("")
-        self.btn_close.hide()
-        self.btn_disable.hide()
-        self.btn_online.hide()
-        self.btn_offline.hide()
-        self.btn_delete_cancel.show()
-        self.btn_delete_confirm.show()
+        self.ocr_names_panel.setVisible(False)
+        self._set_action_buttons_visible(delete_cancel=True, delete_confirm=True)
         self._last_view = {"type": "delete_names_confirm", "data": count_value}
+        self._show()
+
+    def show_ocr_name_picker(self, names: list[str]):
+        self._apply_button_labels()
+        display_names = [str(name).strip() for name in names if str(name).strip()]
+        self.title.setText(i18n.t("ocr.pick_title"))
+        self._set_info_labels_visible(tank=True, dps=False, sup=False)
+        self.lab_tank.setText(i18n.t("ocr.pick_hint", count=len(display_names)))
+        self.lab_dps.setText("")
+        self.lab_sup.setText("")
+        names_list = self.ocr_names_panel.names
+        blockers = [QtCore.QSignalBlocker(names_list), QtCore.QSignalBlocker(names_list.model())]
+        try:
+            names_list.clear()
+            names_list.setContextMenuPolicy(QtCore.Qt.NoContextMenu)
+            for name in display_names:
+                names_list.add_name(name, active=True)
+            for i in range(names_list.count()):
+                item = names_list.item(i)
+                if item is None:
+                    continue
+                widget = names_list.itemWidget(item)
+                edit = getattr(widget, "edit", None)
+                if isinstance(edit, QtWidgets.QLineEdit):
+                    edit.setReadOnly(True)
+                    edit.setFocusPolicy(QtCore.Qt.NoFocus)
+        finally:
+            del blockers
+        self.ocr_names_panel.refresh_action_state()
+        self.ocr_names_panel.setVisible(True)
+        self._set_action_buttons_visible(ocr_cancel=True, ocr_confirm=True)
+        self._last_view = {"type": "ocr_name_picker", "data": display_names}
         self._show()
 
     def set_choice_enabled(self, enabled: bool):
@@ -204,6 +272,27 @@ class ResultOverlay(QtWidgets.QWidget):
         self.hide()
         self.deleteNamesConfirmed.emit()
 
+    def _cancel_ocr_import(self):
+        self.hide()
+        self.ocrImportCancelled.emit()
+
+    def _confirm_ocr_import(self):
+        selected: list[str] = []
+        names_list = self.ocr_names_panel.names
+        for i in range(names_list.count()):
+            item = names_list.item(i)
+            if item is None or item.checkState() != QtCore.Qt.Checked:
+                continue
+            widget = names_list.itemWidget(item)
+            edit = getattr(widget, "edit", None)
+            if isinstance(edit, QtWidgets.QLineEdit):
+                text = edit.text().strip()
+            else:
+                text = item.text().strip()
+            if text:
+                selected.append(text)
+        self.hide()
+        self.ocrImportConfirmed.emit(selected)
 
     def _close(self):
         self.hide()
@@ -237,6 +326,10 @@ class ResultOverlay(QtWidgets.QWidget):
             except Exception:
                 count_value = 0
             self.show_delete_names_confirm(count_value)
+        elif kind == "ocr_name_picker":
+            count_value = self.ocr_names_panel.names.count()
+            self.title.setText(i18n.t("ocr.pick_title"))
+            self.lab_tank.setText(i18n.t("ocr.pick_hint", count=count_value))
 
     def apply_theme(self, theme: theme_util.Theme, tool_style: str | None = None) -> None:
         """Update overlay colors to match the active theme."""
@@ -252,8 +345,11 @@ class ResultOverlay(QtWidgets.QWidget):
             lab.setStyleSheet(f"font-size:17px; margin:4px 0; color:{theme.text};")
         if tool_style:
             self.btn_language.setStyleSheet(tool_style)
+        self.ocr_names_panel.apply_theme(theme)
         style_helpers.style_primary_button(self.btn_delete_cancel, theme)
         style_helpers.style_danger_button(self.btn_delete_confirm, theme)
+        style_helpers.style_primary_button(self.btn_ocr_cancel, theme)
+        style_helpers.style_success_button(self.btn_ocr_confirm, theme)
 
     def _apply_button_labels(self):
         self.btn_close.setText(i18n.t("overlay.button_ok"))
@@ -262,6 +358,8 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_offline.setText(i18n.t("overlay.button_offline"))
         self.btn_delete_cancel.setText(i18n.t("names.delete_confirm_cancel"))
         self.btn_delete_confirm.setText(i18n.t("names.delete_confirm_delete"))
+        self.btn_ocr_cancel.setText(i18n.t("ocr.pick_cancel"))
+        self.btn_ocr_confirm.setText(i18n.t("ocr.pick_confirm"))
 
     def _set_min_widths(self):
         """Fix widths so language switch doesn't move layout."""
@@ -295,6 +393,11 @@ class ResultOverlay(QtWidgets.QWidget):
         for btn in (self.btn_delete_cancel, self.btn_delete_confirm):
             btn.setMinimumWidth(delete_width)
             btn.setMaximumWidth(delete_width)
+
+        ocr_width = max_width(("ocr.pick_cancel", "ocr.pick_confirm"))
+        for btn in (self.btn_ocr_cancel, self.btn_ocr_confirm):
+            btn.setMinimumWidth(ocr_width)
+            btn.setMaximumWidth(ocr_width)
 
     def _apply_flag(self):
         """Aktualisiert Text/Tooltip des Sprache-Buttons."""
