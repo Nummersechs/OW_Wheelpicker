@@ -30,23 +30,31 @@ class ResultOverlay(QtWidgets.QWidget):
         v.setContentsMargins(26, 22, 26, 22)
         v.setSpacing(10)
 
-        # Top-Bar mit Sprache-Button rechts
+        self.title = QtWidgets.QLabel(i18n.t("overlay.title_result"))
+        self.title.setAlignment(QtCore.Qt.AlignCenter)
+
+        # Top-Bar mit zentrierter Überschrift und Sprache-Button rechts
         top_row = QtWidgets.QHBoxLayout()
         top_row.setContentsMargins(0, 0, 0, 0)
         top_row.setSpacing(6)
-        top_row.addStretch(1)
+
         self.btn_language = QtWidgets.QToolButton()
         self.btn_language.setAutoRaise(True)
         self.btn_language.setCursor(QtCore.Qt.PointingHandCursor)
         self.btn_language.setFixedSize(40, 32)
         self.btn_language.setIconSize(QtCore.QSize(28, 20))
         self.btn_language.clicked.connect(self.languageToggleRequested.emit)
-        top_row.addWidget(self.btn_language, 0, QtCore.Qt.AlignRight)
-        v.addLayout(top_row)
 
-        self.title = QtWidgets.QLabel(i18n.t("overlay.title_result"))
-        self.title.setAlignment(QtCore.Qt.AlignCenter)
-        v.addWidget(self.title)
+        self._title_balance = QtWidgets.QWidget(self.card)
+        self._title_balance.setFixedSize(self.btn_language.size())
+        self._title_balance.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+
+        top_row.addWidget(self._title_balance, 0, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        top_row.addStretch(1)
+        top_row.addWidget(self.title, 0, QtCore.Qt.AlignVCenter)
+        top_row.addStretch(1)
+        top_row.addWidget(self.btn_language, 0, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        v.addLayout(top_row)
 
         self.lab_tank = QtWidgets.QLabel("")
         self.lab_dps = QtWidgets.QLabel("")
@@ -340,7 +348,7 @@ class ResultOverlay(QtWidgets.QWidget):
             f"border: 1px solid {theme.card_border}; "
             "}"
         )
-        self.title.setStyleSheet(f"font-size:22px; font-weight:800; margin-bottom:8px; color:{theme.text};")
+        self.title.setStyleSheet(f"font-size:22px; font-weight:800; margin:0; color:{theme.text};")
         for lab in (self.lab_tank, self.lab_dps, self.lab_sup):
             lab.setStyleSheet(f"font-size:17px; margin:4px 0; color:{theme.text};")
         if tool_style:
