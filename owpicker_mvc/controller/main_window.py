@@ -11,6 +11,12 @@ import config
 import i18n
 from . import mode_manager, spin_service
 from . import ocr_import
+from .ocr_role_import import (
+    PendingOCRImport,
+    add_names as add_ocr_names,
+    collect_new_names as collect_new_ocr_names,
+    resolve_selected_candidates as resolve_selected_ocr_candidates,
+)
 from services import state_store
 from services.sound import SoundManager
 from utils import flag_icons, theme as theme_util, ui_helpers
@@ -210,7 +216,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._tooltip_manager = TooltipManager(self)
         self._focus_policy = FocusPolicyManager(self)
         self._pending_delete_names_panel = None
-        self._pending_ocr_import_candidates: list[str] = []
+        self._pending_ocr_import: PendingOCRImport | None = None
+        self._role_ocr_buttons: dict[str, QtWidgets.QPushButton] = {}
         central, root = self._build_root()
         self._build_header(root, saved)
         self._build_mode_switcher(root)
@@ -387,18 +394,15 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.btn_dps_ocr_import = QtWidgets.QPushButton(i18n.t("ocr.dps_button"))
         self.btn_dps_ocr_import.setFixedHeight(30)
-        self.btn_dps_ocr_import.setToolTip(i18n.t("ocr.dps_button_tooltip"))
-        ui_helpers.set_fixed_width_from_translations(
-            [self.btn_dps_ocr_import],
-            ["ocr.dps_button"],
-            padding=24,
+        self.btn_dps_ocr_import.clicked.connect(
+            lambda _checked=False: self._on_role_ocr_import_clicked("dps")
         )
-        self.btn_dps_ocr_import.clicked.connect(self._on_dps_ocr_import_clicked)
         self.dps.set_wheel_overlay_widget(
             self.btn_dps_ocr_import,
             margin_top=8,
             margin_right=8,
         )
+        self._register_role_ocr_button("dps", self.btn_dps_ocr_import)
         self.support = WheelView(
             "Support",
             support_state.get("entries", []),
@@ -421,7 +425,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.player_list_panel = PlayerListPanelController(self, self.btn_all_players)
         self.btn_all_players.clicked.connect(self.player_list_panel.toggle_panel)
         grid.addWidget(self.btn_all_players, 1, 0, QtCore.Qt.AlignLeft)
-        self._update_dps_ocr_button_enabled()
+        self._update_role_ocr_buttons_enabled()
         # Basisbreiten nach dem ersten Layout ermitteln
         QtCore.QTimer.singleShot(0, self._capture_role_base_widths)
         return role_container
@@ -965,76 +969,102 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_overlay_delete_names_cancelled(self):
         self._pending_delete_names_panel = None
 
-    def _normalize_name_key(self, value: str) -> str:
-        return str(value or "").strip().casefold()
+    def _target_wheel_for_ocr_role(self, role_key: str):
+        attr_map = {
+            "tank": "tank",
+            "dps": "dps",
+            "support": "support",
+        }
+        attr = attr_map.get(str(role_key or "").strip().casefold())
+        if not attr:
+            return None
+        return getattr(self, attr, None)
 
-    def _name_key_set(self, values) -> set[str]:
-        keys: set[str] = set()
-        for value in values or []:
-            key = self._normalize_name_key(value)
-            if key:
-                keys.add(key)
-        return keys
+    def _register_role_ocr_button(self, role_key: str, button: QtWidgets.QPushButton) -> None:
+        key = str(role_key or "").strip().casefold()
+        if not key or button is None:
+            return
+        self._role_ocr_buttons[key] = button
+        self._refresh_role_ocr_button_text(key)
 
-    def _collect_new_ocr_names(self, names: list[str]) -> list[str]:
+    def _ocr_role_button_meta(self, role_key: str) -> tuple[str, str, int]:
+        key = str(role_key or "").strip().casefold()
+        meta = {
+            "dps": ("ocr.dps_button", "ocr.dps_button_tooltip", 24),
+        }
+        return meta.get(key, ("ocr.dps_button", "ocr.dps_button_tooltip", 24))
+
+    def _refresh_role_ocr_button_text(self, role_key: str) -> None:
+        key = str(role_key or "").strip().casefold()
+        btn = self._role_ocr_buttons.get(key)
+        if btn is None:
+            return
+        text_key, tooltip_key, padding = self._ocr_role_button_meta(key)
+        btn.setText(i18n.t(text_key))
+        btn.setToolTip(i18n.t(tooltip_key))
+        ui_helpers.set_fixed_width_from_translations([btn], [text_key], padding=max(0, int(padding)))
+
+    def _refresh_all_role_ocr_button_texts(self) -> None:
+        for role_key in tuple(self._role_ocr_buttons.keys()):
+            self._refresh_role_ocr_button_text(role_key)
+
+    def _role_ocr_import_available(self, role_key: str) -> bool:
+        if getattr(self, "_closing", False):
+            return False
+        if getattr(self, "pending", 0) > 0:
+            return False
+        if getattr(self, "current_mode", "") == "maps":
+            return False
+        if getattr(self, "hero_ban_active", False):
+            return False
+        return self._target_wheel_for_ocr_role(role_key) is not None
+
+    def _update_role_ocr_button_enabled(self, role_key: str) -> None:
+        btn = self._role_ocr_buttons.get(str(role_key or "").strip().casefold())
+        if btn is None:
+            return
+        enabled = self._role_ocr_import_available(role_key)
+        if self._overlay_choice_active():
+            enabled = False
+        btn.setEnabled(enabled)
+
+    def _update_role_ocr_buttons_enabled(self) -> None:
+        for role_key in tuple(self._role_ocr_buttons.keys()):
+            self._update_role_ocr_button_enabled(role_key)
+
+    def _collect_new_ocr_names_for_role(self, role_key: str, names: list[str]) -> list[str]:
+        wheel = self._target_wheel_for_ocr_role(role_key)
         existing_names = []
-        if hasattr(self, "dps") and hasattr(self.dps, "get_current_names"):
+        if wheel is not None and hasattr(wheel, "get_current_names"):
             try:
-                existing_names = self.dps.get_current_names()
+                existing_names = wheel.get_current_names()
             except Exception:
                 existing_names = []
-        existing_keys = self._name_key_set(existing_names)
-        new_names: list[str] = []
-        seen_keys: set[str] = set()
-        for raw in names:
-            name = str(raw or "").strip()
-            if not name:
-                continue
-            key = self._normalize_name_key(name)
-            if not key or key in existing_keys or key in seen_keys:
-                continue
-            seen_keys.add(key)
-            new_names.append(name)
-        return new_names
+        return collect_new_ocr_names(existing_names, names)
 
-    def _request_ocr_import_selection(self, names: list[str]) -> bool:
+    def _request_ocr_import_selection(self, role_key: str, names: list[str]) -> bool:
         overlay = getattr(self, "overlay", None)
         if overlay is None:
             return False
         display_names = [str(name).strip() for name in names if str(name).strip()]
         if not display_names:
             return False
-        self._pending_ocr_import_candidates = list(display_names)
+        self._pending_ocr_import = PendingOCRImport(
+            role_key=str(role_key or "").strip().casefold(),
+            candidates=list(display_names),
+        )
         try:
             overlay.show_ocr_name_picker(display_names)
         except Exception:
-            self._pending_ocr_import_candidates = []
+            self._pending_ocr_import = None
             return False
         return True
 
-    def _resolve_selected_ocr_candidates(
-        self,
-        pending_names: list[str],
-        selected_names,
-    ) -> list[str]:
-        selected_keys = self._name_key_set(selected_names)
-        if not selected_keys:
-            return []
-        names_to_add: list[str] = []
-        seen_keys: set[str] = set()
-        for name in pending_names:
-            key = self._normalize_name_key(name)
-            if not key or key not in selected_keys or key in seen_keys:
-                continue
-            seen_keys.add(key)
-            names_to_add.append(name)
-        return names_to_add
-
-    def _add_ocr_names_to_dps(self, names: list[str]) -> int:
-        added = 0
-        for name in names:
-            if self.dps.add_name(name, active=True):
-                added += 1
+    def _add_ocr_names_to_role(self, role_key: str, names: list[str]) -> int:
+        wheel = self._target_wheel_for_ocr_role(role_key)
+        if wheel is None or not hasattr(wheel, "add_name"):
+            return 0
+        added = add_ocr_names(lambda name: wheel.add_name(name, active=True), names)
         if added > 0:
             self.state_sync.save_state()
             self._update_spin_all_enabled()
@@ -1052,11 +1082,11 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def _on_overlay_ocr_import_confirmed(self, selected_names):
-        pending = list(getattr(self, "_pending_ocr_import_candidates", []) or [])
-        self._pending_ocr_import_candidates = []
-        if not pending:
+        pending = getattr(self, "_pending_ocr_import", None)
+        self._pending_ocr_import = None
+        if pending is None:
             return
-        names_to_add = self._resolve_selected_ocr_candidates(pending, selected_names)
+        names_to_add = resolve_selected_ocr_candidates(pending.candidates, selected_names)
         if not names_to_add:
             QtWidgets.QMessageBox.information(
                 self,
@@ -1064,11 +1094,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 i18n.t("ocr.result_none_selected"),
             )
             return
-        added = self._add_ocr_names_to_dps(names_to_add)
+        added = self._add_ocr_names_to_role(pending.role_key, names_to_add)
         self._show_ocr_import_result(added=added, total=len(names_to_add))
 
     def _on_overlay_ocr_import_cancelled(self):
-        self._pending_ocr_import_candidates = []
+        self._pending_ocr_import = None
 
     def eventFilter(self, obj, event):
         etype = event.type()
@@ -1979,8 +2009,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.spin_mode_toggle.apply_theme(theme)
         if hasattr(self, "btn_all_players"):
             style_helpers.style_primary_button(self.btn_all_players, theme)
-        if hasattr(self, "btn_dps_ocr_import"):
-            style_helpers.style_primary_button(self.btn_dps_ocr_import, theme)
+        for btn in self._role_ocr_buttons.values():
+            style_helpers.style_primary_button(btn, theme)
         if hasattr(self, "btn_cancel_spin"):
             style_helpers.style_danger_button(self.btn_cancel_spin, theme)
         if hasattr(self, "player_list_panel"):
@@ -2085,7 +2115,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.player_list_panel.update_button()
         self.open_queue.apply_preview(open_names)
         self._update_cancel_enabled()
-        self._update_dps_ocr_button_enabled()
+        self._update_role_ocr_buttons_enabled()
 
     def _update_spin_mode_ui(self):
         if not hasattr(self, "spin_mode_toggle"):
@@ -2225,7 +2255,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._update_cancel_enabled()
         if self.hero_ban_active and en:
             self._set_hero_ban_visuals(True)
-        self._update_dps_ocr_button_enabled()
+        self._update_role_ocr_buttons_enabled()
         # Kein automatischer Hover-Refresh beim Aktivieren
     def _stop_all_wheels(self):
         for w in (self.tank, self.dps, self.support):
@@ -2237,26 +2267,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 pass
     def _update_cancel_enabled(self):
         self.btn_cancel_spin.setEnabled(self.pending > 0)
-
-    def _dps_ocr_import_available(self) -> bool:
-        if getattr(self, "_closing", False):
-            return False
-        if getattr(self, "pending", 0) > 0:
-            return False
-        if getattr(self, "current_mode", "") == "maps":
-            return False
-        if getattr(self, "hero_ban_active", False):
-            return False
-        return hasattr(self, "dps")
-
-    def _update_dps_ocr_button_enabled(self) -> None:
-        btn = getattr(self, "btn_dps_ocr_import", None)
-        if btn is None:
-            return
-        enabled = self._dps_ocr_import_available()
-        if self._overlay_choice_active():
-            enabled = False
-        btn.setEnabled(enabled)
 
     def _capture_region_for_ocr(self) -> tuple[QtGui.QPixmap | None, str | None]:
         use_native_mac_capture = bool(getattr(config, "OCR_USE_NATIVE_MAC_CAPTURE", True)) and sys.platform == "darwin"
@@ -2433,11 +2443,12 @@ class MainWindow(QtWidgets.QMainWindow):
             return collapsed
         return collapsed[:max_chars].rstrip() + "…"
 
-    def _on_dps_ocr_import_clicked(self) -> None:
-        if not self._dps_ocr_import_available():
+    def _on_role_ocr_import_clicked(self, role_key: str) -> None:
+        role = str(role_key or "").strip().casefold()
+        if not self._role_ocr_import_available(role):
             return
-        self._update_dps_ocr_button_enabled()
-        btn = getattr(self, "btn_dps_ocr_import", None)
+        self._update_role_ocr_button_enabled(role)
+        btn = self._role_ocr_buttons.get(role)
         if btn is None:
             return
         btn.setEnabled(False)
@@ -2512,7 +2523,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
                 return
 
-            new_names = self._collect_new_ocr_names(names)
+            new_names = self._collect_new_ocr_names_for_role(role, names)
             if not new_names:
                 QtWidgets.QMessageBox.information(
                     self,
@@ -2520,11 +2531,11 @@ class MainWindow(QtWidgets.QMainWindow):
                     i18n.t("ocr.result_duplicates_only", total=len(names)),
                 )
                 return
-            if self._request_ocr_import_selection(new_names):
+            if self._request_ocr_import_selection(role, new_names):
                 return
 
             # Fallback if overlay is not available.
-            added = self._add_ocr_names_to_dps(new_names)
+            added = self._add_ocr_names_to_role(role, new_names)
             self._show_ocr_import_result(added=added, total=len(new_names))
         except Exception as exc:
             QtWidgets.QMessageBox.warning(
@@ -2533,8 +2544,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 i18n.t("ocr.error_unexpected", reason=repr(exc)),
             )
         finally:
-            self._update_dps_ocr_button_enabled()
-    
+            self._update_role_ocr_buttons_enabled()
+
     def spin_all(self):
         """Dreht alle selektierten Räder auf faire Weise."""
         if self.current_mode == "maps":
@@ -2882,14 +2893,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "btn_all_players"):
             self.btn_all_players.setText(i18n.t("players.list_button"))
             ui_helpers.set_fixed_width_from_translations([self.btn_all_players], ["players.list_button"], padding=40)
-        if hasattr(self, "btn_dps_ocr_import"):
-            self.btn_dps_ocr_import.setText(i18n.t("ocr.dps_button"))
-            self.btn_dps_ocr_import.setToolTip(i18n.t("ocr.dps_button_tooltip"))
-            ui_helpers.set_fixed_width_from_translations(
-                [self.btn_dps_ocr_import],
-                ["ocr.dps_button"],
-                padding=24,
-            )
+        self._refresh_all_role_ocr_button_texts()
         if hasattr(self, "player_list_panel"):
             self.player_list_panel.set_language(self.language)
         self._update_title()
