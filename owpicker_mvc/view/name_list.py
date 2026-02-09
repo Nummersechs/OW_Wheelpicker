@@ -6,7 +6,9 @@ import i18n
 from view import style_helpers
 from utils import ui_helpers
 
-DELETE_MARK_COLUMN_WIDTH = 28
+DELETE_MARK_COLUMN_WIDTH = 20
+DELETE_MARK_BUTTON_WIDTH = 28
+DELETE_MARK_ROW_RIGHT_MARGIN = 0
 
 
 class _NoPaintDelegate(QtWidgets.QStyledItemDelegate):
@@ -59,6 +61,7 @@ class NamesList(QtWidgets.QListWidget):
         self.has_subroles = bool(self.subrole_labels)
         self._auto_focus_enabled = True
         self._auto_focus_requires_active = False
+        self._viewport_right_margin = -1
         self.setFocusPolicy(QtCore.Qt.NoFocus)
         self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
@@ -72,6 +75,50 @@ class NamesList(QtWidgets.QListWidget):
 
         self.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
+
+        sb = self.verticalScrollBar()
+        if sb is not None:
+            sb.rangeChanged.connect(self._sync_viewport_right_padding)
+            sb.installEventFilter(self)
+        QtCore.QTimer.singleShot(0, self._sync_viewport_right_padding)
+
+    def _scrollbar_extent(self, sb: QtWidgets.QScrollBar | None = None) -> int:
+        scrollbar = sb if sb is not None else self.verticalScrollBar()
+        if scrollbar is None:
+            return 0
+        extent = self.style().pixelMetric(QtWidgets.QStyle.PM_ScrollBarExtent, None, scrollbar)
+        hint = scrollbar.sizeHint().width()
+        return max(0, int(extent), int(hint))
+
+    def _sync_viewport_right_padding(self, *_args) -> None:
+        sb = self.verticalScrollBar()
+        if sb is None:
+            margin_right = 0
+        else:
+            # Reserve the scrollbar width while hidden so right-aligned controls
+            # (delete checkbox column) stay visually stable when it appears.
+            extent = self._scrollbar_extent(sb)
+            has_vertical_scroll = sb.isVisible() and sb.maximum() > sb.minimum()
+            margin_right = 0 if has_vertical_scroll else extent
+        if margin_right == self._viewport_right_margin:
+            return
+        self.setViewportMargins(0, 0, margin_right, 0)
+        self._viewport_right_margin = margin_right
+
+    def eventFilter(self, obj: QtCore.QObject, ev: QtCore.QEvent) -> bool:
+        sb = self.verticalScrollBar()
+        if obj is sb and ev.type() in (
+            QtCore.QEvent.Show,
+            QtCore.QEvent.Hide,
+            QtCore.QEvent.Resize,
+            QtCore.QEvent.StyleChange,
+        ):
+            QtCore.QTimer.singleShot(0, self._sync_viewport_right_padding)
+        return super().eventFilter(obj, ev)
+
+    def resizeEvent(self, ev: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(ev)
+        self._sync_viewport_right_padding()
 
     def wheelEvent(self, ev: QtGui.QWheelEvent):
         """Etwas weniger sensibles Scrollen als Qt-Default."""
@@ -264,7 +311,8 @@ class NameRowWidget(QtWidgets.QWidget):
         self.list_widget = list_widget
         self.item = item
         layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(4, 0, 4, 0)
+        right_margin = DELETE_MARK_ROW_RIGHT_MARGIN if subrole_labels else 4
+        layout.setContentsMargins(4, 0, right_margin, 0)
         layout.setSpacing(6)
 
         self.chk_active = QtWidgets.QCheckBox()
@@ -311,7 +359,11 @@ class NameRowWidget(QtWidgets.QWidget):
             delete_cell_layout = QtWidgets.QHBoxLayout(delete_cell)
             delete_cell_layout.setContentsMargins(0, 0, 0, 0)
             delete_cell_layout.setSpacing(0)
-            delete_cell_layout.addWidget(self.chk_mark_for_delete, 0, QtCore.Qt.AlignCenter)
+            delete_cell_layout.addWidget(
+                self.chk_mark_for_delete,
+                0,
+                QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
+            )
             layout.addStretch(1)
             layout.addWidget(delete_cell, 0, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
         else:
@@ -438,7 +490,7 @@ class NamesListPanel(QtWidgets.QWidget):
 
         self.btn_delete_marked = QtWidgets.QToolButton()
         self.btn_delete_marked.setText("🗑")
-        self.btn_delete_marked.setFixedSize(DELETE_MARK_COLUMN_WIDTH, 28)
+        self.btn_delete_marked.setFixedSize(DELETE_MARK_BUTTON_WIDTH, 28)
         self.btn_delete_marked.setToolTip(i18n.t("names.delete_marked_tooltip"))
         self.btn_delete_marked.clicked.connect(self._on_delete_marked_clicked)
         self.btn_delete_marked.setVisible(self.names.has_subroles)
@@ -457,13 +509,6 @@ class NamesListPanel(QtWidgets.QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        self._top_row_widget = QtWidgets.QWidget(self)
-        top_row = QtWidgets.QHBoxLayout(self._top_row_widget)
-        top_row.setContentsMargins(0, 0, 0, 0)
-        top_row.addStretch(1)
-        top_row.addWidget(self.btn_delete_marked, 0, QtCore.Qt.AlignRight)
-        layout.addWidget(self._top_row_widget)
-
         layout.addWidget(self.names)
 
         self._action_row_widget = QtWidgets.QWidget(self)
@@ -473,6 +518,7 @@ class NamesListPanel(QtWidgets.QWidget):
         action_row.addWidget(self.btn_toggle_all_names, 0, QtCore.Qt.AlignLeft)
         action_row.addStretch(1)
         action_row.addWidget(self.btn_sort_names, 0, QtCore.Qt.AlignRight)
+        action_row.addWidget(self.btn_delete_marked, 0, QtCore.Qt.AlignRight)
         layout.addWidget(self._action_row_widget)
 
         self.names.itemChanged.connect(self._update_toggle_all_button_label)
@@ -551,8 +597,6 @@ class NamesListPanel(QtWidgets.QWidget):
 
     def set_aux_controls_visible(self, visible: bool) -> None:
         show = bool(visible)
-        if hasattr(self, "_top_row_widget"):
-            self._top_row_widget.setVisible(show)
         if hasattr(self, "_action_row_widget"):
             self._action_row_widget.setVisible(show)
 
