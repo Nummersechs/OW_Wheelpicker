@@ -592,6 +592,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.overlay.deleteNamesConfirmed.connect(self._on_overlay_delete_names_confirmed)
         self.overlay.deleteNamesCancelled.connect(self._on_overlay_delete_names_cancelled)
         self.overlay.ocrImportConfirmed.connect(self._on_overlay_ocr_import_confirmed)
+        self.overlay.ocrImportReplaceRequested.connect(self._on_overlay_ocr_import_replace_requested)
         self.overlay.ocrImportCancelled.connect(self._on_overlay_ocr_import_cancelled)
 
         self.online_mode = False  # Standard
@@ -1018,6 +1019,15 @@ class MainWindow(QtWidgets.QMainWindow):
         }
         return meta.get(key, ("ocr.dps_button", "ocr.dps_button_tooltip", 44))
 
+    def _ocr_role_display_name(self, role_key: str) -> str:
+        key = str(role_key or "").strip().casefold()
+        labels = {
+            "tank": "Tank",
+            "dps": "DPS",
+            "support": "Support",
+        }
+        return labels.get(key, key.upper() or "DPS")
+
     def _refresh_role_ocr_button_text(self, role_key: str) -> None:
         key = str(role_key or "").strip().casefold()
         btn = self._role_ocr_buttons.get(key)
@@ -1094,9 +1104,20 @@ class MainWindow(QtWidgets.QMainWindow):
             self._update_spin_all_enabled()
         return added
 
+    def _replace_ocr_names_for_role(self, role_key: str, names: list[str]) -> int:
+        wheel = self._target_wheel_for_ocr_role(role_key)
+        if wheel is None or not hasattr(wheel, "load_entries"):
+            return 0
+        filtered = [str(name).strip() for name in names if str(name).strip()]
+        if not filtered:
+            return 0
+        wheel.load_entries(filtered)
+        self.state_sync.save_state()
+        self._update_spin_all_enabled()
+        return len(filtered)
+
     def _show_ocr_import_result(self, *, role_key: str, added: int, total: int) -> None:
-        role_text_key, _, _ = self._ocr_role_button_meta(role_key)
-        role_label = i18n.t(role_text_key).replace("📸", "").replace("OCR", "").strip() or role_key.upper()
+        role_label = self._ocr_role_display_name(role_key)
         if added > 0:
             message = i18n.t("ocr.result_added_role", role=role_label, added=added, total=total)
         else:
@@ -1122,6 +1143,30 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         added = self._add_ocr_names_to_role(pending.role_key, names_to_add)
         self._show_ocr_import_result(role_key=pending.role_key, added=added, total=len(names_to_add))
+
+    def _on_overlay_ocr_import_replace_requested(self, selected_names):
+        pending = getattr(self, "_pending_ocr_import", None)
+        self._pending_ocr_import = None
+        if pending is None:
+            return
+        names_to_replace = resolve_selected_ocr_candidates(pending.candidates, selected_names)
+        if not names_to_replace:
+            QtWidgets.QMessageBox.information(
+                self,
+                i18n.t("ocr.result_title"),
+                i18n.t("ocr.result_none_selected"),
+            )
+            return
+        total = self._replace_ocr_names_for_role(pending.role_key, names_to_replace)
+        QtWidgets.QMessageBox.information(
+            self,
+            i18n.t("ocr.result_title"),
+            i18n.t(
+                "ocr.result_replaced_role",
+                role=self._ocr_role_display_name(pending.role_key),
+                total=total,
+            ),
+        )
 
     def _on_overlay_ocr_import_cancelled(self):
         self._pending_ocr_import = None
@@ -2551,8 +2596,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
             new_names = self._collect_new_ocr_names_for_role(role, names)
             if not new_names:
-                role_text_key, _, _ = self._ocr_role_button_meta(role)
-                role_label = i18n.t(role_text_key).replace("📸", "").replace("OCR", "").strip() or role.upper()
+                role_label = self._ocr_role_display_name(role)
                 QtWidgets.QMessageBox.information(
                     self,
                     i18n.t("ocr.result_title"),

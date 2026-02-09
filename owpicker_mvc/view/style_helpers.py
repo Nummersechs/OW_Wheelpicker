@@ -63,6 +63,20 @@ def style_success_button(btn: QtWidgets.QPushButton, theme: theme_util.Theme) ->
     )
 
 
+def style_warning_button(btn: QtWidgets.QPushButton, theme: theme_util.Theme) -> None:
+    if not btn:
+        return
+    btn.setStyleSheet(
+        "QPushButton {"
+        " color:white; background:#ef6c00;"
+        " border-radius:12px; font-weight:600; padding:8px 18px;"
+        "}"
+        "QPushButton:hover { background:#f57c00; }"
+        "QPushButton:pressed { background:#e65100; }"
+        f"QPushButton:disabled {{ background:{theme.disabled_bg}; color:{theme.disabled_text}; border:1px solid {theme.border}; }}"
+    )
+
+
 def style_names_list(list_widget: QtWidgets.QListWidget, theme: theme_util.Theme) -> None:
     if not list_widget:
         return

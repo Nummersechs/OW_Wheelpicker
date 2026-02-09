@@ -53,7 +53,9 @@ TRANSLATIONS_DE = {
     "ocr.pick_title": "OCR-Namen auswählen",
     "ocr.pick_hint": "Neue OCR-Namen ({count}). Haken entfernen, wenn ein Name nicht übernommen werden soll.",
     "ocr.pick_cancel": "Abbrechen",
+    "ocr.pick_replace": "Rollenliste ersetzen",
     "ocr.pick_confirm": "Ausgewählte übernehmen",
+    "ocr.result_replaced_role": "{role}-Liste vollständig mit {total} ausgewählten Namen ersetzt.",
     # Wheel / Names
     "wheel.spin_role": "🔁 Diese Rolle drehen",
     "wheel.spin_map": "🔁 Karte drehen",

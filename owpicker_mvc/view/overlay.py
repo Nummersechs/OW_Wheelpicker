@@ -13,6 +13,7 @@ class ResultOverlay(QtWidgets.QWidget):
     deleteNamesConfirmed = QtCore.Signal()
     deleteNamesCancelled = QtCore.Signal()
     ocrImportConfirmed = QtCore.Signal(object)
+    ocrImportReplaceRequested = QtCore.Signal(object)
     ocrImportCancelled = QtCore.Signal()
 
     def __init__(self, parent=None):
@@ -90,6 +91,8 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_delete_confirm.setFixedHeight(40)
         self.btn_ocr_cancel = QtWidgets.QPushButton(i18n.t("ocr.pick_cancel"))
         self.btn_ocr_cancel.setFixedHeight(40)
+        self.btn_ocr_replace = QtWidgets.QPushButton(i18n.t("ocr.pick_replace"))
+        self.btn_ocr_replace.setFixedHeight(40)
         self.btn_ocr_confirm = QtWidgets.QPushButton(i18n.t("ocr.pick_confirm"))
         self.btn_ocr_confirm.setFixedHeight(40)
         self._apply_button_labels()
@@ -100,6 +103,7 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_delete_cancel.clicked.connect(self._cancel_delete_names)
         self.btn_delete_confirm.clicked.connect(self._confirm_delete_names)
         self.btn_ocr_cancel.clicked.connect(self._cancel_ocr_import)
+        self.btn_ocr_replace.clicked.connect(self._replace_ocr_import)
         self.btn_ocr_confirm.clicked.connect(self._confirm_ocr_import)
 
         # Buttons in einer Zeile anordnen
@@ -109,8 +113,9 @@ class ResultOverlay(QtWidgets.QWidget):
         btn_row.addWidget(self.btn_online)
         btn_row.addWidget(self.btn_delete_cancel)
         btn_row.addWidget(self.btn_delete_confirm)
-        btn_row.addWidget(self.btn_ocr_cancel)
         btn_row.addWidget(self.btn_ocr_confirm)
+        btn_row.addWidget(self.btn_ocr_replace)
+        btn_row.addWidget(self.btn_ocr_cancel)
         btn_row.addWidget(self.btn_disable)
         btn_row.addWidget(self.btn_close)
         btn_row.addStretch(1)
@@ -133,8 +138,8 @@ class ResultOverlay(QtWidgets.QWidget):
         view = getattr(self, "_last_view", {}) or {}
         view_type = view.get("type")
         if view_type == "ocr_name_picker":
-            w = max(560, int(self.width() * 0.50))
-            h = max(460, int(self.height() * 0.70))
+            w = max(520, int(self.width() * 0.45))
+            h = max(320, int(self.height() * 0.45))
         else:
             w = max(520, int(self.width() * 0.45))
             h = max(280, int(self.height() * 0.30))
@@ -162,6 +167,7 @@ class ResultOverlay(QtWidgets.QWidget):
         delete_cancel: bool = False,
         delete_confirm: bool = False,
         ocr_cancel: bool = False,
+        ocr_replace: bool = False,
         ocr_confirm: bool = False,
     ) -> None:
         self.btn_close.setVisible(bool(close))
@@ -171,6 +177,7 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_delete_cancel.setVisible(bool(delete_cancel))
         self.btn_delete_confirm.setVisible(bool(delete_confirm))
         self.btn_ocr_cancel.setVisible(bool(ocr_cancel))
+        self.btn_ocr_replace.setVisible(bool(ocr_replace))
         self.btn_ocr_confirm.setVisible(bool(ocr_confirm))
 
     def show_result(self, tank, dps, sup):
@@ -255,7 +262,7 @@ class ResultOverlay(QtWidgets.QWidget):
             del blockers
         self.ocr_names_panel.refresh_action_state()
         self.ocr_names_panel.setVisible(True)
-        self._set_action_buttons_visible(ocr_cancel=True, ocr_confirm=True)
+        self._set_action_buttons_visible(ocr_cancel=True, ocr_replace=True, ocr_confirm=True)
         self._last_view = {"type": "ocr_name_picker", "data": display_names}
         self._show()
 
@@ -284,7 +291,7 @@ class ResultOverlay(QtWidgets.QWidget):
         self.hide()
         self.ocrImportCancelled.emit()
 
-    def _confirm_ocr_import(self):
+    def _selected_ocr_names(self) -> list[str]:
         selected: list[str] = []
         names_list = self.ocr_names_panel.names
         for i in range(names_list.count()):
@@ -299,6 +306,15 @@ class ResultOverlay(QtWidgets.QWidget):
                 text = item.text().strip()
             if text:
                 selected.append(text)
+        return selected
+
+    def _replace_ocr_import(self):
+        selected = self._selected_ocr_names()
+        self.hide()
+        self.ocrImportReplaceRequested.emit(selected)
+
+    def _confirm_ocr_import(self):
+        selected = self._selected_ocr_names()
         self.hide()
         self.ocrImportConfirmed.emit(selected)
 
@@ -356,7 +372,8 @@ class ResultOverlay(QtWidgets.QWidget):
         self.ocr_names_panel.apply_theme(theme)
         style_helpers.style_primary_button(self.btn_delete_cancel, theme)
         style_helpers.style_danger_button(self.btn_delete_confirm, theme)
-        style_helpers.style_primary_button(self.btn_ocr_cancel, theme)
+        style_helpers.style_danger_button(self.btn_ocr_cancel, theme)
+        style_helpers.style_warning_button(self.btn_ocr_replace, theme)
         style_helpers.style_success_button(self.btn_ocr_confirm, theme)
 
     def _apply_button_labels(self):
@@ -367,6 +384,7 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_delete_cancel.setText(i18n.t("names.delete_confirm_cancel"))
         self.btn_delete_confirm.setText(i18n.t("names.delete_confirm_delete"))
         self.btn_ocr_cancel.setText(i18n.t("ocr.pick_cancel"))
+        self.btn_ocr_replace.setText(i18n.t("ocr.pick_replace"))
         self.btn_ocr_confirm.setText(i18n.t("ocr.pick_confirm"))
 
     def _set_min_widths(self):
@@ -402,8 +420,8 @@ class ResultOverlay(QtWidgets.QWidget):
             btn.setMinimumWidth(delete_width)
             btn.setMaximumWidth(delete_width)
 
-        ocr_width = max_width(("ocr.pick_cancel", "ocr.pick_confirm"))
-        for btn in (self.btn_ocr_cancel, self.btn_ocr_confirm):
+        ocr_width = max_width(("ocr.pick_cancel", "ocr.pick_replace", "ocr.pick_confirm"))
+        for btn in (self.btn_ocr_cancel, self.btn_ocr_replace, self.btn_ocr_confirm):
             btn.setMinimumWidth(ocr_width)
             btn.setMaximumWidth(ocr_width)
 

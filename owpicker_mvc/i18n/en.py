@@ -53,7 +53,9 @@ TRANSLATIONS_EN = {
     "ocr.pick_title": "Select OCR names",
     "ocr.pick_hint": "New OCR names ({count}). Uncheck names you do not want to import.",
     "ocr.pick_cancel": "Cancel",
+    "ocr.pick_replace": "Replace role list",
     "ocr.pick_confirm": "Import selected",
+    "ocr.result_replaced_role": "Replaced the full {role} list with {total} selected name(s).",
     # Wheel / Names
     "wheel.spin_role": "🔁 Spin this role",
     "wheel.spin_map": "🔁 Spin map",
