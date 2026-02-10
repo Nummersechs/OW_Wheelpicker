@@ -55,10 +55,17 @@ class NamesList(QtWidgets.QListWidget):
     SUBROLE_ROLE = QtCore.Qt.UserRole + 1
     MARK_FOR_DELETE_ROLE = QtCore.Qt.UserRole + 2
 
-    def __init__(self, parent=None, subrole_labels: Optional[List[str]] = None):
+    def __init__(
+        self,
+        parent=None,
+        subrole_labels: Optional[List[str]] = None,
+        *,
+        enable_mark_for_delete: bool = True,
+    ):
         super().__init__(parent)
         self.subrole_labels = subrole_labels or []
         self.has_subroles = bool(self.subrole_labels)
+        self.enable_mark_for_delete = bool(enable_mark_for_delete)
         self._auto_focus_enabled = True
         self._auto_focus_requires_active = False
         self._viewport_right_margin = -1
@@ -349,7 +356,7 @@ class NameRowWidget(QtWidgets.QWidget):
             layout.addWidget(cb, 0, QtCore.Qt.AlignVCenter)
 
         self.chk_mark_for_delete: QtWidgets.QCheckBox | None = None
-        if subrole_labels:
+        if subrole_labels and self.list_widget.enable_mark_for_delete:
             self.chk_mark_for_delete = QtWidgets.QCheckBox()
             self.chk_mark_for_delete.setChecked(self._is_marked_for_delete())
             self.chk_mark_for_delete.setToolTip(i18n.t("names.mark_for_delete_tooltip"))
@@ -482,9 +489,20 @@ class NameRowWidget(QtWidgets.QWidget):
 
 class NamesListPanel(QtWidgets.QWidget):
     """Composite widget: names list with select/deselect and sort actions."""
-    def __init__(self, parent=None, subrole_labels: Optional[List[str]] = None):
+    def __init__(
+        self,
+        parent=None,
+        subrole_labels: Optional[List[str]] = None,
+        *,
+        enable_mark_for_delete: bool = True,
+    ):
         super().__init__(parent)
-        self.names = NamesList(self, subrole_labels=subrole_labels)
+        self.names = NamesList(
+            self,
+            subrole_labels=subrole_labels,
+            enable_mark_for_delete=enable_mark_for_delete,
+        )
+        self._enable_mark_for_delete = bool(enable_mark_for_delete)
         self._interaction_enabled = True
         self._delete_confirm_handler: Callable[[int], bool] | None = None
 
@@ -493,7 +511,7 @@ class NamesListPanel(QtWidgets.QWidget):
         self.btn_delete_marked.setFixedSize(DELETE_MARK_BUTTON_WIDTH, 28)
         self.btn_delete_marked.setToolTip(i18n.t("names.delete_marked_tooltip"))
         self.btn_delete_marked.clicked.connect(self._on_delete_marked_clicked)
-        self.btn_delete_marked.setVisible(self.names.has_subroles)
+        self.btn_delete_marked.setVisible(self.names.has_subroles and self._enable_mark_for_delete)
         self.btn_delete_marked.setProperty("dangerActive", False)
 
         self.btn_toggle_all_names = QtWidgets.QPushButton()
@@ -650,7 +668,7 @@ class NamesListPanel(QtWidgets.QWidget):
             self.btn_toggle_all_names.setToolTip(i18n.t("wheel.select_all_tooltip"))
 
     def _update_delete_marked_button_state(self):
-        if not self.names.has_subroles:
+        if not self.names.has_subroles or not self._enable_mark_for_delete:
             self.btn_delete_marked.setEnabled(False)
             self._set_delete_button_danger_state(False)
             return

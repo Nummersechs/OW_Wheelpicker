@@ -3,7 +3,7 @@ from html import escape
 import i18n
 from utils import flag_icons, theme as theme_util
 from . import style_helpers
-from .name_list import NamesListPanel
+from .name_list import NameRowWidget, NamesListPanel
 
 class ResultOverlay(QtWidgets.QWidget):
     closed = QtCore.Signal()
@@ -65,7 +65,10 @@ class ResultOverlay(QtWidgets.QWidget):
             lab.setWordWrap(True)
             v.addWidget(lab)
 
-        self.ocr_names_panel = NamesListPanel(subrole_labels=None)
+        self.ocr_names_panel = NamesListPanel(
+            subrole_labels=None,
+            enable_mark_for_delete=False,
+        )
         self.ocr_names_panel.set_auto_focus_enabled(False)
         self.ocr_names_panel.set_aux_controls_visible(False)
         self.ocr_names_panel.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
@@ -234,9 +237,16 @@ class ResultOverlay(QtWidgets.QWidget):
         self._last_view = {"type": "delete_names_confirm", "data": count_value}
         self._show()
 
-    def show_ocr_name_picker(self, names: list[str]):
+    def _set_ocr_subrole_labels(self, labels: list[str] | None) -> None:
+        names_list = self.ocr_names_panel.names
+        normalized = [str(label).strip() for label in (labels or []) if str(label).strip()]
+        names_list.subrole_labels = normalized
+        names_list.has_subroles = bool(normalized)
+
+    def show_ocr_name_picker(self, names: list[str], subrole_labels: list[str] | None = None):
         self._apply_button_labels()
         display_names = [str(name).strip() for name in names if str(name).strip()]
+        self._set_ocr_subrole_labels(subrole_labels)
         self.title.setText(i18n.t("ocr.pick_title"))
         self._set_info_labels_visible(tank=True, dps=False, sup=False)
         self.lab_tank.setText(i18n.t("ocr.pick_hint", count=len(display_names)))
@@ -248,7 +258,7 @@ class ResultOverlay(QtWidgets.QWidget):
             names_list.clear()
             names_list.setContextMenuPolicy(QtCore.Qt.NoContextMenu)
             for name in display_names:
-                names_list.add_name(name, active=True)
+                names_list.add_name(name, subroles=[], active=True)
             for i in range(names_list.count()):
                 item = names_list.item(i)
                 if item is None:
@@ -291,8 +301,8 @@ class ResultOverlay(QtWidgets.QWidget):
         self.hide()
         self.ocrImportCancelled.emit()
 
-    def _selected_ocr_names(self) -> list[str]:
-        selected: list[str] = []
+    def _selected_ocr_entries(self) -> list[dict]:
+        selected: list[dict] = []
         names_list = self.ocr_names_panel.names
         for i in range(names_list.count()):
             item = names_list.item(i)
@@ -305,16 +315,25 @@ class ResultOverlay(QtWidgets.QWidget):
             else:
                 text = item.text().strip()
             if text:
-                selected.append(text)
+                subroles: list[str] = []
+                if isinstance(widget, NameRowWidget):
+                    subroles = sorted(
+                        {
+                            str(role).strip()
+                            for role in widget.selected_subroles()
+                            if str(role).strip()
+                        }
+                    )
+                selected.append({"name": text, "subroles": subroles})
         return selected
 
     def _replace_ocr_import(self):
-        selected = self._selected_ocr_names()
+        selected = self._selected_ocr_entries()
         self.hide()
         self.ocrImportReplaceRequested.emit(selected)
 
     def _confirm_ocr_import(self):
-        selected = self._selected_ocr_names()
+        selected = self._selected_ocr_entries()
         self.hide()
         self.ocrImportConfirmed.emit(selected)
 

@@ -170,6 +170,23 @@ class TestNamesListPanel(unittest.TestCase):
         self.assertEqual(self._name_texts(panel), ["Beta"])
         panel.close()
 
+    def test_subrole_rows_can_hide_delete_mark_checkbox(self):
+        panel = NamesListPanel(
+            subrole_labels=["HS", "FDPS"],
+            enable_mark_for_delete=False,
+        )
+        self._add_names(panel, ["Alpha"])
+        panel.show()
+        QtWidgets.QApplication.processEvents()
+
+        item0 = panel.names.item(0)
+        widget0 = panel.names.itemWidget(item0)
+        self.assertIsInstance(widget0, NameRowWidget)
+        self.assertEqual(len(widget0.subrole_checks), 2)
+        self.assertIsNone(widget0.chk_mark_for_delete)
+        self.assertFalse(panel.btn_delete_marked.isVisible())
+        panel.close()
+
 
 if __name__ == "__main__":
     unittest.main()

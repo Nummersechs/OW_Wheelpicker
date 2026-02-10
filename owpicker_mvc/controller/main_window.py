@@ -13,8 +13,8 @@ from . import mode_manager, spin_service
 from . import ocr_import
 from .ocr_role_import import (
     PendingOCRImport,
-    add_names as add_ocr_names,
     collect_new_names as collect_new_ocr_names,
+    normalize_name_key as normalize_ocr_name_key,
     resolve_selected_candidates as resolve_selected_ocr_candidates,
 )
 from services import state_store
@@ -1080,35 +1080,119 @@ class MainWindow(QtWidgets.QMainWindow):
         overlay = getattr(self, "overlay", None)
         if overlay is None:
             return False
+        wheel = self._target_wheel_for_ocr_role(role_key)
         display_names = [str(name).strip() for name in names if str(name).strip()]
         if not display_names:
             return False
+        subrole_labels: list[str] = []
+        if wheel is not None:
+            subrole_labels = [
+                str(label).strip()
+                for label in getattr(wheel, "subrole_labels", []) or []
+                if str(label).strip()
+            ]
         self._pending_ocr_import = PendingOCRImport(
             role_key=str(role_key or "").strip().casefold(),
             candidates=list(display_names),
+            subrole_labels=subrole_labels,
         )
         try:
-            overlay.show_ocr_name_picker(display_names)
+            overlay.show_ocr_name_picker(display_names, subrole_labels=subrole_labels)
         except Exception:
             self._pending_ocr_import = None
             return False
         return True
 
-    def _add_ocr_names_to_role(self, role_key: str, names: list[str]) -> int:
+    def _selected_ocr_entries_for_pending(
+        self,
+        pending: PendingOCRImport,
+        selected_payload,
+    ) -> list[dict]:
+        allowed_subroles = {
+            str(label).strip()
+            for label in (getattr(pending, "subrole_labels", None) or [])
+            if str(label).strip()
+        }
+        raw_selected: list[dict] = []
+        for item in selected_payload or []:
+            if isinstance(item, dict):
+                name = str(item.get("name", "")).strip()
+                payload_subroles = item.get("subroles", [])
+            else:
+                name = str(item or "").strip()
+                payload_subroles = []
+            if not name:
+                continue
+            normalized_subroles: list[str] = []
+            seen_subroles: set[str] = set()
+            if isinstance(payload_subroles, (list, tuple, set)):
+                for value in payload_subroles:
+                    label = str(value or "").strip()
+                    if not label or label in seen_subroles:
+                        continue
+                    if allowed_subroles and label not in allowed_subroles:
+                        continue
+                    seen_subroles.add(label)
+                    normalized_subroles.append(label)
+            raw_selected.append({"name": name, "subroles": normalized_subroles})
+
+        selected_names = [entry["name"] for entry in raw_selected]
+        names_in_order = resolve_selected_ocr_candidates(pending.candidates, selected_names)
+        if not names_in_order:
+            return []
+
+        subroles_by_name_key: dict[str, list[str]] = {}
+        for entry in raw_selected:
+            key = normalize_ocr_name_key(entry.get("name", ""))
+            if key and key not in subroles_by_name_key:
+                subroles_by_name_key[key] = list(entry.get("subroles", []))
+
+        resolved_entries: list[dict] = []
+        for name in names_in_order:
+            key = normalize_ocr_name_key(name)
+            resolved_entries.append(
+                {
+                    "name": name,
+                    "subroles": list(subroles_by_name_key.get(key, [])),
+                    "active": True,
+                }
+            )
+        return resolved_entries
+
+    def _add_ocr_entries_to_role(self, role_key: str, entries: list[dict]) -> int:
         wheel = self._target_wheel_for_ocr_role(role_key)
         if wheel is None or not hasattr(wheel, "add_name"):
             return 0
-        added = add_ocr_names(lambda name: wheel.add_name(name, active=True), names)
+        added = 0
+        for entry in entries or []:
+            name = str((entry or {}).get("name", "")).strip()
+            if not name:
+                continue
+            subroles_raw = (entry or {}).get("subroles", [])
+            subroles: list[str] = []
+            if isinstance(subroles_raw, (list, tuple, set)):
+                subroles = [str(value).strip() for value in subroles_raw if str(value).strip()]
+            if wheel.add_name(name, active=True, subroles=subroles):
+                added += 1
         if added > 0:
             self.state_sync.save_state()
             self._update_spin_all_enabled()
         return added
 
-    def _replace_ocr_names_for_role(self, role_key: str, names: list[str]) -> int:
+    def _replace_ocr_names_for_role(self, role_key: str, entries: list[dict]) -> int:
         wheel = self._target_wheel_for_ocr_role(role_key)
         if wheel is None or not hasattr(wheel, "load_entries"):
             return 0
-        filtered = [str(name).strip() for name in names if str(name).strip()]
+        filtered: list[dict] = []
+        for entry in entries or []:
+            name = str((entry or {}).get("name", "")).strip()
+            if not name:
+                continue
+            subroles_raw = (entry or {}).get("subroles", [])
+            subroles: list[str] = []
+            if isinstance(subroles_raw, (list, tuple, set)):
+                subroles = [str(value).strip() for value in subroles_raw if str(value).strip()]
+            filtered.append({"name": name, "subroles": subroles, "active": True})
         if not filtered:
             return 0
         wheel.load_entries(filtered)
@@ -1133,31 +1217,31 @@ class MainWindow(QtWidgets.QMainWindow):
         self._pending_ocr_import = None
         if pending is None:
             return
-        names_to_add = resolve_selected_ocr_candidates(pending.candidates, selected_names)
-        if not names_to_add:
+        entries_to_add = self._selected_ocr_entries_for_pending(pending, selected_names)
+        if not entries_to_add:
             QtWidgets.QMessageBox.information(
                 self,
                 i18n.t("ocr.result_title"),
                 i18n.t("ocr.result_none_selected"),
             )
             return
-        added = self._add_ocr_names_to_role(pending.role_key, names_to_add)
-        self._show_ocr_import_result(role_key=pending.role_key, added=added, total=len(names_to_add))
+        added = self._add_ocr_entries_to_role(pending.role_key, entries_to_add)
+        self._show_ocr_import_result(role_key=pending.role_key, added=added, total=len(entries_to_add))
 
     def _on_overlay_ocr_import_replace_requested(self, selected_names):
         pending = getattr(self, "_pending_ocr_import", None)
         self._pending_ocr_import = None
         if pending is None:
             return
-        names_to_replace = resolve_selected_ocr_candidates(pending.candidates, selected_names)
-        if not names_to_replace:
+        entries_to_replace = self._selected_ocr_entries_for_pending(pending, selected_names)
+        if not entries_to_replace:
             QtWidgets.QMessageBox.information(
                 self,
                 i18n.t("ocr.result_title"),
                 i18n.t("ocr.result_none_selected"),
             )
             return
-        total = self._replace_ocr_names_for_role(pending.role_key, names_to_replace)
+        total = self._replace_ocr_names_for_role(pending.role_key, entries_to_replace)
         QtWidgets.QMessageBox.information(
             self,
             i18n.t("ocr.result_title"),
@@ -2607,7 +2691,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
 
             # Fallback if overlay is not available.
-            added = self._add_ocr_names_to_role(role, new_names)
+            fallback_entries = [{"name": name, "subroles": [], "active": True} for name in new_names]
+            added = self._add_ocr_entries_to_role(role, fallback_entries)
             self._show_ocr_import_result(role_key=role, added=added, total=len(new_names))
         except Exception as exc:
             QtWidgets.QMessageBox.warning(

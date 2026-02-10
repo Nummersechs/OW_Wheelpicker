@@ -494,7 +494,7 @@ class WheelView(BasePanel):
                     changed = True
         return changed
 
-    def add_name(self, name: str, active: bool = True) -> bool:
+    def add_name(self, name: str, active: bool = True, subroles: Optional[List[str]] = None) -> bool:
         """Add a name if missing; returns True if it changed."""
         name = str(name or "").strip()
         if not name:
@@ -508,7 +508,7 @@ class WheelView(BasePanel):
                     return self.set_names_active({name}, True)
                 return False
         with self._suspend_list_signals() as prev:
-            self.names.add_name(name, active=active)
+            self.names.add_name(name, subroles=subroles or [], active=active)
             self._apply_names_list_changes()
         if not prev:
             self.stateChanged.emit()

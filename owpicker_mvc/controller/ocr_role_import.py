@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
 
@@ -8,6 +8,7 @@ from typing import Callable, Iterable
 class PendingOCRImport:
     role_key: str
     candidates: list[str]
+    subrole_labels: list[str] = field(default_factory=list)
 
 
 def normalize_name_key(value: str) -> str:
