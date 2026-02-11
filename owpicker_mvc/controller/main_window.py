@@ -13,7 +13,6 @@ from . import mode_manager, spin_service
 from . import ocr_import
 from .ocr_role_import import (
     PendingOCRImport,
-    collect_new_names as collect_new_ocr_names,
     normalize_name_key as normalize_ocr_name_key,
     resolve_selected_candidates as resolve_selected_ocr_candidates,
 )
@@ -446,7 +445,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_all_players.setFixedHeight(36)
         self.player_list_panel = PlayerListPanelController(self, self.btn_all_players)
         self.btn_all_players.clicked.connect(self.player_list_panel.toggle_panel)
-        grid.addWidget(self.btn_all_players, 1, 0, QtCore.Qt.AlignLeft)
+        self.btn_open_q_ocr = QtWidgets.QPushButton(i18n.t("ocr.open_q_button"))
+        ui_helpers.set_fixed_width_from_translations([self.btn_open_q_ocr], ["ocr.open_q_button"], padding=40)
+        self.btn_open_q_ocr.setFixedHeight(36)
+        self.btn_open_q_ocr.setToolTip(i18n.t("ocr.open_q_button_tooltip"))
+        self.btn_open_q_ocr.clicked.connect(self._on_open_q_ocr_clicked)
+        self._role_left_controls = QtWidgets.QWidget()
+        role_left_controls_layout = QtWidgets.QHBoxLayout(self._role_left_controls)
+        role_left_controls_layout.setContentsMargins(0, 0, 0, 0)
+        role_left_controls_layout.setSpacing(8)
+        role_left_controls_layout.addWidget(self.btn_all_players)
+        role_left_controls_layout.addWidget(self.btn_open_q_ocr)
+        role_left_controls_layout.addStretch(1)
+        grid.addWidget(self._role_left_controls, 1, 0)
         self._update_role_ocr_buttons_enabled()
         # Basisbreiten nach dem ersten Layout ermitteln
         QtCore.QTimer.singleShot(0, self._capture_role_base_widths)
@@ -1065,36 +1076,58 @@ class MainWindow(QtWidgets.QMainWindow):
     def _update_role_ocr_buttons_enabled(self) -> None:
         for role_key in tuple(self._role_ocr_buttons.keys()):
             self._update_role_ocr_button_enabled(role_key)
+        if hasattr(self, "btn_open_q_ocr"):
+            enabled = self._role_ocr_import_available("dps")
+            if self._overlay_choice_active():
+                enabled = False
+            self.btn_open_q_ocr.setEnabled(enabled)
 
-    def _collect_new_ocr_names_for_role(self, role_key: str, names: list[str]) -> list[str]:
-        wheel = self._target_wheel_for_ocr_role(role_key)
-        existing_names = []
-        if wheel is not None and hasattr(wheel, "get_current_names"):
-            try:
-                existing_names = wheel.get_current_names()
-            except Exception:
-                existing_names = []
-        return collect_new_ocr_names(existing_names, names)
+    def _ocr_distribution_role_keys(self) -> tuple[str, ...]:
+        return ("tank", "dps", "support")
+
+    def _collect_new_ocr_names_for_distribution(self, names: list[str]) -> list[str]:
+        role_keys = self._ocr_distribution_role_keys()
+        existing_by_role: dict[str, set[str]] = {}
+        for role_key in role_keys:
+            wheel = self._target_wheel_for_ocr_role(role_key)
+            role_existing: set[str] = set()
+            if wheel is not None and hasattr(wheel, "get_current_names"):
+                try:
+                    for current_name in wheel.get_current_names():
+                        key = normalize_ocr_name_key(current_name)
+                        if key:
+                            role_existing.add(key)
+                except Exception:
+                    role_existing = set()
+            existing_by_role[role_key] = role_existing
+
+        new_names: list[str] = []
+        seen_keys: set[str] = set()
+        for raw in names or []:
+            name = str(raw or "").strip()
+            if not name:
+                continue
+            key = normalize_ocr_name_key(name)
+            if not key or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            if all(key in existing_by_role.get(role_key, set()) for role_key in role_keys):
+                continue
+            new_names.append(name)
+        return new_names
 
     def _request_ocr_import_selection(self, role_key: str, names: list[str]) -> bool:
         overlay = getattr(self, "overlay", None)
         if overlay is None:
             return False
-        wheel = self._target_wheel_for_ocr_role(role_key)
         display_names = [str(name).strip() for name in names if str(name).strip()]
         if not display_names:
             return False
-        subrole_labels: list[str] = []
-        if wheel is not None:
-            subrole_labels = [
-                str(label).strip()
-                for label in getattr(wheel, "subrole_labels", []) or []
-                if str(label).strip()
-            ]
+        subrole_labels = [i18n.t("ocr.subrole_main"), i18n.t("ocr.subrole_off")]
         self._pending_ocr_import = PendingOCRImport(
             role_key=str(role_key or "").strip().casefold(),
             candidates=list(display_names),
-            subrole_labels=subrole_labels,
+            subrole_labels=list(subrole_labels),
         )
         try:
             overlay.show_ocr_name_picker(display_names, subrole_labels=subrole_labels)
@@ -1108,11 +1141,14 @@ class MainWindow(QtWidgets.QMainWindow):
         pending: PendingOCRImport,
         selected_payload,
     ) -> list[dict]:
-        allowed_subroles = {
-            str(label).strip()
-            for label in (getattr(pending, "subrole_labels", None) or [])
-            if str(label).strip()
-        }
+        allowed_main_key = ""
+        allowed_off_key = ""
+        pending_labels = list(getattr(pending, "subrole_labels", []) or [])
+        if len(pending_labels) >= 1:
+            allowed_main_key = normalize_ocr_name_key(pending_labels[0])
+        if len(pending_labels) >= 2:
+            allowed_off_key = normalize_ocr_name_key(pending_labels[1])
+
         raw_selected: list[dict] = []
         for item in selected_payload or []:
             if isinstance(item, dict):
@@ -1123,29 +1159,26 @@ class MainWindow(QtWidgets.QMainWindow):
                 payload_subroles = []
             if not name:
                 continue
-            normalized_subroles: list[str] = []
-            seen_subroles: set[str] = set()
+            codes: list[str] = []
             if isinstance(payload_subroles, (list, tuple, set)):
                 for value in payload_subroles:
-                    label = str(value or "").strip()
-                    if not label or label in seen_subroles:
-                        continue
-                    if allowed_subroles and label not in allowed_subroles:
-                        continue
-                    seen_subroles.add(label)
-                    normalized_subroles.append(label)
-            raw_selected.append({"name": name, "subroles": normalized_subroles})
+                    label_key = normalize_ocr_name_key(value)
+                    if label_key == allowed_main_key and "main" not in codes:
+                        codes.append("main")
+                    elif label_key == allowed_off_key and "off" not in codes:
+                        codes.append("off")
+            raw_selected.append({"name": name, "subroles": codes})
 
-        selected_names = [entry["name"] for entry in raw_selected]
+        selected_names = [entry.get("name", "") for entry in raw_selected]
         names_in_order = resolve_selected_ocr_candidates(pending.candidates, selected_names)
         if not names_in_order:
             return []
 
-        subroles_by_name_key: dict[str, list[str]] = {}
+        codes_by_name_key: dict[str, list[str]] = {}
         for entry in raw_selected:
             key = normalize_ocr_name_key(entry.get("name", ""))
-            if key and key not in subroles_by_name_key:
-                subroles_by_name_key[key] = list(entry.get("subroles", []))
+            if key and key not in codes_by_name_key:
+                codes_by_name_key[key] = list(entry.get("subroles", []))
 
         resolved_entries: list[dict] = []
         for name in names_in_order:
@@ -1153,64 +1186,185 @@ class MainWindow(QtWidgets.QMainWindow):
             resolved_entries.append(
                 {
                     "name": name,
-                    "subroles": list(subroles_by_name_key.get(key, [])),
+                    "subroles": list(codes_by_name_key.get(key, [])),
                     "active": True,
                 }
             )
         return resolved_entries
 
-    def _add_ocr_entries_to_role(self, role_key: str, entries: list[dict]) -> int:
+    def _role_subroles_from_ocr_codes(self, role_key: str, codes: list[str] | None) -> list[str]:
         wheel = self._target_wheel_for_ocr_role(role_key)
-        if wheel is None or not hasattr(wheel, "add_name"):
-            return 0
-        added = 0
+        labels = [
+            str(label).strip()
+            for label in getattr(wheel, "subrole_labels", []) or []
+            if str(label).strip()
+        ] if wheel is not None else []
+        if len(labels) < 2:
+            return []
+        code_set = {str(code).strip().casefold() for code in (codes or []) if str(code).strip()}
+        mapped: list[str] = []
+        if "main" in code_set:
+            mapped.append(labels[0])
+        if "off" in code_set:
+            mapped.append(labels[1])
+        return mapped
+
+    def _plan_distributed_ocr_entries_for_add(self, entries: list[dict]) -> dict[str, list[dict]]:
+        role_keys = self._ocr_distribution_role_keys()
+        plan: dict[str, list[dict]] = {role_key: [] for role_key in role_keys}
+
+        existing_by_role: dict[str, set[str]] = {}
+        for role_key in role_keys:
+            wheel = self._target_wheel_for_ocr_role(role_key)
+            role_existing: set[str] = set()
+            if wheel is not None and hasattr(wheel, "get_current_names"):
+                try:
+                    for current_name in wheel.get_current_names():
+                        key = normalize_ocr_name_key(current_name)
+                        if key:
+                            role_existing.add(key)
+                except Exception:
+                    role_existing = set()
+            existing_by_role[role_key] = role_existing
+
+        next_start_idx = 0
+        role_count = len(role_keys)
+        if role_count <= 0:
+            return plan
+
         for entry in entries or []:
             name = str((entry or {}).get("name", "")).strip()
             if not name:
                 continue
-            subroles_raw = (entry or {}).get("subroles", [])
-            subroles: list[str] = []
-            if isinstance(subroles_raw, (list, tuple, set)):
-                subroles = [str(value).strip() for value in subroles_raw if str(value).strip()]
-            if wheel.add_name(name, active=True, subroles=subroles):
-                added += 1
-        if added > 0:
+            key = normalize_ocr_name_key(name)
+            if not key:
+                continue
+            if all(key in existing_by_role.get(role_key, set()) for role_key in role_keys):
+                continue
+
+            chosen_idx: int | None = None
+            for offset in range(role_count):
+                idx = (next_start_idx + offset) % role_count
+                role_key = role_keys[idx]
+                if key in existing_by_role.get(role_key, set()):
+                    continue
+                chosen_idx = idx
+                break
+            if chosen_idx is None:
+                continue
+
+            chosen_role = role_keys[chosen_idx]
+            plan[chosen_role].append(
+                {
+                    "name": name,
+                    "subroles": list((entry or {}).get("subroles", []) or []),
+                    "active": True,
+                }
+            )
+            existing_by_role[chosen_role].add(key)
+            next_start_idx = (chosen_idx + 1) % role_count
+
+        return plan
+
+    def _add_ocr_entries_distributed(self, entries: list[dict]) -> tuple[int, dict[str, int]]:
+        role_keys = self._ocr_distribution_role_keys()
+        added_counts: dict[str, int] = {role_key: 0 for role_key in role_keys}
+        planned = self._plan_distributed_ocr_entries_for_add(entries)
+
+        for role_key in role_keys:
+            wheel = self._target_wheel_for_ocr_role(role_key)
+            if wheel is None or not hasattr(wheel, "add_name"):
+                continue
+            for entry in planned.get(role_key, []):
+                name = str((entry or {}).get("name", "")).strip()
+                if not name:
+                    continue
+                role_subroles = self._role_subroles_from_ocr_codes(
+                    role_key,
+                    list((entry or {}).get("subroles", []) or []),
+                )
+                if wheel.add_name(name, active=True, subroles=role_subroles):
+                    added_counts[role_key] = int(added_counts.get(role_key, 0)) + 1
+
+        total_added = int(sum(added_counts.values()))
+        if total_added > 0:
             self.state_sync.save_state()
             self._update_spin_all_enabled()
-        return added
+        return total_added, added_counts
 
-    def _replace_ocr_names_for_role(self, role_key: str, entries: list[dict]) -> int:
-        wheel = self._target_wheel_for_ocr_role(role_key)
-        if wheel is None or not hasattr(wheel, "load_entries"):
-            return 0
-        filtered: list[dict] = []
+    def _replace_ocr_entries_distributed(self, entries: list[dict]) -> tuple[int, dict[str, int]]:
+        role_keys = self._ocr_distribution_role_keys()
+        distributed: dict[str, list[dict]] = {role_key: [] for role_key in role_keys}
+        if not role_keys:
+            return 0, {role_key: 0 for role_key in role_keys}
+
+        unique_names: list[str] = []
+        seen_keys: set[str] = set()
         for entry in entries or []:
             name = str((entry or {}).get("name", "")).strip()
             if not name:
                 continue
-            subroles_raw = (entry or {}).get("subroles", [])
-            subroles: list[str] = []
-            if isinstance(subroles_raw, (list, tuple, set)):
-                subroles = [str(value).strip() for value in subroles_raw if str(value).strip()]
-            filtered.append({"name": name, "subroles": subroles, "active": True})
-        if not filtered:
-            return 0
-        wheel.load_entries(filtered)
+            key = normalize_ocr_name_key(name)
+            if not key or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            unique_names.append(name)
+
+        entries_by_name_key: dict[str, list[str]] = {}
+        for entry in entries or []:
+            name = str((entry or {}).get("name", "")).strip()
+            if not name:
+                continue
+            key = normalize_ocr_name_key(name)
+            if key and key not in entries_by_name_key:
+                entries_by_name_key[key] = list((entry or {}).get("subroles", []) or [])
+
+        for idx, name in enumerate(unique_names):
+            role_key = role_keys[idx % len(role_keys)]
+            subrole_codes = entries_by_name_key.get(normalize_ocr_name_key(name), [])
+            distributed[role_key].append({"name": name, "subroles": subrole_codes, "active": True})
+
+        assigned_counts: dict[str, int] = {role_key: 0 for role_key in role_keys}
+        for role_key in role_keys:
+            wheel = self._target_wheel_for_ocr_role(role_key)
+            if wheel is None or not hasattr(wheel, "load_entries"):
+                continue
+            entries_for_role: list[dict] = []
+            for entry in distributed.get(role_key, []):
+                name = str((entry or {}).get("name", "")).strip()
+                if not name:
+                    continue
+                entries_for_role.append(
+                    {
+                        "name": name,
+                        "subroles": self._role_subroles_from_ocr_codes(
+                            role_key,
+                            list((entry or {}).get("subroles", []) or []),
+                        ),
+                        "active": True,
+                    }
+                )
+            wheel.load_entries(entries_for_role)
+            assigned_counts[role_key] = len(entries_for_role)
+
+        total_assigned = int(sum(assigned_counts.values()))
         self.state_sync.save_state()
         self._update_spin_all_enabled()
-        return len(filtered)
+        return total_assigned, assigned_counts
 
-    def _show_ocr_import_result(self, *, role_key: str, added: int, total: int) -> None:
-        role_label = self._ocr_role_display_name(role_key)
+    def _show_ocr_import_result_distributed(self, *, added: int, total: int, counts: dict[str, int]) -> None:
         if added > 0:
-            message = i18n.t("ocr.result_added_role", role=role_label, added=added, total=total)
+            message = i18n.t(
+                "ocr.result_added_distributed",
+                added=added,
+                total=total,
+                tank=int(counts.get("tank", 0)),
+                dps=int(counts.get("dps", 0)),
+                support=int(counts.get("support", 0)),
+            )
         else:
-            message = i18n.t("ocr.result_duplicates_only_role", role=role_label, total=total)
-        QtWidgets.QMessageBox.information(
-            self,
-            i18n.t("ocr.result_title"),
-            message,
-        )
+            message = i18n.t("ocr.result_duplicates_only_distributed", total=total)
+        QtWidgets.QMessageBox.information(self, i18n.t("ocr.result_title"), message)
 
     def _on_overlay_ocr_import_confirmed(self, selected_names):
         pending = getattr(self, "_pending_ocr_import", None)
@@ -1225,8 +1379,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 i18n.t("ocr.result_none_selected"),
             )
             return
-        added = self._add_ocr_entries_to_role(pending.role_key, entries_to_add)
-        self._show_ocr_import_result(role_key=pending.role_key, added=added, total=len(entries_to_add))
+        added, added_counts = self._add_ocr_entries_distributed(entries_to_add)
+        self._show_ocr_import_result_distributed(added=added, total=len(entries_to_add), counts=added_counts)
 
     def _on_overlay_ocr_import_replace_requested(self, selected_names):
         pending = getattr(self, "_pending_ocr_import", None)
@@ -1241,14 +1395,16 @@ class MainWindow(QtWidgets.QMainWindow):
                 i18n.t("ocr.result_none_selected"),
             )
             return
-        total = self._replace_ocr_names_for_role(pending.role_key, entries_to_replace)
+        total, assigned_counts = self._replace_ocr_entries_distributed(entries_to_replace)
         QtWidgets.QMessageBox.information(
             self,
             i18n.t("ocr.result_title"),
             i18n.t(
-                "ocr.result_replaced_role",
-                role=self._ocr_role_display_name(pending.role_key),
+                "ocr.result_replaced_distributed",
                 total=total,
+                tank=int(assigned_counts.get("tank", 0)),
+                dps=int(assigned_counts.get("dps", 0)),
+                support=int(assigned_counts.get("support", 0)),
             ),
         )
 
@@ -2164,6 +2320,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.spin_mode_toggle.apply_theme(theme)
         if hasattr(self, "btn_all_players"):
             style_helpers.style_primary_button(self.btn_all_players, theme)
+        if hasattr(self, "btn_open_q_ocr"):
+            style_helpers.style_primary_button(self.btn_open_q_ocr, theme)
         for btn in self._role_ocr_buttons.values():
             style_helpers.style_primary_button(btn, theme)
         if hasattr(self, "btn_cancel_spin"):
@@ -2397,6 +2555,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.spin_mode_toggle.setEnabled(False)
             if hasattr(self, "btn_all_players"):
                 self.btn_all_players.setEnabled(False)
+            if hasattr(self, "btn_open_q_ocr"):
+                self.btn_open_q_ocr.setEnabled(False)
             if hasattr(self, "player_list_panel"):
                 self.player_list_panel.hide_panel()
         for w in (self.tank, self.dps, self.support):
@@ -2678,13 +2838,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
                 return
 
-            new_names = self._collect_new_ocr_names_for_role(role, names)
+            new_names = self._collect_new_ocr_names_for_distribution(names)
             if not new_names:
-                role_label = self._ocr_role_display_name(role)
                 QtWidgets.QMessageBox.information(
                     self,
                     i18n.t("ocr.result_title"),
-                    i18n.t("ocr.result_duplicates_only_role", role=role_label, total=len(names)),
+                    i18n.t("ocr.result_duplicates_only_distributed", total=len(names)),
                 )
                 return
             if self._request_ocr_import_selection(role, new_names):
@@ -2692,8 +2851,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
             # Fallback if overlay is not available.
             fallback_entries = [{"name": name, "subroles": [], "active": True} for name in new_names]
-            added = self._add_ocr_entries_to_role(role, fallback_entries)
-            self._show_ocr_import_result(role_key=role, added=added, total=len(new_names))
+            added, added_counts = self._add_ocr_entries_distributed(fallback_entries)
+            self._show_ocr_import_result_distributed(
+                added=added,
+                total=len(new_names),
+                counts=added_counts,
+            )
         except Exception as exc:
             QtWidgets.QMessageBox.warning(
                 self,
@@ -2702,6 +2865,14 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         finally:
             self._update_role_ocr_buttons_enabled()
+
+    def _on_open_q_ocr_clicked(self) -> None:
+        if not self._role_ocr_import_available("dps"):
+            return
+        if hasattr(self, "btn_open_q_ocr"):
+            self.btn_open_q_ocr.setEnabled(False)
+        self._on_role_ocr_import_clicked("dps")
+        self._update_role_ocr_buttons_enabled()
 
     def spin_all(self):
         """Dreht alle selektierten Räder auf faire Weise."""
@@ -3050,6 +3221,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "btn_all_players"):
             self.btn_all_players.setText(i18n.t("players.list_button"))
             ui_helpers.set_fixed_width_from_translations([self.btn_all_players], ["players.list_button"], padding=40)
+        if hasattr(self, "btn_open_q_ocr"):
+            self.btn_open_q_ocr.setText(i18n.t("ocr.open_q_button"))
+            self.btn_open_q_ocr.setToolTip(i18n.t("ocr.open_q_button_tooltip"))
+            ui_helpers.set_fixed_width_from_translations([self.btn_open_q_ocr], ["ocr.open_q_button"], padding=40)
         self._refresh_all_role_ocr_button_texts()
         if hasattr(self, "player_list_panel"):
             self.player_list_panel.set_language(self.language)
