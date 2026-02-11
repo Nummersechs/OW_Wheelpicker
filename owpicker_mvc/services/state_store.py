@@ -316,6 +316,29 @@ class ModeStateStore:
         self._sync_players_mode_from_active_profile()
         return True
 
+    def reorder_player_profiles(self, order: List[int]) -> bool:
+        if not self._player_profiles:
+            return False
+        n = len(self._player_profiles)
+        try:
+            indices = [int(v) for v in order]
+        except Exception:
+            return False
+        if len(indices) != n:
+            return False
+        if sorted(indices) != list(range(n)):
+            return False
+        if indices == list(range(n)):
+            return False
+        active_profile = self._player_profiles[self._active_player_profile_index]
+        self._player_profiles = [self._player_profiles[i] for i in indices]
+        for idx, profile in enumerate(self._player_profiles):
+            if profile is active_profile:
+                self._active_player_profile_index = idx
+                break
+        self._sync_players_mode_from_active_profile()
+        return True
+
     def get_mode_state(self, mode: str) -> Dict[str, dict]:
         return self._mode_states.get(mode, {})
 

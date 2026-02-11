@@ -23,7 +23,7 @@ TRANSLATIONS_DE = {
     "players.list_button": "Alle Spieler",
     "players.list_title": "Alle Spieler",
     "players.profile_label": "Roster:",
-    "players.profile_tooltip": "Zwischen 6 gespeicherten Spieler-Rostern wechseln. Text editieren, um das aktuelle Roster umzubenennen.",
+    "players.profile_tooltip": "Zwischen 6 gespeicherten Spieler-Rostern wechseln. Text editieren zum Umbenennen, Einträge in der Liste per Drag & Drop umsortieren.",
     # OCR-Import
     "ocr.tank_button": "OCR",
     "ocr.tank_button_tooltip": "Bildschirmbereich erfassen und erkannte Namen in Tank übernehmen.",

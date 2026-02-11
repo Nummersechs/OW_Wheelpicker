@@ -166,6 +166,29 @@ class TestStateStore(unittest.TestCase):
         self.assertEqual(len(profiles), 6)
         self.assertEqual(profiles[0]["name"], "Main Team")
 
+    def test_reorder_player_profiles_keeps_active_profile_data(self):
+        store = ModeStateStore.from_saved({})
+        self.assertTrue(store.set_active_player_profile(2))
+        wheels_c = {
+            "Tank": DummyWheel([{"name": "TankC", "active": True, "subroles": []}]),
+            "Damage": DummyWheel([{"name": "DpsC", "active": True, "subroles": []}]),
+            "Support": DummyWheel([{"name": "SupC", "active": True, "subroles": []}]),
+        }
+        store.capture_mode_from_wheels("players", wheels_c, hero_ban_active=False)
+        self.assertTrue(store.reorder_player_profiles([2, 0, 1, 3, 4, 5]))
+        self.assertEqual(store.get_active_player_profile_index(), 0)
+        players = store.get_mode_state("players")
+        self.assertEqual(players["Tank"]["entries"][0]["name"], "TankC")
+        self.assertEqual(players["Damage"]["entries"][0]["name"], "DpsC")
+        self.assertEqual(players["Support"]["entries"][0]["name"], "SupC")
+
+    def test_reorder_player_profiles_rejects_invalid_orders(self):
+        store = ModeStateStore.from_saved({})
+        self.assertFalse(store.reorder_player_profiles([0, 1]))  # wrong length
+        self.assertFalse(store.reorder_player_profiles([0, 1, 2, 3, 4, 6]))  # out of range
+        self.assertFalse(store.reorder_player_profiles([0, 1, 1, 3, 4, 5]))  # duplicate index
+        self.assertFalse(store.reorder_player_profiles([0, 1, 2, 3, 4, 5]))  # unchanged
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -26,6 +26,7 @@ from view.screen_region_selector import (
 )
 from view.wheel_view import WheelView
 from view.spin_mode_toggle import SpinModeToggle
+from view.profile_dropdown import PlayerProfileDropdown
 from controller.map_ui import MapUI
 from controller.map_mode import MapModeController
 from controller.open_queue import OpenQueueController
@@ -67,6 +68,7 @@ _FOCUS_ACTIVATION_EVENT_TYPES = (
     int(QtCore.QEvent.ActivationChange),
 )
 
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -89,7 +91,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._restoring_state = True   # während des Aufbaus nicht speichern
         self._player_profile_combo_syncing = False
-        self._player_profile_drop_button: QtWidgets.QToolButton | None = None
         self.current_mode = "players"  # immer mit Spieler-Auswahl starten
         self.last_non_hero_mode = "players"
         self.hero_ban_active = False
@@ -353,20 +354,15 @@ class MainWindow(QtWidgets.QMainWindow):
         mode_row = QtWidgets.QHBoxLayout()
         mode_row.setContentsMargins(8, 0, 8, 4)
         self.lbl_player_profile = QtWidgets.QLabel(i18n.t("players.profile_label"))
-        self.cmb_player_profile = QtWidgets.QComboBox()
-        self.cmb_player_profile.setEditable(True)
-        self.cmb_player_profile.setInsertPolicy(QtWidgets.QComboBox.NoInsert)
-        self.cmb_player_profile.setMaxVisibleItems(6)
-        self.cmb_player_profile.setMinimumWidth(220)
-        self.cmb_player_profile.setFixedHeight(34)
-        self.cmb_player_profile.installEventFilter(self)
-        self._ensure_player_profile_drop_button()
-        self.cmb_player_profile.currentIndexChanged.connect(self._on_player_profile_changed)
-        if self.cmb_player_profile.lineEdit():
-            self.cmb_player_profile.lineEdit().editingFinished.connect(self._on_player_profile_name_edited)
+        self.player_profile_dropdown = PlayerProfileDropdown()
+        self.player_profile_dropdown.setMinimumWidth(220)
+        self.player_profile_dropdown.setFixedHeight(34)
+        self.player_profile_dropdown.profileActivated.connect(self._on_player_profile_changed)
+        self.player_profile_dropdown.profileRenamed.connect(self._on_player_profile_name_edited)
+        self.player_profile_dropdown.orderChanged.connect(self._on_player_profile_reordered)
         self._refresh_player_profile_combo()
         mode_row.addWidget(self.lbl_player_profile)
-        mode_row.addWidget(self.cmb_player_profile)
+        mode_row.addWidget(self.player_profile_dropdown)
         mode_row.addSpacing(10)
         mode_row.addStretch(1)
         self.lbl_mode = QtWidgets.QLabel(i18n.t("label.mode"))
@@ -389,77 +385,16 @@ class MainWindow(QtWidgets.QMainWindow):
             hero_ban_active=False,
         )
 
-    def _build_profile_chevron_icon(self, color_hex: str) -> QtGui.QIcon:
-        size = 12
-        pm = QtGui.QPixmap(size, size)
-        pm.fill(QtCore.Qt.transparent)
-        painter = QtGui.QPainter(pm)
-        try:
-            painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
-            pen = QtGui.QPen(QtGui.QColor(color_hex))
-            pen.setWidth(2)
-            pen.setCapStyle(QtCore.Qt.RoundCap)
-            pen.setJoinStyle(QtCore.Qt.RoundJoin)
-            painter.setPen(pen)
-            painter.drawLine(2, 4, size // 2, 8)
-            painter.drawLine(size // 2, 8, size - 2, 4)
-        finally:
-            painter.end()
-        return QtGui.QIcon(pm)
-
-    def _position_player_profile_drop_button(self) -> None:
-        combo = getattr(self, "cmb_player_profile", None)
-        btn = self._player_profile_drop_button
-        if combo is None or btn is None:
-            return
-        drop_w = 30
-        x = max(0, combo.width() - drop_w - 1)
-        y = 1
-        h = max(10, combo.height() - 2)
-        btn.setGeometry(x, y, drop_w, h)
-        btn.raise_()
-
-    def _ensure_player_profile_drop_button(self) -> None:
-        if not hasattr(self, "cmb_player_profile"):
-            return
-        combo = self.cmb_player_profile
-        btn = self._player_profile_drop_button
-        if btn is None or btn.parent() is not combo:
-            btn = QtWidgets.QToolButton(combo)
-            btn.setAutoRaise(True)
-            btn.setFocusPolicy(QtCore.Qt.NoFocus)
-            btn.setCursor(QtCore.Qt.PointingHandCursor)
-            btn.clicked.connect(combo.showPopup)
-            btn.setStyleSheet("QToolButton { background: transparent; border: none; padding: 0px; }")
-            self._player_profile_drop_button = btn
-        btn.setToolTip(i18n.t("players.profile_tooltip"))
-        self._position_player_profile_drop_button()
-
-    def _update_player_profile_drop_button_icon(self, theme: theme_util.Theme) -> None:
-        self._ensure_player_profile_drop_button()
-        btn = self._player_profile_drop_button
-        if btn is None:
-            return
-        btn.setIcon(self._build_profile_chevron_icon(theme.text))
-        btn.setIconSize(QtCore.QSize(12, 12))
-        self._position_player_profile_drop_button()
-
     def _refresh_player_profile_combo(self) -> None:
-        if not hasattr(self, "cmb_player_profile"):
+        if not hasattr(self, "player_profile_dropdown"):
             return
         names = self._state_store.get_player_profile_names()
         idx = self._state_store.get_active_player_profile_index()
         self._player_profile_combo_syncing = True
-        combo = self.cmb_player_profile
-        prev_block = combo.blockSignals(True)
         try:
-            combo.clear()
-            combo.addItems(names)
-            if names:
-                combo.setCurrentIndex(max(0, min(len(names) - 1, idx)))
-            combo.setToolTip(i18n.t("players.profile_tooltip"))
+            self.player_profile_dropdown.set_profiles(names, idx)
+            self.player_profile_dropdown.set_dropdown_tooltip(i18n.t("players.profile_tooltip"))
         finally:
-            combo.blockSignals(prev_block)
             self._player_profile_combo_syncing = False
 
     def _on_player_profile_changed(self, index: int) -> None:
@@ -477,18 +412,34 @@ class MainWindow(QtWidgets.QMainWindow):
         if not getattr(self, "_restoring_state", False):
             self.state_sync.save_state(sync=False)
 
-    def _on_player_profile_name_edited(self) -> None:
+    def _on_player_profile_name_edited(self, index: int | None = None, name: str | None = None) -> None:
         if self._player_profile_combo_syncing:
             return
-        if not hasattr(self, "cmb_player_profile"):
+        if not hasattr(self, "player_profile_dropdown"):
             return
-        idx = self.cmb_player_profile.currentIndex()
+        idx = int(index) if isinstance(index, int) else self.player_profile_dropdown.current_profile_index()
         if idx < 0:
             return
-        changed = self._state_store.rename_player_profile(idx, self.cmb_player_profile.currentText())
+        label = name if isinstance(name, str) else self.player_profile_dropdown.current_profile_name()
+        changed = self._state_store.rename_player_profile(idx, label)
         self._refresh_player_profile_combo()
         if changed and not getattr(self, "_restoring_state", False):
             self.state_sync.save_state(sync=False)
+
+    def _on_player_profile_reordered(self, order: list[int] | None = None) -> None:
+        if self._player_profile_combo_syncing:
+            return
+        if not hasattr(self, "player_profile_dropdown"):
+            return
+        resolved = list(order) if isinstance(order, list) else self.player_profile_dropdown.current_order()
+        if not resolved:
+            return
+        changed = self._state_store.reorder_player_profiles(resolved)
+        if not changed:
+            return
+        self._refresh_player_profile_combo()
+        if not getattr(self, "_restoring_state", False):
+            self.state_sync.save_state(sync=False, immediate=True)
 
     def _build_role_container(self) -> QtWidgets.QWidget:
         # ----- Rolle/Grid-Container (Players/Heroes/Hero-Ban) -----
@@ -1525,15 +1476,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._pending_ocr_import = None
 
     def eventFilter(self, obj, event):
-        if obj is getattr(self, "cmb_player_profile", None):
-            et = int(event.type())
-            if et in (
-                int(QtCore.QEvent.Resize),
-                int(QtCore.QEvent.Move),
-                int(QtCore.QEvent.Show),
-                int(QtCore.QEvent.StyleChange),
-            ):
-                self._position_player_profile_drop_button()
         etype = event.type()
         etype_int = int(etype)
         if self._should_drop_post_choice_clickthrough_event(etype_int, obj):
@@ -2436,9 +2378,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_theme_button_label()
         if hasattr(self, "lbl_player_profile"):
             self.lbl_player_profile.setStyleSheet(f"color:{theme.muted_text}; font-size:13px; font-weight:600;")
-        if hasattr(self, "cmb_player_profile"):
-            style_helpers.style_profile_combo(self.cmb_player_profile, theme)
-            self._update_player_profile_drop_button_icon(theme)
+        if hasattr(self, "player_profile_dropdown"):
+            self.player_profile_dropdown.apply_theme(theme)
         if hasattr(self, "summary"):
             self.summary.setStyleSheet(f"font-size:15px; color:{theme.muted_text}; margin:10px 0 6px 0;")
         if hasattr(self, "btn_spin_all"):
@@ -3333,7 +3274,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.btn_language.setToolTip(tooltip)
         if hasattr(self, "lbl_player_profile"):
             self.lbl_player_profile.setText(i18n.t("players.profile_label"))
-        if hasattr(self, "cmb_player_profile"):
+        if hasattr(self, "player_profile_dropdown"):
             self._refresh_player_profile_combo()
         self.lbl_mode.setText(i18n.t("label.mode"))
         self.btn_mode_players.setText(i18n.t("mode.players"))
