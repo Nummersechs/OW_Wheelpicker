@@ -5,6 +5,10 @@ Hier kannst du das Verhalten und die Startdaten des Programms anpassen.
 
 # ---------- Logging/Debug ----------
 DEBUG = False
+# Master-Schalter für Release/EXE:
+# - unterdrückt Konsole/Qt-Logs (siehe main.py)
+# - deaktiviert zusätzlich alle internen Debug-/Trace-Logs
+# - Save-State bleibt davon unberührt
 QUIET = False
 TRACE_FLOW = True
 TRACE_SHUTDOWN = False
@@ -34,6 +38,15 @@ HOVER_WATCHDOG_INTERVAL_MS = 350
 HOVER_WATCHDOG_STALE_MS = 900
 HOVER_WATCHDOG_COOLDOWN_MS = 700
 HOVER_WATCHDOG_REQUIRE_MOVE_MS = 0
+
+# QUIET erzwingt "silent runtime" für alle Debug-/Trace-Kanäle.
+if QUIET:
+    DEBUG = False
+    TRACE_FLOW = False
+    TRACE_SHUTDOWN = False
+    TRACE_FOCUS = False
+    TRACE_HOVER = False
+    TRACE_CLEAR_ON_START = False
 
 # ---------- Performance / Resource policy ----------
 MAP_PREBUILD_ON_START = False
@@ -72,7 +85,7 @@ DEFAULT_LANGUAGE = "en"
 
 def debug_print(*args, **kwargs):
     """Wrapper um print, der nur aktiv ist, wenn DEBUG True ist."""
-    if DEBUG:
+    if DEBUG and not QUIET:
         print(*args, **kwargs)
 
 # ---------- UI / Animation ----------
