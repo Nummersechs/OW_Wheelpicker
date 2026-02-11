@@ -88,22 +88,23 @@ DEFAULT_NAMES = {
     "Support": ["blue", "Nummersechs", "Tillinski", "Internetwaffel"],
 }
 
-# Helden-Defaults nach Rolle (inkl. Vandetta)
+# Helden-Defaults nach Rolle (2026 Season 1)
 DEFAULT_HEROES = {
     "Tank": [
-        "D.Va", "Doomfist", "Hazard", "Junker Queen", "Mauga", "Orisa",
-        "Ramattra", "Reinhardt", "Roadhog", "Sigma", "Winston",
+        "D.Va", "Domina", "Doomfist", "Hazard", "Junker Queen", "Mauga",
+        "Orisa", "Ramattra", "Reinhardt", "Roadhog", "Sigma", "Winston",
         "Wrecking Ball", "Zarya",
     ],
     "Damage": [
-        "Ashe", "Bastion", "Cassidy", "Echo", "Genji",
-        "Hanzo", "Junkrat", "Mei", "Pharah", "Reaper",
-        "Sojourn", "Soldier: 76", "Sombra", "Symmetra", "Torbjorn",
-        "Tracer", "Vendetta", "Venture", "Widowmaker",
+        "Anran", "Ashe", "Bastion", "Cassidy", "Echo", "Emre", "Freja",
+        "Genji", "Hanzo", "Junkrat", "Mei", "Pharah", "Reaper", "Sojourn",
+        "Soldier: 76", "Sombra", "Symmetra", "Torbjorn", "Tracer",
+        "Vendetta", "Venture", "Widowmaker",
     ],
     "Support": [
-        "Ana", "Baptiste", "Brigitte", "Illari", "Juno", "Kiriko",
-        "Lifeweaver", "Lucio", "Mercy", "Moira", "Wuyang", "Zenyatta",
+        "Ana", "Baptiste", "Brigitte", "Illari", "Jetpack Cat", "Juno",
+        "Kiriko", "Lifeweaver", "Lucio", "Mercy", "Mizuki", "Moira",
+        "Wuyang", "Zenyatta",
     ],
 }
 # Added label box config
