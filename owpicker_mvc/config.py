@@ -82,6 +82,16 @@ MAX_DURATION_MS = 10000
 DEFAULT_DURATION_MS = 3000
 
 # ---------- Startdaten ----------
+PLAYER_PROFILE_MAX_SLOTS = 6
+PLAYER_PROFILE_DEFAULT_NAMES = [
+    "Main Roster",
+    "PUGs",
+    "Roster 3",
+    "Roster 4",
+    "Roster 5",
+    "Roster 6",
+]
+
 DEFAULT_NAMES = {
     "Tank": ["Grymllon", "SpB"],
     "Damage": ["CoMaE", "DenMuchel", "Massith", "Pledoras"],

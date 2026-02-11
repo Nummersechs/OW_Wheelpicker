@@ -125,6 +125,47 @@ class TestStateStore(unittest.TestCase):
         self.assertTrue(heroes["Tank"]["use_subroles"])
         self.assertEqual(heroes["Tank"]["entries"][0]["name"], "Rein")
 
+    def test_player_profiles_default_to_six_slots(self):
+        store = ModeStateStore.from_saved({})
+        names = store.get_player_profile_names()
+        self.assertEqual(len(names), 6)
+        self.assertEqual(store.get_active_player_profile_index(), 0)
+        self.assertTrue(store.set_active_player_profile(1))
+        players = store.get_mode_state("players")
+        self.assertEqual(players["Tank"]["entries"], [])
+        self.assertEqual(players["Damage"]["entries"], [])
+        self.assertEqual(players["Support"]["entries"], [])
+
+    def test_player_profile_switch_keeps_independent_player_lists(self):
+        store = ModeStateStore.from_saved({})
+        wheels_a = {
+            "Tank": DummyWheel([{"name": "TankA", "active": True, "subroles": []}]),
+            "Damage": DummyWheel([{"name": "DpsA", "active": True, "subroles": []}]),
+            "Support": DummyWheel([{"name": "SupA", "active": True, "subroles": []}]),
+        }
+        store.capture_mode_from_wheels("players", wheels_a, hero_ban_active=False)
+        self.assertTrue(store.set_active_player_profile(1))
+        wheels_b = {
+            "Tank": DummyWheel([{"name": "TankB", "active": True, "subroles": []}]),
+            "Damage": DummyWheel([{"name": "DpsB", "active": True, "subroles": []}]),
+            "Support": DummyWheel([{"name": "SupB", "active": True, "subroles": []}]),
+        }
+        store.capture_mode_from_wheels("players", wheels_b, hero_ban_active=False)
+        self.assertTrue(store.set_active_player_profile(0))
+        players = store.get_mode_state("players")
+        self.assertEqual(players["Tank"]["entries"][0]["name"], "TankA")
+        self.assertEqual(players["Damage"]["entries"][0]["name"], "DpsA")
+        self.assertEqual(players["Support"]["entries"][0]["name"], "SupA")
+
+    def test_to_saved_contains_player_profiles(self):
+        store = ModeStateStore.from_saved({})
+        store.rename_player_profile(0, "Main Team")
+        saved = store.to_saved(volume=42)
+        self.assertIn("player_profiles", saved)
+        profiles = saved["player_profiles"]["profiles"]
+        self.assertEqual(len(profiles), 6)
+        self.assertEqual(profiles[0]["name"], "Main Team")
+
 
 if __name__ == "__main__":
     unittest.main()

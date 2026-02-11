@@ -22,6 +22,8 @@ TRANSLATIONS_EN = {
     # Player list
     "players.list_button": "All players",
     "players.list_title": "All players",
+    "players.profile_label": "Roster:",
+    "players.profile_tooltip": "Switch between 6 saved player rosters. Edit the text to rename the current roster.",
     # OCR import
     "ocr.tank_button": "OCR",
     "ocr.tank_button_tooltip": "Capture a screen area and import recognized names into Tank.",
