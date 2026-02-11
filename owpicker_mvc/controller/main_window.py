@@ -1085,23 +1085,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _ocr_distribution_role_keys(self) -> tuple[str, ...]:
         return ("tank", "dps", "support")
 
-    def _collect_new_ocr_names_for_distribution(self, names: list[str]) -> list[str]:
-        role_keys = self._ocr_distribution_role_keys()
-        existing_by_role: dict[str, set[str]] = {}
-        for role_key in role_keys:
-            wheel = self._target_wheel_for_ocr_role(role_key)
-            role_existing: set[str] = set()
-            if wheel is not None and hasattr(wheel, "get_current_names"):
-                try:
-                    for current_name in wheel.get_current_names():
-                        key = normalize_ocr_name_key(current_name)
-                        if key:
-                            role_existing.add(key)
-                except Exception:
-                    role_existing = set()
-            existing_by_role[role_key] = role_existing
-
-        new_names: list[str] = []
+    def _normalize_ocr_candidate_names(self, names: list[str]) -> list[str]:
+        normalized: list[str] = []
         seen_keys: set[str] = set()
         for raw in names or []:
             name = str(raw or "").strip()
@@ -1111,10 +1096,8 @@ class MainWindow(QtWidgets.QMainWindow):
             if not key or key in seen_keys:
                 continue
             seen_keys.add(key)
-            if all(key in existing_by_role.get(role_key, set()) for role_key in role_keys):
-                continue
-            new_names.append(name)
-        return new_names
+            normalized.append(name)
+        return normalized
 
     def _request_ocr_import_selection(self, role_key: str, names: list[str]) -> bool:
         overlay = getattr(self, "overlay", None)
@@ -2838,23 +2821,23 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
                 return
 
-            new_names = self._collect_new_ocr_names_for_distribution(names)
-            if not new_names:
+            candidate_names = self._normalize_ocr_candidate_names(names)
+            if not candidate_names:
                 QtWidgets.QMessageBox.information(
                     self,
                     i18n.t("ocr.result_title"),
-                    i18n.t("ocr.result_duplicates_only_distributed", total=len(names)),
+                    i18n.t("ocr.result_no_names"),
                 )
                 return
-            if self._request_ocr_import_selection(role, new_names):
+            if self._request_ocr_import_selection(role, candidate_names):
                 return
 
             # Fallback if overlay is not available.
-            fallback_entries = [{"name": name, "subroles": [], "active": True} for name in new_names]
+            fallback_entries = [{"name": name, "subroles": [], "active": True} for name in candidate_names]
             added, added_counts = self._add_ocr_entries_distributed(fallback_entries)
             self._show_ocr_import_result_distributed(
                 added=added,
-                total=len(new_names),
+                total=len(candidate_names),
                 counts=added_counts,
             )
         except Exception as exc:
