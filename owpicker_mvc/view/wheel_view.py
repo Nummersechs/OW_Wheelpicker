@@ -760,7 +760,8 @@ class WheelView(BasePanel):
                 self.wheel.set_names([])
             self._rebuild_disabled_indices([], [])
         else:
-            if new_names != old_names:
+            current_wheel_names = list(getattr(self.wheel, "names", []))
+            if new_names != old_names or new_names != current_wheel_names:
                 self.wheel.set_names(new_names)
                 self._rebuild_disabled_indices(old_names, new_names)
         self._refresh_disabled_indices()
