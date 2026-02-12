@@ -43,6 +43,8 @@
 ### `controller/`
 
 - `main_window.py`: central UI composition and signal wiring.
+- `main_window_ocr.py`: extracted OCR import workflow (selection, role/subrole mapping, distribution, replace/add flows).
+- `main_window_input.py`: extracted event-filter/input-guard/focus-hover tracing helpers.
 - `spin_service.py`: spin-all/spin-single/open-queue execution flow.
 - `mode_manager.py`, `role_mode.py`: mode switching and hero-ban/role logic.
 - `map_ui.py`, `map_mode.py`: encapsulated map UI and map mode controller logic.
