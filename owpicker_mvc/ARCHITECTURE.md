@@ -14,7 +14,7 @@
 1. `main.py`
    - optionally enables quiet mode (`config.QUIET`),
    - creates `QApplication`,
-   - starts `controller.MainWindow`.
+   - starts `controller.main_window.MainWindow`.
 2. `controller/main_window.py`
    - builds header, mode switcher, wheel/map area, overlay, and controls,
    - initializes helper controllers (`StateSyncController`, `MapModeController`, `OpenQueueController`, ...),
@@ -56,7 +56,6 @@
 
 - `role_keys.py`: canonical role order and mapping helpers.
 - `wheel_state.py`: UI-agnostic wheel state (effective names, disabled labels, pair parsing).
-- `roles.py`: older role model (partially legacy).
 
 ### `logic/`
 

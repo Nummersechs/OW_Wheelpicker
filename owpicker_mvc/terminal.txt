@@ -22,18 +22,19 @@ copy "C:\Program Files\Tesseract-OCR\tessdata\eng.traineddata" owpicker_mvc\OCR\
 # Onefile build (optimized spec, smaller than collect-all)
 pyinstaller --noconfirm --clean owpicker_mvc/OverwatchWheels.spec
 
-# Smaller build while keeping sound (QtMultimedia remains enabled):
+# Smaller release build while keeping sound (QtMultimedia remains enabled):
 # - prunes unneeded Qt runtime blocks (QML/WebEngine/etc)
 # - keeps Spin/Ding assets and QSoundEffect
-# - bundles OCR engine from owpicker_mvc/OCR/ (if present)
-#   expected layout example:
-#   owpicker_mvc/OCR/tesseract.exe
-#   owpicker_mvc/OCR/*.dll
-#   owpicker_mvc/OCR/tessdata/*.traineddata
-set OW_BUILD_PROFILE=full
+# - bundles OCR in minimal mode (exe + dlls + selected langs)
+set OW_BUILD_PROFILE=release
 set OW_PRUNE_QT=1
 set OW_INCLUDE_REQUESTS=1
 set OW_INCLUDE_OCR_BUNDLE=1
+set OW_OCR_BUNDLE_MODE=minimal
+set OW_OCR_LANGS=deu+eng
+set OW_OCR_INCLUDE_OSD=1
+# optional override (release profile already defaults strip=1)
+set OW_STRIP=1
 pyinstaller --noconfirm --clean owpicker_mvc/OverwatchWheels.spec
 
 # Minimal-size profile:

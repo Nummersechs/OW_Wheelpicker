@@ -1213,7 +1213,6 @@ class MainWindow(QtWidgets.QMainWindow):
     ) -> tuple[
         list[str],
         dict[str, str],
-        dict[str, tuple[str, str]],
         dict[str, str],
         str,
     ]:
@@ -1227,7 +1226,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 i18n.t("ocr.assign_flex"),
             ]
             assignment_mapping: dict[str, str] = {}
-            subrole_mapping: dict[str, tuple[str, str]] = {}
             subrole_code_mapping: dict[str, str] = {}
             role_codes = self._ocr_distribution_role_keys()
             for idx, role in enumerate(role_codes):
@@ -1244,11 +1242,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 subrole_code_mapping[main_label_key] = "main"
             if flex_label_key:
                 subrole_code_mapping[flex_label_key] = "flex"
-            return labels, assignment_mapping, subrole_mapping, subrole_code_mapping, "ocr.pick_hint_all_roles"
+            return labels, assignment_mapping, subrole_code_mapping, "ocr.pick_hint_all_roles"
 
         labels: list[str] = []
         assignment_mapping = {}
-        subrole_mapping: dict[str, tuple[str, str]] = {}
         subrole_code_mapping: dict[str, str] = {}
         for subrole in self._ocr_subrole_labels_for_role(key):
             labels.append(subrole)
@@ -1256,8 +1253,7 @@ class MainWindow(QtWidgets.QMainWindow):
             if not norm_label:
                 continue
             assignment_mapping[norm_label] = key
-            subrole_mapping[norm_label] = (key, subrole)
-        return labels, assignment_mapping, subrole_mapping, subrole_code_mapping, "ocr.pick_hint"
+        return labels, assignment_mapping, subrole_code_mapping, "ocr.pick_hint"
 
     def _normalize_ocr_candidate_names(self, names: list[str]) -> list[str]:
         normalized: list[str] = []
@@ -1284,7 +1280,6 @@ class MainWindow(QtWidgets.QMainWindow):
         (
             option_labels,
             option_assignment_by_label_key,
-            option_subrole_by_label_key,
             option_subrole_code_by_label_key,
             hint_key,
         ) = self._ocr_assignment_options(normalized_role_key)
@@ -1296,7 +1291,6 @@ class MainWindow(QtWidgets.QMainWindow):
             candidates=list(display_names),
             option_labels=list(option_labels),
             option_assignment_by_label_key=dict(option_assignment_by_label_key),
-            option_subrole_by_label_key=dict(option_subrole_by_label_key),
             option_subrole_code_by_label_key=dict(option_subrole_code_by_label_key),
             hint_key=hint_key,
             hint_kwargs=hint_kwargs,
@@ -1318,28 +1312,25 @@ class MainWindow(QtWidgets.QMainWindow):
         pending: PendingOCRImport,
         selected_payload,
     ) -> list[dict]:
+        pending_role_key = str(pending.role_key or "").strip().casefold()
         allowed_assignments = {
             str(k).strip().casefold(): str(v).strip().casefold()
-            for k, v in (getattr(pending, "option_assignment_by_label_key", {}) or {}).items()
+            for k, v in (pending.option_assignment_by_label_key or {}).items()
             if str(k).strip() and str(v).strip()
         }
-        allowed_subrole_options = {
-            str(k).strip().casefold(): (
-                str(v[0]).strip().casefold(),
-                str(v[1]).strip(),
-            )
-            for k, v in (getattr(pending, "option_subrole_by_label_key", {}) or {}).items()
-            if (
-                str(k).strip()
-                and isinstance(v, (list, tuple))
-                and len(v) >= 2
-                and str(v[0]).strip()
-                and str(v[1]).strip()
-            )
-        }
+        allowed_subrole_options: dict[str, tuple[str, str]] = {}
+        if pending_role_key != "all":
+            for label in pending.option_labels or []:
+                subrole = str(label or "").strip()
+                if not subrole:
+                    continue
+                label_key = normalize_ocr_name_key(subrole)
+                if not label_key:
+                    continue
+                allowed_subrole_options[label_key] = (pending_role_key, subrole)
         allowed_subrole_codes = {
             str(k).strip().casefold(): str(v).strip().casefold()
-            for k, v in (getattr(pending, "option_subrole_code_by_label_key", {}) or {}).items()
+            for k, v in (pending.option_subrole_code_by_label_key or {}).items()
             if str(k).strip() and str(v).strip()
         }
         role_codes = self._ocr_distribution_role_keys()

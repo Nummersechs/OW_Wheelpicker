@@ -81,7 +81,6 @@ class TestMainWindowOCRImport(unittest.TestCase):
                 "dps": "dps",
                 "support": "support",
             },
-            option_subrole_by_label_key={},
             option_subrole_code_by_label_key={
                 "main": "main",
                 "flex": "flex",
@@ -187,7 +186,7 @@ class TestMainWindowOCRImport(unittest.TestCase):
 
     def test_all_role_assignment_options_provide_exact_five_checkboxes(self):
         mw = self._make_window()
-        labels, assignment_map, _subrole_map, subrole_code_map, hint_key = MainWindow._ocr_assignment_options(mw, "all")
+        labels, assignment_map, subrole_code_map, hint_key = MainWindow._ocr_assignment_options(mw, "all")
         self.assertEqual(labels, ["Tank", "DPS", "Support", "Main", "Flex"])
         self.assertEqual(hint_key, "ocr.pick_hint_all_roles")
         self.assertEqual(

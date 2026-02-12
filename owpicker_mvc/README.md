@@ -42,10 +42,28 @@ If you want OCR to work in the Windows EXE without requiring users to install Te
 1. Use one bundle source:
    Local portable bundle under `owpicker_mvc/OCR/` (for example `tesseract.exe`, runtime DLLs, and `tessdata/*.traineddata`), or the Windows install folder (auto-detected): `C:\Program Files\Tesseract-OCR` (and x86 variant).  
    Optional explicit override: set `OW_TESSERACT_DIR` (or `TESSERACT_ROOT`) to your Tesseract folder.
-2. Build with `OW_INCLUDE_OCR_BUNDLE=1` (enabled by default in the provided commands).
-3. Verify build output contains lines like:
+2. Build with OCR bundling enabled (`OW_INCLUDE_OCR_BUNDLE=1`) and choose a mode:
+   - `OW_OCR_BUNDLE_MODE=minimal` (default): bundle only `tesseract(.exe)`, required runtime libraries, and requested language packs.
+   - `OW_OCR_BUNDLE_MODE=full`: bundle the full OCR folder as-is.
+3. For minimal mode, set language packs explicitly, e.g. `OW_OCR_LANGS=deu+eng` (optional `OW_OCR_INCLUDE_OSD=1`).
+4. For smaller release builds, use `OW_BUILD_PROFILE=release` (strip defaults to on) or explicitly set `OW_STRIP=1`.
+5. Verify build output contains lines like:
    - `[spec] OCR bundle files: ...`
    - `[spec] OCR languages: deu.traineddata, eng.traineddata`
+   - `[spec] Build profile=... | strip=...`
+
+Example (Windows CMD):
+
+```cmd
+set OW_BUILD_PROFILE=release
+set OW_PRUNE_QT=1
+set OW_INCLUDE_REQUESTS=1
+set OW_INCLUDE_OCR_BUNDLE=1
+set OW_OCR_BUNDLE_MODE=minimal
+set OW_OCR_LANGS=deu+eng
+set OW_OCR_INCLUDE_OSD=1
+pyinstaller --noconfirm --clean owpicker_mvc/OverwatchWheels.spec
+```
 
 At runtime `OCR_TESSERACT_CMD = "auto"` prefers bundled Tesseract in the EXE unpack directory and only falls back to PATH.
 During OCR region selection, the main window is hidden by default (`OCR_HIDE_MAIN_WINDOW_FOR_CAPTURE = True`).

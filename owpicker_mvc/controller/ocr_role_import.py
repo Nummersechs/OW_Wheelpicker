@@ -11,7 +11,6 @@ class PendingOCRImport:
     candidates: list[str]
     option_labels: list[str] = field(default_factory=list)
     option_assignment_by_label_key: dict[str, str] = field(default_factory=dict)
-    option_subrole_by_label_key: dict[str, tuple[str, str]] = field(default_factory=dict)
     option_subrole_code_by_label_key: dict[str, str] = field(default_factory=dict)
     hint_key: str = "ocr.pick_hint"
     hint_kwargs: dict[str, str] = field(default_factory=dict)

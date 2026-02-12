@@ -8,7 +8,7 @@ import time
 from PySide6 import QtCore, QtGui, QtWidgets
 
 import i18n
-from controller import ocr_import
+from . import ocr_import
 from utils import qt_runtime
 from view.screen_region_selector import (
     select_region_from_primary_screen,

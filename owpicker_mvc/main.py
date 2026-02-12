@@ -25,11 +25,11 @@ def main():
     _apply_quiet_mode()
 
     from PySide6 import QtWidgets  # nach Quiet-Setup laden
-    from controller import MainWindow
-    from utils import qt_runtime
+    from controller.main_window import MainWindow
+    from utils.qt_runtime import apply_preferred_app_font
 
     app = QtWidgets.QApplication([])
-    qt_runtime.apply_preferred_app_font(app)
+    apply_preferred_app_font(app)
     win = MainWindow()
     win.show()
     app.exec()
