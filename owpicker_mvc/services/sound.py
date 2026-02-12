@@ -1,10 +1,16 @@
+from __future__ import annotations
+
 from PySide6 import QtCore, QtWidgets
-from typing import Callable
-from PySide6.QtMultimedia import QSoundEffect
+from typing import Callable, Any
 from PySide6.QtCore import QUrl
 from pathlib import Path
 import random, math, tempfile, wave
 import config
+
+try:
+    from PySide6.QtMultimedia import QSoundEffect  # type: ignore
+except Exception:
+    QSoundEffect = None  # type: ignore[assignment]
 
 AUDIO_EXTENSIONS = {".wav", ".ogg", ".mp3"}
 
@@ -21,18 +27,18 @@ class SoundManager:
         Wenn die Ordner leer sind oder nicht existieren, wird
         optional auf spin.wav / ding.wav im base_dir zurückgefallen.
         """
-        self.spin_effects: dict[Path, QSoundEffect] = {}
-        self.ding_effects: dict[Path, QSoundEffect] = {}
+        self.spin_effects: dict[Path, Any] = {}
+        self.ding_effects: dict[Path, Any] = {}
         self.spin_sources: list[Path] = []
         self.ding_sources: list[Path] = []
         self.master_volume: float = 1.0
         self.spin_base_volume = 0.35
         self.ding_base_volume = 0.7
         self.preview_base_volume = 0.35
-        self.preview_effect: QSoundEffect | None = None
+        self.preview_effect: Any | None = None
         self._preview_tmp_path: Path | None = None
         self._warmup_timer: QtCore.QTimer | None = None
-        self._warmup_items: list[tuple[Path, dict[Path, QSoundEffect], float]] = []
+        self._warmup_items: list[tuple[Path, dict[Path, Any], float]] = []
         self._warmup_done_callbacks: list[Callable[[], None]] = []
         self._lazy_warmup_started = False
 
@@ -81,13 +87,15 @@ class SoundManager:
 
     def _get_or_create_effect(
         self,
-        cache: dict[Path, QSoundEffect],
+        cache: dict[Path, Any],
         path: Path,
         base_volume: float,
-    ) -> QSoundEffect:
+    ) -> Any:
         eff = cache.get(path)
         if eff:
             return eff
+        if QSoundEffect is None:
+            raise RuntimeError("QtMultimedia unavailable")
         eff = QSoundEffect()
         eff.setSource(QUrl.fromLocalFile(str(path)))
         eff.setLoopCount(1)
@@ -104,7 +112,7 @@ class SoundManager:
         """Warm up sounds incrementally to avoid blocking the UI thread."""
         if on_done is not None:
             self._warmup_done_callbacks.append(on_done)
-        items: list[tuple[Path, dict[Path, QSoundEffect], float]] = []
+        items: list[tuple[Path, dict[Path, Any], float]] = []
         items.extend([(p, self.spin_effects, self.spin_base_volume) for p in self.spin_sources])
         items.extend([(p, self.ding_effects, self.ding_base_volume) for p in self.ding_sources])
         if not items:
@@ -204,6 +212,7 @@ class SoundManager:
             except Exception:
                 preview_tmp_exists = False
         return {
+            "qt_multimedia_available": bool(QSoundEffect is not None),
             "spin_sources": len(self.spin_sources),
             "ding_sources": len(self.ding_sources),
             "spin_effects": len(self.spin_effects),
@@ -295,19 +304,21 @@ class SoundManager:
         except Exception:
             QtWidgets.QApplication.beep()
 
-    def _play_effect(self, eff: QSoundEffect):
+    def _play_effect(self, eff: Any):
         try:
             eff.stop()
             eff.play()
         except Exception:
             QtWidgets.QApplication.beep()
 
-    def _create_preview_effect(self) -> QSoundEffect | None:
+    def _create_preview_effect(self) -> Any | None:
         """
         Erzeugt einen kurzen synthetischen Ton als WAV im Temp-Ordner,
         mit moderater Lautstärke (nicht lauter als die Standard-WAVs).
         """
         try:
+            if QSoundEffect is None:
+                return None
             # Clean up any previous preview temp file to avoid leaks across runs.
             self._cleanup_preview_file()
             sr = 44100

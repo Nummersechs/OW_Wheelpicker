@@ -7,5 +7,19 @@ pip install PySide6 pyinstaller
 # Onefile build (optimized spec, smaller than collect-all)
 pyinstaller --noconfirm --clean owpicker_mvc/OverwatchWheels.spec
 
+# Smaller build while keeping sound (QtMultimedia remains enabled):
+# - prunes unneeded Qt runtime blocks (QML/WebEngine/etc)
+# - keeps Spin/Ding assets and QSoundEffect
+set OW_BUILD_PROFILE=full
+set OW_PRUNE_QT=1
+set OW_INCLUDE_REQUESTS=1
+pyinstaller --noconfirm --clean owpicker_mvc/OverwatchWheels.spec
+
+# Minimal-size profile:
+# - excludes QtMultimedia from bundle
+# - does not embed Spin/Ding assets (falls back to QApplication.beep())
+set OW_BUILD_PROFILE=minsize
+pyinstaller --noconfirm --clean owpicker_mvc/OverwatchWheels.spec
+
 # Optional: install UPX for more compression (faster download, slower build)
 # pyinstaller --noconfirm --clean --upx-dir C:\path\to\upx owpicker_mvc/OverwatchWheels.spec

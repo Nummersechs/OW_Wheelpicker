@@ -243,7 +243,7 @@ class TestStateSyncController(unittest.TestCase):
         try:
             self.assertIsNone(controller._executor)
             with (
-                patch("controller.state_sync.requests", None),
+                patch.object(controller, "_get_requests_module", return_value=None),
                 patch.object(controller, "_ensure_executor", wraps=controller._ensure_executor) as ensure_mock,
             ):
                 controller._post_json_async(

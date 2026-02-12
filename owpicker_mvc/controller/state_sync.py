@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
+import importlib
 import json
 import threading
 from typing import Any, Dict, List
@@ -10,11 +11,6 @@ from PySide6 import QtCore
 
 import config
 from model.role_keys import role_wheel_map
-
-try:
-    import requests  # type: ignore
-except Exception:
-    requests = None  # type: ignore
 
 
 class StateSyncController(QtCore.QObject):
@@ -47,6 +43,8 @@ class StateSyncController(QtCore.QObject):
         self._pending_sync_payload: list[dict] | None = None
         self._pending_sync_dirty = False
         self._last_synced_roles_signature: str | None = None
+        self._requests_checked = False
+        self._requests_module: Any | None = None
         self._sync_timer = QtCore.QTimer(self)
         self._sync_timer.setSingleShot(True)
         self._sync_timer.timeout.connect(self._flush_role_sync)
@@ -229,6 +227,16 @@ class StateSyncController(QtCore.QObject):
         )
         return self._executor
 
+    def _get_requests_module(self) -> Any | None:
+        if self._requests_checked:
+            return self._requests_module
+        self._requests_checked = True
+        try:
+            self._requests_module = importlib.import_module("requests")
+        except Exception:
+            self._requests_module = None
+        return self._requests_module
+
     def send_spin_result(self, tank: str, damage: str, support: str) -> None:
         if self._closed:
             return
@@ -303,11 +311,12 @@ class StateSyncController(QtCore.QObject):
         missing_requests_log: str,
     ) -> None:
         """Post JSON payload in a daemon thread."""
+        requests_module = self._get_requests_module()
 
         def _worker() -> None:
             with self._network_threads_lock:
                 self._network_threads_active += 1
-            if requests is None:
+            if requests_module is None:
                 try:
                     config.debug_print(missing_requests_log)
                 finally:
@@ -318,7 +327,7 @@ class StateSyncController(QtCore.QObject):
                 base = str(self._cfg("API_BASE_URL", config.API_BASE_URL))
                 url = base.rstrip("/") + endpoint
                 config.debug_print(payload_log, payload)
-                resp = requests.post(url, json=payload, timeout=3)
+                resp = requests_module.post(url, json=payload, timeout=3)
                 resp.raise_for_status()
                 config.debug_print(success_log, resp.json())
             except Exception as e:
@@ -329,7 +338,7 @@ class StateSyncController(QtCore.QObject):
 
         if self._closed:
             return
-        if requests is None:
+        if requests_module is None:
             config.debug_print(missing_requests_log)
             return
         executor = self._ensure_executor()
