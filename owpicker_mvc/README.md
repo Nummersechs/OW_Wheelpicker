@@ -46,6 +46,7 @@ If you want OCR to work in the Windows EXE without requiring users to install Te
    - `[spec] OCR languages: deu.traineddata, eng.traineddata`
 
 At runtime `OCR_TESSERACT_CMD = "auto"` prefers bundled Tesseract in the EXE unpack directory and only falls back to PATH.
+During OCR region selection, the main window is hidden by default (`OCR_HIDE_MAIN_WINDOW_FOR_CAPTURE = True`).
 
 ## Structure (short)
 

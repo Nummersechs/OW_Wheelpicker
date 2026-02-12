@@ -16,13 +16,38 @@ from view.screen_region_selector import (
 )
 
 
+def _capture_region_with_qt_selector(mw) -> tuple[QtGui.QPixmap | None, str | None]:
+    hide_for_capture = bool(mw._cfg("OCR_HIDE_MAIN_WINDOW_FOR_CAPTURE", True))
+    was_visible = mw.isVisible()
+    was_minimized = mw.isMinimized()
+
+    if hide_for_capture and was_visible:
+        mw.hide()
+        QtWidgets.QApplication.processEvents()
+        delay_ms = max(0, int(mw._cfg("OCR_CAPTURE_PREPARE_DELAY_MS", 120)))
+        if delay_ms > 0:
+            time.sleep(delay_ms / 1000.0)
+
+    try:
+        return select_region_from_primary_screen(
+            hint_text=i18n.t("ocr.select_hint"),
+            parent=None if (hide_for_capture and was_visible) else mw,
+        )
+    finally:
+        if hide_for_capture and was_visible and not getattr(mw, "_closing", False):
+            if was_minimized:
+                mw.showMinimized()
+            else:
+                mw.show()
+                qt_runtime.safe_raise(mw)
+                qt_runtime.safe_activate_window(mw)
+            QtWidgets.QApplication.processEvents()
+
+
 def capture_region_for_ocr(mw) -> tuple[QtGui.QPixmap | None, str | None]:
     use_native_mac_capture = bool(mw._cfg("OCR_USE_NATIVE_MAC_CAPTURE", True)) and sys.platform == "darwin"
     if not use_native_mac_capture:
-        return select_region_from_primary_screen(
-            hint_text=i18n.t("ocr.select_hint"),
-            parent=mw,
-        )
+        return _capture_region_with_qt_selector(mw)
 
     QtWidgets.QMessageBox.information(
         mw,
@@ -63,10 +88,7 @@ def capture_region_for_ocr(mw) -> tuple[QtGui.QPixmap | None, str | None]:
             QtWidgets.QApplication.processEvents()
 
     if selected_pixmap is None and select_error == "screencapture-not-found":
-        return select_region_from_primary_screen(
-            hint_text=i18n.t("ocr.select_hint"),
-            parent=mw,
-        )
+        return _capture_region_with_qt_selector(mw)
     return selected_pixmap, select_error
 
 
