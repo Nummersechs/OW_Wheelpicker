@@ -120,6 +120,33 @@ class TestOpenQueueController(unittest.TestCase):
         ctrl.clear_preview()
         self.assertEqual(mw.tank._override_entries, [{"name": "External", "subroles": [], "active": True}])
 
+    def test_clear_preview_force_restores_even_after_external_change(self):
+        mw = DummyMW()
+        ctrl = OpenQueueController(mw)
+        base_override = [{"name": "Base", "subroles": [], "active": True}]
+        mw.tank._override_entries = base_override
+        ctrl.apply_preview(["Ana"])
+        self.assertNotEqual(mw.tank._override_entries, base_override)
+
+        mw.tank._override_entries = [{"name": "External", "subroles": [], "active": True}]
+        ctrl.clear_preview(force=True)
+
+        self.assertEqual(mw.tank._override_entries, base_override)
+
+    def test_apply_preview_when_mode_inactive_forces_restore(self):
+        mw = DummyMW()
+        ctrl = OpenQueueController(mw)
+        base_override = [{"name": "Base", "subroles": [], "active": True}]
+        mw.tank._override_entries = base_override
+        ctrl.apply_preview(["Ana"])
+        self.assertNotEqual(mw.tank._override_entries, base_override)
+
+        mw.tank._override_entries = [{"name": "External", "subroles": [], "active": True}]
+        mw.spin_mode_toggle = DummyToggle(0)
+        ctrl.apply_preview(["Ana"])
+
+        self.assertEqual(mw.tank._override_entries, base_override)
+
     def test_begin_and_restore_spin_overrides_roundtrip(self):
         mw = DummyMW()
         mw.tank._override_entries = [{"name": "Base", "subroles": [], "active": True}]
@@ -139,6 +166,28 @@ class TestOpenQueueController(unittest.TestCase):
         self.assertFalse(ctrl.spin_active())
         self.assertEqual(mw.tank._override_entries, [{"name": "Base", "subroles": [], "active": True}])
         self.assertEqual(mw.tank._disabled_indices, {2})
+
+    def test_restore_spin_overrides_clears_preview_when_mode_disabled_mid_spin(self):
+        mw = DummyMW()
+        ctrl = OpenQueueController(mw)
+        ctrl.apply_preview(["Ana", "Bap", "Cass"])
+        self.assertIsNotNone(mw.tank._override_entries)
+
+        ctrl.begin_spin_override(
+            {
+                mw.tank: [{"name": "Spin", "subroles": [], "active": True}],
+                mw.dps: [{"name": "Spin2", "subroles": [], "active": True}],
+            }
+        )
+        self.assertTrue(ctrl.spin_active())
+
+        # User switched back to role mode while spin was running.
+        mw.spin_mode_toggle = DummyToggle(0)
+        ctrl.restore_spin_overrides()
+
+        self.assertFalse(ctrl.spin_active())
+        self.assertIsNone(mw.tank._override_entries)
+        self.assertIsNone(mw.dps._override_entries)
 
 
 if __name__ == "__main__":

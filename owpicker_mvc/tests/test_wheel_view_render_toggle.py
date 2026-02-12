@@ -30,6 +30,37 @@ class TestWheelViewRenderToggle(unittest.TestCase):
         self.assertEqual(list(getattr(wheel.wheel, "names", [])), ["Alpha", "Beta", "Gamma"])
         wheel.close()
 
+    def test_override_clear_restores_base_names_after_load_entries(self):
+        wheel = WheelView("Test", ["A", "B", "C"])
+        QtWidgets.QApplication.processEvents()
+
+        wheel.load_entries(
+            [
+                {"name": "A", "subroles": [], "active": True},
+                {"name": "B", "subroles": [], "active": True},
+                {"name": "C", "subroles": [], "active": True},
+            ],
+            pair_mode=False,
+            include_in_all=True,
+            use_subroles=False,
+        )
+        QtWidgets.QApplication.processEvents()
+        self.assertEqual(list(getattr(wheel.wheel, "names", [])), ["A", "B", "C"])
+
+        wheel.set_override_entries(
+            [
+                {"name": "X", "subroles": [], "active": True},
+                {"name": "Y", "subroles": [], "active": True},
+            ]
+        )
+        QtWidgets.QApplication.processEvents()
+        self.assertEqual(list(getattr(wheel.wheel, "names", [])), ["X", "Y"])
+
+        wheel.set_override_entries(None)
+        QtWidgets.QApplication.processEvents()
+        self.assertEqual(list(getattr(wheel.wheel, "names", [])), ["A", "B", "C"])
+        wheel.close()
+
 
 if __name__ == "__main__":
     unittest.main()

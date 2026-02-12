@@ -772,6 +772,10 @@ class WheelView(BasePanel):
         """Wendet die Override-Liste auf das Rad an, ohne die sichtbare Liste zu ändern."""
         if self._wheel_state.override_entries is None:
             # Zurück zum normalen Rendering basierend auf der Liste
+            # Force rebuild after override removal: load_entries() already updated
+            # the signature in non-override mode, so an unchanged signature would
+            # otherwise skip restoring wheel names from the base list.
+            self._last_entries_signature = None
             self._apply_names_list_changes()
             return
         names = self._effective_names_from(self._wheel_state.override_entries, include_disabled=True)

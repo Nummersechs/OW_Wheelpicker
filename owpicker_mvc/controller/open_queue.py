@@ -60,7 +60,8 @@ class OpenQueueController:
         if self._preview_busy:
             return
         if not self.spin_mode_allowed() or not self.is_mode_active():
-            self.clear_preview()
+            # On explicit mode switch back to role-mode we always restore original wheels.
+            self.clear_preview(force=True)
             return
         if self._spin_active:
             return
@@ -83,7 +84,7 @@ class OpenQueueController:
             entry["preview_entries"] = preview_entries
             entry["key"] = key
 
-    def clear_preview(self) -> None:
+    def clear_preview(self, *, force: bool = False) -> None:
         if self._preview_busy:
             return
         if not self._preview_restore:
@@ -95,7 +96,12 @@ class OpenQueueController:
             for wheel, entry in list(self._preview_restore.items()):
                 preview_entries = entry.get("preview_entries")
                 current_override = getattr(wheel, "_override_entries", None)
-                if preview_entries is not None and current_override is not None and current_override != preview_entries:
+                if (
+                    not force
+                    and preview_entries is not None
+                    and current_override is not None
+                    and current_override != preview_entries
+                ):
                     continue
                 wheel.set_override_entries(entry.get("override_entries"))
                 wheel._disabled_indices = set(entry.get("disabled_indices", set()))
@@ -130,6 +136,9 @@ class OpenQueueController:
             wheel._refresh_disabled_indices()
         self._spin_restore = []
         self._spin_active = False
+        # If Open Queue was disabled during spin, ensure we leave preview mode.
+        if not self.is_mode_active():
+            self.clear_preview(force=True)
 
     def spin_active(self) -> bool:
         return self._spin_active
