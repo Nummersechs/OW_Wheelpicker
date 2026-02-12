@@ -20,6 +20,7 @@ def _begin_spin_run(mw, active: list[tuple[str, object]]) -> None:
     mw._snapshot_results()
     for _role, wheel in active:
         wheel.clear_result()
+    mw.sound.stop_spin()
     mw.sound.stop_ding()
     mw._stop_all_wheels()
     mw.summary.setText("")
@@ -263,6 +264,7 @@ def spin_single(mw, wheel, mult: float = 1.0, hero_ban_override: bool = True):
         target_wheel = wheel
     mw._result_sent_this_spin = False
     mw._snapshot_results()
+    mw.sound.stop_spin()
     mw.sound.stop_ding()
     mw._stop_all_wheels()
     mw._set_controls_enabled(False)

@@ -64,6 +64,9 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self.setWindowTitle(i18n.t("app.title.main"))
         self.resize(1200, 650)
         self.sound = SoundManager(base_dir=self._asset_dir)
+        # Ensure clean audio state on startup (no lingering backend playback).
+        self.sound.stop_spin()
+        self.sound.stop_ding()
 
         self._restoring_state = True   # während des Aufbaus nicht speichern
         self._player_profile_combo_syncing = False
@@ -1428,7 +1431,11 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
 
     def _on_volume_changed(self, value: int):
         factor = max(0.0, min(1.0, value / 100.0))
-        self.sound.set_master_volume(factor)
+        try:
+            self.sound.set_master_volume(factor)
+        except Exception:
+            # Keep UI responsive even if an audio backend call fails.
+            pass
         self._update_volume_icon(value)
         # Wenn per Slider verändert, aktuell nicht mehr stumm gespeichert
         self._last_volume_before_mute = value if value > 0 else self._last_volume_before_mute
@@ -1445,6 +1452,8 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             icon = "🔊"
         self.lbl_volume_icon.setText(icon)
     def _play_volume_preview(self):
+        if getattr(self, "pending", 0) > 0:
+            return
         if self.volume_slider.value() > 0:
             self.sound.play_preview()
     def _on_volume_icon_clicked(self):

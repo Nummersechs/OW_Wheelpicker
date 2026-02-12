@@ -68,6 +68,7 @@ class MapModeController:
             mw.summary.setText(i18n.t("map.summary.prompt"))
             return
         mw._snapshot_results()
+        mw.sound.stop_spin()
         mw.sound.stop_ding()
         mw._stop_all_wheels()
         mw._set_controls_enabled(False)

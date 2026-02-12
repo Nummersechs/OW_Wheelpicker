@@ -165,6 +165,29 @@ class SoundManager:
         except Exception:
             pass
 
+    @staticmethod
+    def _effects_snapshot(effects) -> list[Any]:
+        try:
+            return list(effects or [])
+        except Exception:
+            return []
+
+    @staticmethod
+    def _stop_effects(effects) -> None:
+        for eff in SoundManager._effects_snapshot(effects):
+            try:
+                eff.stop()
+            except Exception:
+                pass
+
+    def _stop_preview_effect(self) -> None:
+        if not self.preview_effect:
+            return
+        try:
+            self.preview_effect.stop()
+        except Exception:
+            pass
+
     def shutdown(self) -> None:
         """Stop sounds/timers and release audio resources."""
         self._stop_warmup_timer()
@@ -173,13 +196,9 @@ class SoundManager:
             self.stop_ding()
         except Exception:
             pass
-        if self.preview_effect:
-            try:
-                self.preview_effect.stop()
-            except Exception:
-                pass
+        self._stop_preview_effect()
         # Delete cached effects to release audio backend resources
-        for eff in list(self.spin_effects.values()) + list(self.ding_effects.values()):
+        for eff in self._effects_snapshot(self.spin_effects.values()) + self._effects_snapshot(self.ding_effects.values()):
             try:
                 eff.stop()
             except Exception:
@@ -231,6 +250,9 @@ class SoundManager:
         """Spielt einen zufälligen Spin-Sound oder Beep, falls nichts geladen."""
         try:
             self._maybe_start_lazy_warmup()
+            # Prevent audible tail overlap from a previously chosen random spin effect.
+            self.stop_spin()
+            self._stop_preview_effect()
             if self.spin_sources:
                 path = random.choice(self.spin_sources)
                 eff = self._get_or_create_effect(self.spin_effects, path, self.spin_base_volume)
@@ -241,15 +263,14 @@ class SoundManager:
             QtWidgets.QApplication.beep()
 
     def stop_spin(self):
-        try:
-            for eff in self.spin_effects.values():
-                eff.stop()
-        except Exception:
-            pass
+        self._stop_effects(self.spin_effects.values())
 
     def set_master_volume(self, factor: float):
         """Setzt die Master-Lautstärke (0.0–1.0) für alle Effekte."""
-        self.master_volume = max(0.0, min(1.0, float(factor)))
+        try:
+            self.master_volume = max(0.0, min(1.0, float(factor)))
+        except Exception:
+            self.master_volume = 1.0
         self._apply_volume(self.spin_effects.values(), self.spin_base_volume)
         self._apply_volume(self.ding_effects.values(), self.ding_base_volume)
         if self.preview_effect:
@@ -257,7 +278,7 @@ class SoundManager:
 
     def _apply_volume(self, effects, base_volume: float):
         vol = max(0.0, min(1.0, base_volume * self.master_volume))
-        for eff in effects:
+        for eff in self._effects_snapshot(effects):
             try:
                 eff.setVolume(vol)
             except Exception:
@@ -277,11 +298,7 @@ class SoundManager:
             QtWidgets.QApplication.beep()
 
     def stop_ding(self):
-        try:
-            for eff in self.ding_effects.values():
-                eff.stop()
-        except Exception:
-            pass
+        self._stop_effects(self.ding_effects.values())
 
     def play_preview(self):
         """Kurzer Test-Sound für Lautstärkevorschau."""
