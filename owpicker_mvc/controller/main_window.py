@@ -1,7 +1,6 @@
 from pathlib import Path
 import os
 import sys
-import tempfile
 import time
 from typing import Callable
 
@@ -9,8 +8,15 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 import config
 import i18n
-from . import mode_manager, runtime_tracing, shutdown_manager, spin_service
-from . import ocr_import
+from . import (
+    hover_tooltip_ops,
+    mode_manager,
+    ocr_capture_ops,
+    result_state_ops,
+    runtime_tracing,
+    shutdown_manager,
+    spin_service,
+)
 from .ocr_role_import import (
     PendingOCRImport,
     normalize_name_key as normalize_ocr_name_key,
@@ -22,10 +28,6 @@ from services.sound import SoundManager
 from model.role_keys import role_wheel_map, role_wheels
 from utils import flag_icons, theme as theme_util, ui_helpers
 from view.overlay import ResultOverlay
-from view.screen_region_selector import (
-    select_region_from_primary_screen,
-    select_region_with_macos_screencapture,
-)
 from view.wheel_view import WheelView
 from view.spin_mode_toggle import SpinModeToggle
 from view.profile_dropdown import PlayerProfileDropdown
@@ -1709,68 +1711,22 @@ class MainWindow(QtWidgets.QMainWindow):
         runtime_tracing.trace_hover_event(self, name, **extra)
 
     def _mark_hover_activity(self) -> None:
-        self._hover_activity_last = time.monotonic()
+        hover_tooltip_ops.mark_hover_activity(self)
 
     def _mark_hover_user_move(self) -> None:
-        now = time.monotonic()
-        self._hover_user_move_last = now
-        self._hover_activity_last = now
-        if not getattr(self, "_hover_watchdog_started", False):
-            self._ensure_hover_watchdog_started()
+        hover_tooltip_ops.mark_hover_user_move(self)
 
     def _ensure_hover_watchdog_started(self) -> None:
-        if not self._cfg("HOVER_WATCHDOG_ON", False):
-            return
-        if self._hover_watchdog_started:
-            return
-        if not hasattr(self, "_hover_watchdog_timer") or not self._hover_watchdog_timer:
-            return
-        # Start only after first real user input to avoid early re-entrant events.
-        self._hover_watchdog_started = True
-        if not self._hover_watchdog_timer.isActive():
-            self._hover_watchdog_timer.start()
+        hover_tooltip_ops.ensure_hover_watchdog_started(self)
 
     def _mark_hover_seen(self, source: str | None = None) -> None:
-        self._mark_hover_activity()
-        self._hover_seen = True
-        if hasattr(self, "_hover_pump_timer") and self._hover_pump_timer and self._hover_pump_timer.isActive():
-            try:
-                self._hover_pump_timer.stop()
-            except Exception:
-                pass
-        if source:
-            self._trace_hover_event("hover_seen", source=source)
+        hover_tooltip_ops.mark_hover_seen(self, source=source)
 
     def _record_hover_prime_deferred(self, reason: str | None = None) -> None:
-        self._hover_prime_pending = True
-        if reason:
-            self._hover_prime_reason = reason
-        count = int(getattr(self, "_hover_prime_deferred_count", 0)) + 1
-        self._hover_prime_deferred_count = count
-        if count == 1:
-            self._hover_prime_first_reason = reason
-            self._hover_prime_last_reason = reason
-            if reason:
-                self._trace_hover_event("hover_pump_deferred", reason=reason)
-            else:
-                self._trace_hover_event("hover_pump_deferred")
-        elif reason:
-            self._hover_prime_last_reason = reason
+        hover_tooltip_ops.record_hover_prime_deferred(self, reason=reason)
 
     def _flush_hover_prime_deferred_trace(self) -> None:
-        count = int(getattr(self, "_hover_prime_deferred_count", 0))
-        if count > 1:
-            first_reason = getattr(self, "_hover_prime_first_reason", None)
-            last_reason = getattr(self, "_hover_prime_last_reason", None)
-            extra = {"count": count}
-            if first_reason:
-                extra["first_reason"] = first_reason
-            if last_reason and last_reason != first_reason:
-                extra["last_reason"] = last_reason
-            self._trace_hover_event("hover_pump_deferred_coalesced", **extra)
-        self._hover_prime_deferred_count = 0
-        self._hover_prime_first_reason = None
-        self._hover_prime_last_reason = None
+        hover_tooltip_ops.flush_hover_prime_deferred_trace(self)
 
     def _start_hover_pump(
         self,
@@ -1778,317 +1734,36 @@ class MainWindow(QtWidgets.QMainWindow):
         duration_ms: int | None = None,
         force: bool = False,
     ) -> None:
-        if not force and not self._cfg("HOVER_PUMP_ON_START", False):
-            return
-        if getattr(self, "_closing", False):
-            return
-        if getattr(self, "_startup_block_input", False) or getattr(self, "_startup_drain_active", False):
-            self._record_hover_prime_deferred(reason=reason)
-            return
-        self._flush_hover_prime_deferred_trace()
-        if self._overlay_choice_active():
-            return
-        if self._hover_seen:
-            return
-        duration_ms = int(duration_ms or self._cfg("HOVER_PUMP_DURATION_MS", 1200))
-        if duration_ms <= 0:
-            self._hover_pump_until = None
-        else:
-            now = time.monotonic()
-            until = now + (duration_ms / 1000.0)
-            if self._hover_pump_until is None or until > self._hover_pump_until:
-                self._hover_pump_until = until
-        if self._hover_pump_timer and not self._hover_pump_timer.isActive():
-            self._hover_pump_timer.start()
-        if reason:
-            self._trace_hover_event("hover_pump_start", reason=reason, duration_ms=duration_ms)
+        hover_tooltip_ops.start_hover_pump(
+            self,
+            reason=reason,
+            duration_ms=duration_ms,
+            force=force,
+        )
 
     def _hover_pump_tick(self) -> None:
-        if getattr(self, "_closing", False):
-            return
-        if self._overlay_choice_active():
-            try:
-                if self._hover_pump_timer:
-                    self._hover_pump_timer.stop()
-            except Exception:
-                pass
-            return
-        if not self.isActiveWindow():
-            try:
-                if self._hover_pump_timer:
-                    self._hover_pump_timer.stop()
-            except Exception:
-                pass
-            return
-        if self._hover_seen:
-            try:
-                if self._hover_pump_timer:
-                    self._hover_pump_timer.stop()
-            except Exception:
-                pass
-            return
-        now = time.monotonic()
-        if self._hover_pump_until is not None and now > self._hover_pump_until:
-            try:
-                if self._hover_pump_timer:
-                    self._hover_pump_timer.stop()
-            except Exception:
-                pass
-            return
-        try:
-            pos = QtGui.QCursor.pos()
-        except Exception:
-            return
-        hit = self._hover_poke_at_global(pos, reason="hover_pump")
-        if hit:
-            # Stop the pump once a hover event lands on a view to avoid extra spam/lag.
-            self._mark_hover_seen(source="hover_pump")
+        hover_tooltip_ops.hover_pump_tick(self)
 
     def _hover_poke_under_cursor(self, reason: str | None = None) -> None:
-        if not self._cfg("HOVER_POKE_ON_REARM", False):
-            return
-        if getattr(self, "_closing", False):
-            return
-        if self._overlay_choice_active():
-            return
-        try:
-            pos = QtGui.QCursor.pos()
-        except Exception:
-            return
-        self._hover_poke_at_global(pos, reason=reason)
+        hover_tooltip_ops.hover_poke_under_cursor(self, reason=reason)
 
     def _hover_cursor_hits_view(self, pos: QtCore.QPoint) -> bool:
-        for view in self._iter_hover_views():
-            try:
-                if hasattr(view, "isVisible") and not view.isVisible():
-                    continue
-                vp = view.viewport()
-                if hasattr(vp, "isVisible") and not vp.isVisible():
-                    continue
-                local = vp.mapFromGlobal(pos)
-                if vp.rect().contains(local):
-                    return True
-            except Exception:
-                continue
-        return False
+        return hover_tooltip_ops.hover_cursor_hits_view(self, pos)
 
     def _iter_hover_views(self, include_maps: bool | None = None) -> list:
-        views: list = []
-        for _role, w in self._role_wheels():
-            if not w:
-                continue
-            view = getattr(w, "view", None)
-            if view is not None:
-                views.append(view)
-        if include_maps is None:
-            include_maps = getattr(self, "current_mode", "") == "maps"
-        if include_maps:
-            map_main = getattr(self, "map_main", None)
-            if map_main:
-                view = getattr(map_main, "view", None)
-                if view is not None:
-                    views.append(view)
-            if hasattr(self, "map_lists"):
-                for w in self.map_lists.values():
-                    view = getattr(w, "view", None)
-                    if view is not None:
-                        views.append(view)
-        return views
+        return hover_tooltip_ops.iter_hover_views(self, include_maps=include_maps)
 
     def _hover_watchdog_tick(self) -> None:
-        if not self._cfg("HOVER_WATCHDOG_ON", False):
-            return
-        if getattr(self, "_closing", False):
-            return
-        if self._overlay_choice_active():
-            return
-        if getattr(self, "_stack_switching", False):
-            return
-        if getattr(self, "_map_prebuild_in_progress", False):
-            return
-        if not self.isActiveWindow():
-            return
-        if not self.isVisible():
-            return
-        req_move_ms = int(self._cfg("HOVER_WATCHDOG_REQUIRE_MOVE_MS", 0))
-        if req_move_ms > 0:
-            last_move = getattr(self, "_hover_user_move_last", None)
-            if last_move is None:
-                return
-            if (time.monotonic() - last_move) > (req_move_ms / 1000.0):
-                return
-        last = getattr(self, "_hover_activity_last", None)
-        if last is None:
-            return
-        now = time.monotonic()
-        stale_ms = int(self._cfg("HOVER_WATCHDOG_STALE_MS", 650))
-        if (now - last) < (stale_ms / 1000.0):
-            return
-        cooldown_ms = int(self._cfg("HOVER_WATCHDOG_COOLDOWN_MS", 700))
-        last_watch = getattr(self, "_hover_watchdog_last", None)
-        if last_watch is not None and (now - last_watch) < (cooldown_ms / 1000.0):
-            return
-        try:
-            pos = QtGui.QCursor.pos()
-        except Exception:
-            return
-        if not self._hover_cursor_hits_view(pos):
-            return
-        self._hover_watchdog_last = now
-        self._hover_seen = False
-        self._hover_forward_last = None
-        self._trace_hover_event("hover_watchdog", age_ms=int((now - last) * 1000))
-        self._rearm_hover_tracking(reason="hover_watchdog")
-        self._start_hover_pump(reason="hover_watchdog", duration_ms=800, force=True)
+        hover_tooltip_ops.hover_watchdog_tick(self)
 
     def _hover_poke_at_global(self, pos: QtCore.QPoint, reason: str | None = None) -> bool:
-        if getattr(self, "_closing", False):
-            return False
-        if getattr(self, "_startup_block_input", False) or getattr(self, "_startup_drain_active", False):
-            return False
-        if self._overlay_choice_active():
-            return False
-        views = self._iter_hover_views()
-        prev_forwarding = getattr(self, "_hover_forwarding", False)
-        self._hover_forwarding = True
-        hit = False
-        for view in views:
-            try:
-                if hasattr(view, "isVisible") and not view.isVisible():
-                    continue
-                vp = view.viewport()
-                if hasattr(vp, "isVisible") and not vp.isVisible():
-                    continue
-                local = vp.mapFromGlobal(pos)
-                if not vp.rect().contains(local):
-                    continue
-                hit = True
-                if not bool(getattr(vp, "_hover_entered", False)):
-                    try:
-                        QtWidgets.QApplication.sendEvent(vp, QtCore.QEvent(QtCore.QEvent.Enter))
-                    except Exception:
-                        pass
-                    try:
-                        hover_enter = QtGui.QHoverEvent(
-                            QtCore.QEvent.HoverEnter,
-                            QtCore.QPointF(local),
-                            QtCore.QPointF(local),
-                        )
-                        QtWidgets.QApplication.sendEvent(vp, hover_enter)
-                    except Exception:
-                        pass
-                    try:
-                        setattr(vp, "_hover_entered", True)
-                    except Exception:
-                        pass
-                if reason:
-                    self._trace_hover_event(
-                        "hover_poke",
-                        reason=reason,
-                        view=type(view).__name__,
-                        local=f"{local.x()},{local.y()}",
-                    )
-                try:
-                    hover = QtGui.QHoverEvent(
-                        QtCore.QEvent.HoverMove,
-                        QtCore.QPointF(local),
-                        QtCore.QPointF(local),
-                    )
-                    QtWidgets.QApplication.sendEvent(vp, hover)
-                except Exception:
-                    pass
-                try:
-                    mouse = QtGui.QMouseEvent(
-                        QtCore.QEvent.MouseMove,
-                        QtCore.QPointF(local),
-                        QtCore.QPointF(local),
-                        QtCore.QPointF(pos),
-                        QtCore.Qt.NoButton,
-                        QtCore.Qt.NoButton,
-                        QtCore.Qt.NoModifier,
-                    )
-                    QtWidgets.QApplication.sendEvent(vp, mouse)
-                except Exception:
-                    pass
-            except Exception:
-                continue
-        self._hover_forwarding = prev_forwarding
-        return hit
+        return hover_tooltip_ops.hover_poke_at_global(self, pos, reason=reason)
 
     def _forward_hover_from_app_mousemove(self, event: QtGui.QMouseEvent) -> None:
-        if not self._cfg("HOVER_FORWARD_MOUSEMOVE", False):
-            return
-        if getattr(self, "_closing", False):
-            return
-        if self._overlay_choice_active():
-            return
-        if getattr(self, "_hover_forwarding", False):
-            return
-        try:
-            if event.buttons() != QtCore.Qt.NoButton:
-                return
-        except Exception:
-            pass
-        now = time.monotonic()
-        last = getattr(self, "_hover_forward_last", None)
-        interval_ms = float(self._cfg("HOVER_FORWARD_INTERVAL_MS", 30))
-        if last is not None and (now - last) < (interval_ms / 1000.0):
-            return
-        self._hover_forward_last = now
-        try:
-            gp = event.globalPosition()
-            pos = QtCore.QPoint(int(gp.x()), int(gp.y()))
-        except Exception:
-            try:
-                pos = event.globalPos()
-            except Exception:
-                try:
-                    pos = QtGui.QCursor.pos()
-                except Exception:
-                    return
-        try:
-            self._hover_forwarding = True
-            hit = self._hover_poke_at_global(pos, reason="app_mouse_move")
-            if hit:
-                self._mark_hover_seen(source="app_mouse_move")
-        finally:
-            self._hover_forwarding = False
+        hover_tooltip_ops.forward_hover_from_app_mousemove(self, event)
 
     def _rearm_hover_tracking(self, reason: str | None = None, force: bool = False) -> None:
-        """Re-enable hover tracking on wheel views without forcing focus."""
-        if getattr(self, "_closing", False):
-            return
-        if self._overlay_choice_active():
-            return
-        now = time.monotonic()
-        last = getattr(self, "_hover_rearm_last", None)
-        if not force and last is not None and (now - last) < 0.12:
-            return
-        self._hover_rearm_last = now
-        views = self._iter_hover_views()
-        if reason:
-            self._trace_event("hover_rearm", reason=reason, count=len(views))
-        for view in views:
-            if hasattr(view, "isVisible") and not view.isVisible():
-                continue
-            if hasattr(view, "_rearm_hover_tracking"):
-                try:
-                    view._rearm_hover_tracking()
-                    continue
-                except Exception:
-                    pass
-            try:
-                view.setMouseTracking(True)
-                view.setInteractive(True)
-                vp = view.viewport()
-                vp.setMouseTracking(True)
-                vp.setAttribute(QtCore.Qt.WA_Hover, True)
-            except Exception:
-                pass
-        self._reset_hover_cache_under_cursor()
-        if reason:
-            self._hover_poke_under_cursor(reason=reason)
-            self._start_hover_pump(reason=reason, duration_ms=1200)
+        hover_tooltip_ops.rearm_hover_tracking(self, reason=reason, force=force)
 
     def _apply_theme(self, defer_heavy: bool = False):
         """Apply the selected light/dark theme without freezing the UI."""
@@ -2240,67 +1915,16 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def _mode_key(self) -> str:
-        return "hero_ban" if self.hero_ban_active else self.current_mode
+        return result_state_ops.mode_key(self)
 
     def _snapshot_mode_results(self):
-        """Merkt Summary/Resultate für den aktuellen Modus (temp, nicht persistiert)."""
-        key = self._mode_key()
-        if self.current_mode == "maps":
-            self._mode_results[key] = {
-                "map": getattr(self, "_map_result_text", "–"),
-            }
-        else:
-            wheels_payload: dict[str, dict] = {}
-            for role, wheel in self._role_wheels():
-                wheels_payload[self._role_state_key(role)] = wheel.get_result_payload()
-            self._mode_results[key] = {
-                "wheels": wheels_payload
-            }
+        result_state_ops.snapshot_mode_results(self)
 
     def _apply_mode_results(self, key: str):
-        """Stellt Summary/Resultate für den gewünschten Modus wieder her."""
-        if not hasattr(self, "summary"):
-            return
-        snap = self._mode_results.get(key)
-        if not snap:
-            # Reset auf neutrale Anzeige
-            if self.current_mode == "maps":
-                self._map_result_text = "–"
-            else:
-                for _role, wheel in self._role_wheels():
-                    wheel.clear_result()
-            self.summary.setText("")
-            return
-        self.summary.setText("")
-        if self.current_mode == "maps":
-            self._map_result_text = snap.get("map", "–")
-            self._update_summary_from_results()
-        else:
-            wheel_payloads = snap.get("wheels", {})
-            for role, wheel in self._role_wheels():
-                wheel.apply_result_payload(wheel_payloads.get(self._role_state_key(role)))
-            self._update_summary_from_results()
+        result_state_ops.apply_mode_results(self, key)
 
     def _update_summary_from_results(self):
-        """Erzeugt die Summary basierend auf den aktuellen Resultaten und Modus."""
-        if self.current_mode == "maps":
-            choice = getattr(self, "_map_result_text", "–")
-            if choice and choice != "–":
-                self.summary.setText(i18n.t("map.summary.choice", choice=choice))
-            else:
-                self.summary.setText("")
-            return
-        if self.hero_ban_active:
-            pick = self.dps.get_result_value()
-            self.summary.setText(i18n.t("summary.hero_ban", pick=pick or "–") if pick else "")
-            return
-        t = self.tank.get_result_value()
-        d = self.dps.get_result_value()
-        s = self.support.get_result_value()
-        if t or d or s:
-            self.summary.setText(i18n.t("summary.team", tank=t or "–", dps=d or "–", sup=s or "–"))
-        else:
-            self.summary.setText("")
+        result_state_ops.update_summary_from_results(self)
 
     def _refresh_tooltip_caches_async(
         self,
@@ -2309,30 +1933,19 @@ class MainWindow(QtWidgets.QMainWindow):
         reason: str | None = None,
         force: bool = False,
     ):
-        """
-        Baut die Tooltip-Caches in kleinen Scheiben (per Timer) neu auf,
-        damit der UI-Thread beim Online/Offline-Klick nicht blockiert.
-        Mehrfachaufrufe werden kurz gesammelt, um die Render-Last zu drosseln.
-        """
-        if self._cfg("DISABLE_TOOLTIPS", False):
-            return
-        if hasattr(self, "_tooltip_manager"):
-            self._tooltip_manager.refresh_caches_async(
-                delay_step_ms=delay_step_ms,
-                on_done=on_done,
-                reason=reason,
-                force=force,
-            )
+        hover_tooltip_ops.refresh_tooltip_caches_async(
+            self,
+            delay_step_ms=delay_step_ms,
+            on_done=on_done,
+            reason=reason,
+            force=force,
+        )
 
     def _reset_hover_cache_under_cursor(self):
-        """Stellt sicher, dass Tooltip-Caches vorhanden sind, ohne Voll-Rebuild zu erzwingen."""
-        if hasattr(self, "_tooltip_manager"):
-            self._tooltip_manager.reset_hover_cache_under_cursor()
+        hover_tooltip_ops.reset_hover_cache_under_cursor(self)
 
     def _set_tooltips_ready(self, ready: bool = True):
-        """Setzt das Tooltip-Ready-Flag für alle Räder."""
-        if hasattr(self, "_tooltip_manager"):
-            self._tooltip_manager.set_tooltips_ready(bool(ready))
+        hover_tooltip_ops.set_tooltips_ready(self, ready=ready)
 
     def _set_hero_ban_visuals(self, active: bool):
         """Delegiert an den Mode-Manager und sperrt Breiten in Hero-Ban."""
@@ -2376,95 +1989,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_cancel_spin.setEnabled(self.pending > 0)
 
     def _capture_region_for_ocr(self) -> tuple[QtGui.QPixmap | None, str | None]:
-        use_native_mac_capture = bool(self._cfg("OCR_USE_NATIVE_MAC_CAPTURE", True)) and sys.platform == "darwin"
-        if not use_native_mac_capture:
-            return select_region_from_primary_screen(
-                hint_text=i18n.t("ocr.select_hint"),
-                parent=self,
-            )
-
-        QtWidgets.QMessageBox.information(
-            self,
-            i18n.t("ocr.capture_title"),
-            i18n.t("ocr.capture_prepare_hint"),
-        )
-
-        was_visible = self.isVisible()
-        was_minimized = self.isMinimized()
-        if was_visible:
-            self.hide()
-            QtWidgets.QApplication.processEvents()
-
-        delay_ms = max(0, int(self._cfg("OCR_CAPTURE_PREPARE_DELAY_MS", 120)))
-        if delay_ms > 0:
-            time.sleep(delay_ms / 1000.0)
-
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-            capture_path = Path(tmp.name)
-
-        try:
-            selected_pixmap, select_error = select_region_with_macos_screencapture(
-                capture_path,
-                timeout_s=float(self._cfg("OCR_CAPTURE_TIMEOUT_S", 45.0)),
-            )
-        finally:
-            try:
-                capture_path.unlink(missing_ok=True)
-            except Exception:
-                pass
-            if was_visible and not getattr(self, "_closing", False):
-                if was_minimized:
-                    self.showMinimized()
-                else:
-                    self.show()
-                    self.raise_()
-                    self.activateWindow()
-                QtWidgets.QApplication.processEvents()
-
-        if selected_pixmap is None and select_error == "screencapture-not-found":
-            return select_region_from_primary_screen(
-                hint_text=i18n.t("ocr.select_hint"),
-                parent=self,
-            )
-        return selected_pixmap, select_error
+        return ocr_capture_ops.capture_region_for_ocr(self)
 
     def _build_ocr_pixmap_variants(self, source: QtGui.QPixmap) -> list[QtGui.QPixmap]:
-        variants: list[QtGui.QPixmap] = []
-        seen: set[tuple[int, int, int]] = set()
-
-        def _add_variant(pix: QtGui.QPixmap | None) -> None:
-            if pix is None or pix.isNull():
-                return
-            key = (pix.width(), pix.height(), int(pix.cacheKey()))
-            if key in seen:
-                return
-            seen.add(key)
-            variants.append(pix)
-
-        _add_variant(source)
-        scale_factor = max(1, int(self._cfg("OCR_SCALE_FACTOR", 2)))
-        if scale_factor > 1 and not source.isNull():
-            scaled = source.scaled(
-                max(1, source.width() * scale_factor),
-                max(1, source.height() * scale_factor),
-                QtCore.Qt.IgnoreAspectRatio,
-                QtCore.Qt.SmoothTransformation,
-            )
-            _add_variant(scaled)
-
-        if not source.isNull():
-            gray_image = source.toImage().convertToFormat(QtGui.QImage.Format_Grayscale8)
-            gray_pix = QtGui.QPixmap.fromImage(gray_image)
-            _add_variant(gray_pix)
-            if scale_factor > 1 and not gray_pix.isNull():
-                gray_scaled = gray_pix.scaled(
-                    max(1, gray_pix.width() * scale_factor),
-                    max(1, gray_pix.height() * scale_factor),
-                    QtCore.Qt.IgnoreAspectRatio,
-                    QtCore.Qt.SmoothTransformation,
-                )
-                _add_variant(gray_scaled)
-        return variants
+        return ocr_capture_ops.build_ocr_pixmap_variants(self, source)
 
     def _extract_names_from_ocr_pixmap(
         self,
@@ -2472,191 +2000,17 @@ class MainWindow(QtWidgets.QMainWindow):
         *,
         tesseract_cmd: str,
     ) -> tuple[list[str], str, str | None]:
-        all_texts: list[str] = []
-        errors: list[str] = []
-        psm_primary = int(self._cfg("OCR_TESSERACT_PSM", 6))
-        psm_fallback = int(self._cfg("OCR_TESSERACT_FALLBACK_PSM", 11))
-        psm_values = [psm_primary]
-        if psm_fallback not in psm_values:
-            psm_values.append(psm_fallback)
-        lang = str(self._cfg("OCR_TESSERACT_LANG", "eng")).strip() or None
-        timeout_s = float(self._cfg("OCR_TESSERACT_TIMEOUT_S", 8.0))
-
-        for variant in self._build_ocr_pixmap_variants(pixmap):
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                tmp_path = Path(tmp.name)
-            try:
-                if not variant.save(str(tmp_path), "PNG"):
-                    errors.append("image-save-failed")
-                    continue
-                run_result = ocr_import.run_tesseract_multi(
-                    tmp_path,
-                    cmd=tesseract_cmd,
-                    psm_values=psm_values,
-                    timeout_s=timeout_s,
-                    lang=lang,
-                )
-                if run_result.text:
-                    all_texts.append(run_result.text)
-                elif run_result.error:
-                    errors.append(run_result.error)
-            finally:
-                try:
-                    tmp_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-
-        merged_lines: list[str] = []
-        seen_lines: set[str] = set()
-        for text in all_texts:
-            for raw_line in text.splitlines():
-                line = raw_line.strip()
-                if not line:
-                    continue
-                key = line.lower()
-                if key in seen_lines:
-                    continue
-                seen_lines.add(key)
-                merged_lines.append(line)
-        merged_text = "\n".join(merged_lines)
-
-        names = ocr_import.extract_candidate_names_multi(
-            all_texts,
-            min_chars=int(self._cfg("OCR_NAME_MIN_CHARS", 2)),
-            max_chars=int(self._cfg("OCR_NAME_MAX_CHARS", 24)),
-            max_words=int(self._cfg("OCR_NAME_MAX_WORDS", 2)),
-            max_digit_ratio=float(self._cfg("OCR_NAME_MAX_DIGIT_RATIO", 0.45)),
-            min_support=int(self._cfg("OCR_NAME_MIN_SUPPORT", 1)),
-            high_count_threshold=int(self._cfg("OCR_NAME_HIGH_COUNT_THRESHOLD", 8)),
-            high_count_min_support=int(self._cfg("OCR_NAME_HIGH_COUNT_MIN_SUPPORT", 2)),
-            max_candidates=int(self._cfg("OCR_NAME_MAX_CANDIDATES", 12)),
-            near_dup_min_chars=int(self._cfg("OCR_NAME_NEAR_DUP_MIN_CHARS", 8)),
-            near_dup_max_len_delta=int(self._cfg("OCR_NAME_NEAR_DUP_MAX_LEN_DELTA", 1)),
-            near_dup_similarity=float(self._cfg("OCR_NAME_NEAR_DUP_SIMILARITY", 0.90)),
-            near_dup_tail_min_chars=int(self._cfg("OCR_NAME_NEAR_DUP_TAIL_MIN_CHARS", 3)),
-            near_dup_tail_head_similarity=float(
-                self._cfg("OCR_NAME_NEAR_DUP_TAIL_HEAD_SIMILARITY", 0.70)
-            ),
+        return ocr_capture_ops.extract_names_from_ocr_pixmap(
+            self,
+            pixmap,
+            tesseract_cmd=tesseract_cmd,
         )
-        error_text = "; ".join(errors) if errors else None
-        return names, merged_text, error_text
 
     def _ocr_preview_text(self, text: str, max_chars: int = 420) -> str:
-        if not text:
-            return ""
-        normalized_lines = [line.strip() for line in text.splitlines() if line.strip()]
-        collapsed = "\n".join(normalized_lines)
-        if len(collapsed) <= max_chars:
-            return collapsed
-        return collapsed[:max_chars].rstrip() + "…"
+        return ocr_capture_ops.ocr_preview_text(text, max_chars=max_chars)
 
     def _on_role_ocr_import_clicked(self, role_key: str) -> None:
-        role = str(role_key or "").strip().casefold()
-        if not self._role_ocr_import_available(role):
-            return
-        self._update_role_ocr_button_enabled(role)
-        btn = self._role_ocr_buttons.get(role)
-        if btn is None:
-            return
-        btn.setEnabled(False)
-        try:
-            selected_pixmap, select_error = self._capture_region_for_ocr()
-            if selected_pixmap is None:
-                if select_error == "cancelled":
-                    QtWidgets.QMessageBox.information(
-                        self,
-                        i18n.t("ocr.result_title"),
-                        i18n.t("ocr.capture_cancelled"),
-                    )
-                    return
-                if select_error == "selection-too-small":
-                    QtWidgets.QMessageBox.warning(
-                        self,
-                        i18n.t("ocr.error_title"),
-                        i18n.t("ocr.capture_selection_too_small"),
-                    )
-                    return
-                if select_error == "no-screen":
-                    QtWidgets.QMessageBox.warning(
-                        self,
-                        i18n.t("ocr.error_title"),
-                        i18n.t("ocr.error_no_screen"),
-                    )
-                    return
-                extra_hint = ""
-                if sys.platform == "darwin":
-                    extra_hint = "\n\n" + i18n.t("ocr.error_screen_permission_hint")
-                detail = ""
-                if isinstance(select_error, str) and select_error:
-                    detail = f"\n\n[{select_error}]"
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    i18n.t("ocr.error_title"),
-                    i18n.t("ocr.error_selection_failed") + extra_hint + detail,
-                )
-                return
-
-            tesseract_cmd = str(self._cfg("OCR_TESSERACT_CMD", "tesseract"))
-            if not ocr_import.tesseract_available(tesseract_cmd):
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    i18n.t("ocr.error_title"),
-                    i18n.t("ocr.error_tesseract_missing", cmd=tesseract_cmd),
-                )
-                return
-
-            QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
-            try:
-                names, raw_text, ocr_error = self._extract_names_from_ocr_pixmap(
-                    selected_pixmap,
-                    tesseract_cmd=tesseract_cmd,
-                )
-            finally:
-                try:
-                    QtWidgets.QApplication.restoreOverrideCursor()
-                except Exception:
-                    pass
-            if not names:
-                message = i18n.t("ocr.result_no_names")
-                preview = self._ocr_preview_text(raw_text)
-                if preview:
-                    message += "\n\n" + i18n.t("ocr.result_raw_preview", preview=preview)
-                elif ocr_error:
-                    message += "\n\n" + i18n.t("ocr.error_run_failed", reason=ocr_error)
-                QtWidgets.QMessageBox.information(
-                    self,
-                    i18n.t("ocr.result_title"),
-                    message,
-                )
-                return
-
-            candidate_names = self._normalize_ocr_candidate_names(names)
-            if not candidate_names:
-                QtWidgets.QMessageBox.information(
-                    self,
-                    i18n.t("ocr.result_title"),
-                    i18n.t("ocr.result_no_names"),
-                )
-                return
-            if self._request_ocr_import_selection(role, candidate_names):
-                return
-
-            # Fallback if overlay is not available.
-            fallback_entries = [{"name": name, "subroles": [], "active": True} for name in candidate_names]
-            added, added_counts = self._add_ocr_entries_distributed(fallback_entries)
-            self._show_ocr_import_result_distributed(
-                added=added,
-                total=len(candidate_names),
-                counts=added_counts,
-            )
-        except Exception as exc:
-            QtWidgets.QMessageBox.warning(
-                self,
-                i18n.t("ocr.error_title"),
-                i18n.t("ocr.error_unexpected", reason=repr(exc)),
-            )
-        finally:
-            self._update_role_ocr_buttons_enabled()
+        ocr_capture_ops.on_role_ocr_import_clicked(self, role_key)
 
     def _on_open_q_ocr_clicked(self) -> None:
         if not self._role_ocr_import_available("dps"):
@@ -2748,36 +2102,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_cancel_enabled()
 
     def _snapshot_results(self):
-        """Merkt aktuelle Resultate & Summary, um sie bei Abbruch wiederherzustellen."""
-        if self.current_mode == "maps":
-            self._last_results_snapshot = {
-                "mode": "maps",
-                "map": getattr(self, "_map_result_text", "–"),
-            }
-        else:
-            wheels_payload: dict[str, dict] = {}
-            for role, wheel in self._role_wheels():
-                wheels_payload[self._role_state_key(role)] = wheel.get_result_payload()
-            self._last_results_snapshot = {
-                "mode": self._mode_key(),
-                "wheels": wheels_payload,
-            }
+        result_state_ops.snapshot_results(self)
 
     def _restore_results_snapshot(self):
-        snap = getattr(self, "_last_results_snapshot", None)
-        if not snap:
-            return
-        if snap.get("mode") == "maps":
-            txt = snap.get("map", None)
-            if txt is not None:
-                self._map_result_text = txt
-            self._update_summary_from_results()
-        else:
-            wheel_payloads = snap.get("wheels", {})
-            for role, wheel in self._role_wheels():
-                wheel.apply_result_payload(wheel_payloads.get(self._role_state_key(role)))
-            self._update_summary_from_results()
-        self._last_results_snapshot = None
+        result_state_ops.restore_results_snapshot(self)
 
     def _asset_base_dir(self) -> Path:
         """
