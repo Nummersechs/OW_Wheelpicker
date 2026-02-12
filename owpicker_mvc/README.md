@@ -14,7 +14,9 @@ python3 main.py
 
 - Modes: Players, Heroes, Maps, Hero-Ban.
 - Open Queue mode for cross-role candidate pools.
-- OCR name import (Tesseract) including candidate selection/replace flow.
+- OCR name import (Tesseract) with two flows:
+  - Role OCR buttons import into a single role (Tank/DPS/Support).
+  - `All Roles OCR` provides 5 checkboxes per name: `Tank`, `DPS`, `Support`, `Main`, `Flex`. Unchecked names are distributed evenly across roles.
 - Persistent state (`saved_state.json`) including roster profiles.
 - Optional online sync for role states and spin results.
 - Theme/language switch and sound feedback.

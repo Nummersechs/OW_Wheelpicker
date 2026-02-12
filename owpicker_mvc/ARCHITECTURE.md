@@ -48,7 +48,7 @@
 - `map_ui.py`, `map_mode.py`: encapsulated map UI and map mode controller logic.
 - `state_sync.py`: save-state, debounce, thread pool, and online sync.
 - `open_queue.py`: open-queue preview/override during spins.
-- `ocr_capture_ops.py`, `ocr_import.py`, `ocr_role_import.py`: OCR capture, parsing, and merge into role lists.
+- `ocr_capture_ops.py`, `ocr_import.py`, `ocr_role_import.py`: OCR capture, parsing, and merge into role lists (single-role import or all-roles import with optional per-name role/subrole assignment + balanced distribution fallback).
 - `tooltip_manager.py`, `hover_tooltip_ops.py`, `focus_policy.py`, `runtime_tracing.py`: stability/tracing for hover/focus/tooltips.
 - `shutdown_manager.py`, `timer_registry.py`, `result_state_ops.py`: shutdown robustness, timer lifecycle, result snapshots.
 

@@ -269,9 +269,8 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
         return
     mw._update_role_ocr_button_enabled(role)
     btn = mw._role_ocr_buttons.get(role)
-    if btn is None:
-        return
-    btn.setEnabled(False)
+    if btn is not None:
+        btn.setEnabled(False)
     try:
         selected_pixmap, select_error = capture_region_for_ocr(mw)
         if selected_pixmap is None:
@@ -331,13 +330,24 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
             return
 
         # Fallback if overlay is not available.
-        fallback_entries = [{"name": name, "subroles": [], "active": True} for name in candidate_names]
-        added, added_counts = mw._add_ocr_entries_distributed(fallback_entries)
-        mw._show_ocr_import_result_distributed(
-            added=added,
-            total=len(candidate_names),
-            counts=added_counts,
-        )
+        fallback_entries = [
+            {"name": name, "assignments": [], "subroles_by_role": {}, "active": True}
+            for name in candidate_names
+        ]
+        if role == "all":
+            added, added_counts = mw._add_ocr_entries_distributed(fallback_entries)
+            mw._show_ocr_import_result_distributed(
+                added=added,
+                total=len(candidate_names),
+                counts=added_counts,
+            )
+        else:
+            added = mw._add_ocr_entries_for_role(role, fallback_entries)
+            mw._show_ocr_import_result_for_role(
+                role,
+                added=added,
+                total=len(candidate_names),
+            )
     except Exception as exc:
         QtWidgets.QMessageBox.warning(
             mw,

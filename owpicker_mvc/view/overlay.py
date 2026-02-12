@@ -243,13 +243,36 @@ class ResultOverlay(QtWidgets.QWidget):
         names_list.subrole_labels = normalized
         names_list.has_subroles = bool(normalized)
 
-    def show_ocr_name_picker(self, names: list[str], subrole_labels: list[str] | None = None):
+    @staticmethod
+    def _ocr_picker_hint_text(hint_key: str, hint_kwargs: dict | None, count: int) -> str:
+        payload = {"count": max(0, int(count))}
+        if isinstance(hint_kwargs, dict):
+            payload.update(hint_kwargs)
+        try:
+            return i18n.t(hint_key, **payload)
+        except Exception:
+            return i18n.t("ocr.pick_hint", count=max(0, int(count)))
+
+    def show_ocr_name_picker(
+        self,
+        names: list[str],
+        subrole_labels: list[str] | None = None,
+        *,
+        hint_key: str = "ocr.pick_hint",
+        hint_kwargs: dict | None = None,
+    ):
         self._apply_button_labels()
         display_names = [str(name).strip() for name in names if str(name).strip()]
         self._set_ocr_subrole_labels(subrole_labels)
         self.title.setText(i18n.t("ocr.pick_title"))
         self._set_info_labels_visible(tank=True, dps=False, sup=False)
-        self.lab_tank.setText(i18n.t("ocr.pick_hint", count=len(display_names)))
+        self.lab_tank.setText(
+            self._ocr_picker_hint_text(
+                str(hint_key or "ocr.pick_hint"),
+                hint_kwargs,
+                len(display_names),
+            )
+        )
         self.lab_dps.setText("")
         self.lab_sup.setText("")
         names_list = self.ocr_names_panel.names
@@ -273,7 +296,12 @@ class ResultOverlay(QtWidgets.QWidget):
         self.ocr_names_panel.refresh_action_state()
         self.ocr_names_panel.setVisible(True)
         self._set_action_buttons_visible(ocr_cancel=True, ocr_replace=True, ocr_confirm=True)
-        self._last_view = {"type": "ocr_name_picker", "data": display_names}
+        self._last_view = {
+            "type": "ocr_name_picker",
+            "data": display_names,
+            "hint_key": str(hint_key or "ocr.pick_hint"),
+            "hint_kwargs": dict(hint_kwargs or {}),
+        }
         self._show()
 
     def set_choice_enabled(self, enabled: bool):
@@ -371,8 +399,10 @@ class ResultOverlay(QtWidgets.QWidget):
             self.show_delete_names_confirm(count_value)
         elif kind == "ocr_name_picker":
             count_value = self.ocr_names_panel.names.count()
+            hint_key = str(self._last_view.get("hint_key") or "ocr.pick_hint")
+            hint_kwargs = self._last_view.get("hint_kwargs")
             self.title.setText(i18n.t("ocr.pick_title"))
-            self.lab_tank.setText(i18n.t("ocr.pick_hint", count=count_value))
+            self.lab_tank.setText(self._ocr_picker_hint_text(hint_key, hint_kwargs, count_value))
 
     def apply_theme(self, theme: theme_util.Theme, tool_style: str | None = None) -> None:
         """Update overlay colors to match the active theme."""
