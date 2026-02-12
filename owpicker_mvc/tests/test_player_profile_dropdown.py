@@ -8,6 +8,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from controller.main_window import MainWindow
 from services.state_store import ModeStateStore
+from utils import qt_runtime
 from view.profile_dropdown import PlayerProfileDropdown
 
 
@@ -23,6 +24,7 @@ class TestPlayerProfileDropdown(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        qt_runtime.apply_preferred_app_font(cls._app)
 
     def test_widget_sets_profiles_and_order(self):
         widget = PlayerProfileDropdown()

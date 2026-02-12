@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from utils import qt_runtime
 from utils import theme as theme_util
 
 
@@ -143,6 +144,7 @@ class PlayerProfileDropdown(QtWidgets.QWidget):
         self._current_profile_index = -1
         self._expanded = False
         self._app = QtWidgets.QApplication.instance()
+        self._embedded_popup = qt_runtime.is_headless_qpa()
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -165,7 +167,10 @@ class PlayerProfileDropdown(QtWidgets.QWidget):
         row.addWidget(self.btn_toggle, 0)
         root.addWidget(self.header)
 
-        self.popup = _ProfilePopupFrame(self, QtCore.Qt.Popup | QtCore.Qt.FramelessWindowHint)
+        popup_flags = QtCore.Qt.FramelessWindowHint
+        if not self._embedded_popup:
+            popup_flags |= QtCore.Qt.Popup
+        self.popup = _ProfilePopupFrame(self, popup_flags)
         self.popup.setObjectName("profilePopup")
         popup_layout = QtWidgets.QVBoxLayout(self.popup)
         popup_layout.setContentsMargins(0, 0, 0, 0)
@@ -196,7 +201,12 @@ class PlayerProfileDropdown(QtWidgets.QWidget):
             local = self.mapFromGlobal(point)
             if self.rect().contains(local):
                 return True
-        return self.popup.isVisible() and self.popup.geometry().contains(point)
+        if not self.popup.isVisible():
+            return False
+        if self._embedded_popup:
+            local_popup = self.popup.mapFromGlobal(point)
+            return self.popup.rect().contains(local_popup)
+        return self.popup.geometry().contains(point)
 
     def _event_global_pos(self, event) -> QtCore.QPoint | None:
         if hasattr(event, "globalPosition"):
@@ -234,6 +244,9 @@ class PlayerProfileDropdown(QtWidgets.QWidget):
                     target.moveTop(above_y)
                 else:
                     target.setHeight(max(80, avail.bottom() - target.top()))
+        if self._embedded_popup:
+            local_top_left = self.mapFromGlobal(target.topLeft())
+            target.moveTopLeft(local_top_left)
         return target
 
     def _set_expanded(self, expanded: bool, *, update_popup: bool = True) -> None:
@@ -245,9 +258,10 @@ class PlayerProfileDropdown(QtWidgets.QWidget):
             rect = self._popup_target_geometry()
             self.popup.setGeometry(rect)
             self.popup.show()
-            self.popup.raise_()
-            self.popup.activateWindow()
-            self.list_widget.setFocus(QtCore.Qt.PopupFocusReason)
+            qt_runtime.safe_raise(self.popup)
+            qt_runtime.safe_activate_window(self.popup)
+            focus_reason = QtCore.Qt.PopupFocusReason if not self._embedded_popup else QtCore.Qt.OtherFocusReason
+            self.list_widget.setFocus(focus_reason)
         else:
             self.popup.hide()
             self._clear_name_edit_focus()

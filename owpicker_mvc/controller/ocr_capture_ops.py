@@ -9,6 +9,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 import i18n
 from controller import ocr_import
+from utils import qt_runtime
 from view.screen_region_selector import (
     select_region_from_primary_screen,
     select_region_with_macos_screencapture,
@@ -57,8 +58,8 @@ def capture_region_for_ocr(mw) -> tuple[QtGui.QPixmap | None, str | None]:
                 mw.showMinimized()
             else:
                 mw.show()
-                mw.raise_()
-                mw.activateWindow()
+                qt_runtime.safe_raise(mw)
+                qt_runtime.safe_activate_window(mw)
             QtWidgets.QApplication.processEvents()
 
     if selected_pixmap is None and select_error == "screencapture-not-found":

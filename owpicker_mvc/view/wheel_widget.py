@@ -144,6 +144,16 @@ class WheelWidget(QtWidgets.QGraphicsView):
             return super().viewportEvent(event)
         return super().viewportEvent(event)
 
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        super().mousePressEvent(event)
+        if not event.isAccepted():
+            event.accept()
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
+        super().mouseReleaseEvent(event)
+        if not event.isAccepted():
+            event.accept()
+
     def _rearm_hover_tracking(self) -> None:
         self.setMouseTracking(True)
         self.setInteractive(True)

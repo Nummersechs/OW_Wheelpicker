@@ -6,6 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6 import QtCore, QtTest, QtWidgets
 
+from utils import qt_runtime
 from view.wheel_widget import WheelWidget
 
 
@@ -13,6 +14,7 @@ class TestWheelSegmentToggle(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        qt_runtime.apply_preferred_app_font(cls._app)
 
     def test_clicking_same_segment_twice_reenables_it(self):
         view = WheelWidget(["A", "B", "C", "D"])

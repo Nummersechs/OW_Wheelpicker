@@ -1,7 +1,7 @@
 from PySide6 import QtCore, QtGui, QtWidgets
 from html import escape
 import i18n
-from utils import flag_icons, theme as theme_util
+from utils import flag_icons, qt_runtime, theme as theme_util
 from . import style_helpers
 from .name_list import NameRowWidget, NamesListPanel
 
@@ -152,7 +152,7 @@ class ResultOverlay(QtWidgets.QWidget):
         if self.parent():
             self.setGeometry(self.parent().rect())
         self.show()
-        self.raise_()
+        qt_runtime.safe_raise(self)
         # Keine Fokus-Erzwingung, damit kein unerwarteter Refokus entsteht.
 
     def _set_info_labels_visible(self, *, tank: bool, dps: bool, sup: bool) -> None:

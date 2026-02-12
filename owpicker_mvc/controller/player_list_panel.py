@@ -3,7 +3,7 @@ from __future__ import annotations
 from PySide6 import QtCore, QtWidgets
 
 import i18n
-from utils import theme as theme_util
+from utils import qt_runtime, theme as theme_util
 from view.name_list import NamesListPanel
 
 
@@ -49,7 +49,7 @@ class PlayerListPanelController(QtCore.QObject):
         self.position_panel()
         if self._panel:
             self._panel.show()
-            self._panel.raise_()
+            qt_runtime.safe_raise(self._panel)
 
     def hide_panel(self) -> None:
         if self._panel:

@@ -7,7 +7,7 @@ from view.name_list import NameRowWidget
 from view import wheel_entries_ops, wheel_spin_ops
 from model.wheel_state import WheelState
 import i18n
-from utils import theme as theme_util, ui_helpers
+from utils import qt_runtime, theme as theme_util, ui_helpers
 
 class WheelView(BasePanel):
     spun = QtCore.Signal(str)
@@ -205,7 +205,7 @@ class WheelView(BasePanel):
         self._wheel_overlay_margin_right = max(0, int(margin_right))
         widget.setParent(self.view.viewport())
         widget.show()
-        widget.raise_()
+        qt_runtime.safe_raise(widget)
         widget.installEventFilter(self)
         QtCore.QTimer.singleShot(0, self._position_wheel_overlay_widget)
 
@@ -217,7 +217,7 @@ class WheelView(BasePanel):
         x = max(0, viewport.width() - widget.width() - self._wheel_overlay_margin_right)
         y = max(0, self._wheel_overlay_margin_top)
         widget.move(x, y)
-        widget.raise_()
+        qt_runtime.safe_raise(widget)
 
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent):
         if obj is self.view.viewport() and event.type() in (

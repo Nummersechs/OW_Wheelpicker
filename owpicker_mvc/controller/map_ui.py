@@ -4,7 +4,7 @@ from typing import Dict
 from PySide6 import QtCore, QtWidgets
 import config
 import i18n
-from utils import theme as theme_util, ui_helpers
+from utils import qt_runtime, theme as theme_util, ui_helpers
 from view import style_helpers
 from view.wheel_view import WheelView
 from view.list_panel import ListPanel
@@ -317,7 +317,7 @@ class MapUI(QtCore.QObject):
             h = self._map_type_editor.height()
             self._map_type_editor.move(max(0, (pw - w) // 2), max(0, (ph - h) // 2))
         self._map_type_editor.show()
-        self._map_type_editor.raise_()
+        qt_runtime.safe_raise(self._map_type_editor)
 
     def _add_map_type_row(self):
         if hasattr(self, "_map_type_list_widget"):

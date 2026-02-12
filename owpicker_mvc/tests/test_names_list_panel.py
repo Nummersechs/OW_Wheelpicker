@@ -7,6 +7,7 @@ from PySide6 import QtWidgets
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 
+from utils import qt_runtime
 from view.name_list import NameRowWidget, NamesListPanel
 
 
@@ -14,6 +15,7 @@ class TestNamesListPanel(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        qt_runtime.apply_preferred_app_font(cls._app)
 
     def _add_names(self, panel: NamesListPanel, names: list[str]) -> None:
         for name in names:
@@ -39,7 +41,6 @@ class TestNamesListPanel(unittest.TestCase):
     def test_trash_button_enabled_only_with_marked_rows(self):
         panel = NamesListPanel(subrole_labels=["HS", "FDPS"])
         self._add_names(panel, ["Alpha", "Beta"])
-        panel.show()
         QtWidgets.QApplication.processEvents()
 
         self.assertFalse(panel.btn_delete_marked.isEnabled())
@@ -58,7 +59,6 @@ class TestNamesListPanel(unittest.TestCase):
     def test_trash_button_deletes_all_marked_names(self):
         panel = NamesListPanel(subrole_labels=["HS", "FDPS"])
         self._add_names(panel, ["Alpha", "Beta", "Gamma"])
-        panel.show()
         QtWidgets.QApplication.processEvents()
 
         for row in (0, 2):
@@ -78,7 +78,6 @@ class TestNamesListPanel(unittest.TestCase):
     def test_trash_button_keeps_single_empty_row_when_all_removed(self):
         panel = NamesListPanel(subrole_labels=["HS", "FDPS"])
         self._add_names(panel, ["Solo"])
-        panel.show()
         QtWidgets.QApplication.processEvents()
 
         item0 = panel.names.item(0)
@@ -119,7 +118,6 @@ class TestNamesListPanel(unittest.TestCase):
     def test_bulk_delete_then_enter_inserts_new_row(self):
         panel = NamesListPanel(subrole_labels=["HS", "FDPS"])
         self._add_names(panel, ["Alpha", "Beta", "Gamma"])
-        panel.show()
         QtWidgets.QApplication.processEvents()
 
         for row in (0, 2):
@@ -147,7 +145,6 @@ class TestNamesListPanel(unittest.TestCase):
     def test_marked_delete_waits_for_external_confirmation(self):
         panel = NamesListPanel(subrole_labels=["HS", "FDPS"])
         self._add_names(panel, ["Alpha", "Beta"])
-        panel.show()
         QtWidgets.QApplication.processEvents()
 
         requested_counts: list[int] = []
@@ -176,7 +173,6 @@ class TestNamesListPanel(unittest.TestCase):
             enable_mark_for_delete=False,
         )
         self._add_names(panel, ["Alpha"])
-        panel.show()
         QtWidgets.QApplication.processEvents()
 
         item0 = panel.names.item(0)

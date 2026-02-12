@@ -308,6 +308,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
             painter.drawPixmap(-self.radius, -self.radius, self._cached)
     def mousePressEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
         if not self.names:
+            event.accept()
             return
         pos = event.pos()
         x, y = pos.x(), pos.y()
@@ -315,7 +316,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         # Ignore clicks outside the circle. Without this, clicks in the square
         # around the wheel can toggle random segments.
         if (x * x + y * y) > (r * r):
-            event.ignore()
+            event.accept()
             return
         # CW-Winkel (0° = rechts, zunehmende Winkel im Uhrzeigersinn)
         angle = (math.degrees(math.atan2(-y, x)) + 360.0) % 360.0
@@ -332,7 +333,12 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         self._hover_cache_warmed = False
         self.update()
         self.segmentToggled.emit(idx, disabled, label)
+        event.accept()
         super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
+        event.accept()
+        super().mouseReleaseEvent(event)
 
     def hoverMoveEvent(self, event: QtWidgets.QGraphicsSceneHoverEvent) -> None:
         """Zeigt beim Hover den vollen Namen an der Maus, wenn das Segment aktiv ist."""
