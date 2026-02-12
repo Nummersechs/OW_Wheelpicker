@@ -45,6 +45,7 @@ class WheelView(BasePanel):
         self._wheel_overlay_widget: QtWidgets.QWidget | None = None
         self._wheel_overlay_margin_top = 8
         self._wheel_overlay_margin_right = 8
+        self._last_entries_signature: tuple | None = None
         self.view = WheelWidget(self._effective_names_from(defaults))
         self.view.viewport().installEventFilter(self)
         self.view.segmentToggled.connect(self._on_segment_toggled)
@@ -697,6 +698,10 @@ class WheelView(BasePanel):
         if self._names_change_timer is not None and self._names_change_timer.isActive():
             self._names_change_timer.stop()
         self._rebuild_entries_cache()
+        entries_signature = self._entries_signature()
+        if entries_signature == self._last_entries_signature:
+            return
+        self._last_entries_signature = entries_signature
         if self._wheel_state.override_entries is not None:
             # Override bestimmt das Rad – sichtbare Liste nur Anzeige
             self._apply_override()
@@ -723,6 +728,32 @@ class WheelView(BasePanel):
         self._tooltip_rev += 1
         if not self._suppress_state_signal:
             self.stateChanged.emit()
+
+    def _entries_signature(self) -> tuple:
+        if not self._entries_cache:
+            return (
+                (),
+                bool(self.pair_mode),
+                bool(self.use_subrole_filter),
+                tuple(self.subrole_labels),
+                bool(self._suppress_wheel_render),
+                bool(self._wheel_state.override_entries is not None),
+            )
+        signature: list[tuple[str, bool, tuple[str, ...]]] = []
+        for entry in self._entries_cache.get("entries", []):
+            name = str(entry.get("name", "")).strip()
+            active = bool(entry.get("active", True))
+            subroles_raw = entry.get("subroles", []) or []
+            subroles = tuple(sorted(str(role).strip() for role in subroles_raw if str(role).strip()))
+            signature.append((name, active, subroles))
+        return (
+            tuple(signature),
+            bool(self.pair_mode),
+            bool(self.use_subrole_filter),
+            tuple(self.subrole_labels),
+            bool(self._suppress_wheel_render),
+            bool(self._wheel_state.override_entries is not None),
+        )
 
     def _effective_names_from(self, base: Union[List[dict], List[str]], include_disabled: bool = True) -> List[str]:
         """

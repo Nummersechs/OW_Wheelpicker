@@ -31,10 +31,12 @@ class StateSyncController(QtCore.QObject):
         self._network_futures: set[Future] = set()
         self._network_futures_lock = threading.Lock()
         self._pending_state: Dict[str, Any] | None = None
+        self._pending_state_dirty = False
         self._pending_save_sync = False
         self._save_debounce_ms = max(0, int(self._cfg("STATE_SAVE_DEBOUNCE_MS", 160)))
         workers = max(1, int(self._cfg("NETWORK_SYNC_WORKERS", 2)))
-        self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="state_sync")
+        self._executor_workers = workers
+        self._executor: ThreadPoolExecutor | None = None
         self._last_saved_signature: str | None = None
         existing = self._load_state(state_file)
         if existing:
@@ -43,6 +45,8 @@ class StateSyncController(QtCore.QObject):
         self._save_timer.setSingleShot(True)
         self._save_timer.timeout.connect(self._flush_pending_save)
         self._pending_sync_payload: list[dict] | None = None
+        self._pending_sync_dirty = False
+        self._last_synced_roles_signature: str | None = None
         self._sync_timer = QtCore.QTimer(self)
         self._sync_timer.setSingleShot(True)
         self._sync_timer.timeout.connect(self._flush_role_sync)
@@ -90,7 +94,7 @@ class StateSyncController(QtCore.QObject):
     @staticmethod
     def _state_signature(data: Dict[str, Any]) -> str | None:
         try:
-            return json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
         except Exception:
             return None
 
@@ -127,17 +131,19 @@ class StateSyncController(QtCore.QObject):
         if getattr(self._mw, "_closing", False):
             sync = False
             immediate = True
-        state = self.gather_state()
         if immediate:
+            state = self.gather_state()
             if self._save_timer.isActive():
                 self._save_timer.stop()
             self._pending_state = None
+            self._pending_state_dirty = False
             self._pending_save_sync = False
             self._persist_state(state)
             if sync:
                 self.sync_all_roles()
         else:
-            self._pending_state = state
+            # Build state once on flush instead of on every UI event while typing.
+            self._pending_state_dirty = True
             self._pending_save_sync = bool(self._pending_save_sync or sync)
             self._save_timer.start(self._save_debounce_ms)
         if self._mw.hero_ban_active and not getattr(self._mw, "_closing", False):
@@ -154,9 +160,13 @@ class StateSyncController(QtCore.QObject):
         state = self._pending_state
         sync = self._pending_save_sync
         self._pending_state = None
+        dirty = self._pending_state_dirty
+        self._pending_state_dirty = False
         self._pending_save_sync = False
-        if state is None:
+        if state is None and not dirty:
             return
+        if state is None:
+            state = self.gather_state()
         self._persist_state(state)
         if sync:
             self.sync_all_roles()
@@ -171,12 +181,16 @@ class StateSyncController(QtCore.QObject):
         if self._sync_timer.isActive():
             self._sync_timer.stop()
         self._pending_state = None
+        self._pending_state_dirty = False
         self._pending_save_sync = False
         self._pending_sync_payload = None
-        try:
-            self._executor.shutdown(wait=False, cancel_futures=True)
-        except TypeError:
-            self._executor.shutdown(wait=False)
+        self._pending_sync_dirty = False
+        if self._executor is not None:
+            try:
+                self._executor.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                self._executor.shutdown(wait=False)
+            self._executor = None
 
     def resource_snapshot(self) -> dict:
         save_timer_active = False
@@ -197,12 +211,23 @@ class StateSyncController(QtCore.QObject):
             "closed": bool(self._closed),
             "save_timer_active": save_timer_active,
             "sync_timer_active": sync_timer_active,
-            "has_pending_state": bool(self._pending_state is not None),
+            "has_pending_state": bool(self._pending_state is not None or self._pending_state_dirty),
             "pending_save_sync": bool(self._pending_save_sync),
-            "has_pending_sync_payload": bool(self._pending_sync_payload is not None),
+            "has_pending_sync_payload": bool(self._pending_sync_payload is not None or self._pending_sync_dirty),
             "network_threads_active": active_threads,
             "network_futures_pending": pending_futures,
         }
+
+    def _ensure_executor(self) -> ThreadPoolExecutor | None:
+        if self._closed:
+            return None
+        if self._executor is not None:
+            return self._executor
+        self._executor = ThreadPoolExecutor(
+            max_workers=self._executor_workers,
+            thread_name_prefix="state_sync",
+        )
+        return self._executor
 
     def send_spin_result(self, tank: str, damage: str, support: str) -> None:
         if self._closed:
@@ -222,14 +247,11 @@ class StateSyncController(QtCore.QObject):
         if not getattr(self._mw, "online_mode", False):
             config.debug_print("Sync uebersprungen: Offline-Modus.")
             self._pending_sync_payload = None
+            self._pending_sync_dirty = False
             if self._sync_timer.isActive():
                 self._sync_timer.stop()
             return
-        payload = [
-            {"role": role, "names": wheel.get_current_names()}
-            for role, wheel in role_wheel_map(self._mw).items()
-        ]
-        self._pending_sync_payload = payload
+        self._pending_sync_dirty = True
         # kurze Verzoegerung, um schnelle State-Aenderungen zu buendeln
         self._sync_timer.start(200)
 
@@ -237,11 +259,24 @@ class StateSyncController(QtCore.QObject):
         """Sendet den letzten vorbereiteten Sync-Payload (debounced)."""
         if not getattr(self._mw, "online_mode", False):
             self._pending_sync_payload = None
+            self._pending_sync_dirty = False
             return
+        if self._pending_sync_dirty:
+            self._pending_sync_payload = [
+                {"role": role, "names": wheel.get_current_names()}
+                for role, wheel in role_wheel_map(self._mw).items()
+            ]
+            self._pending_sync_dirty = False
         payload = self._pending_sync_payload
         self._pending_sync_payload = None
-        if payload:
-            self._sync_roles(payload)
+        if not payload:
+            return
+        signature = self._state_signature({"roles": payload})
+        if signature is not None and signature == self._last_synced_roles_signature:
+            return
+        self._sync_roles(payload)
+        if signature is not None:
+            self._last_synced_roles_signature = signature
 
     @staticmethod
     def _split_pair_label(label: str, is_pair_mode: bool) -> tuple[str, str]:
@@ -294,8 +329,14 @@ class StateSyncController(QtCore.QObject):
 
         if self._closed:
             return
+        if requests is None:
+            config.debug_print(missing_requests_log)
+            return
+        executor = self._ensure_executor()
+        if executor is None:
+            return
         try:
-            future = self._executor.submit(_worker)
+            future = executor.submit(_worker)
         except RuntimeError:
             return
         with self._network_futures_lock:

@@ -139,6 +139,22 @@ class TestStateSyncController(unittest.TestCase):
             controller.shutdown(flush=False)
             tmp.cleanup()
 
+    def test_debounced_save_gathers_state_only_on_flush(self):
+        tmp, _mw, controller = self._make_controller()
+        try:
+            with (
+                patch.object(controller, "gather_state", wraps=controller.gather_state) as gather_mock,
+                patch.object(StateSyncController, "_save_state", return_value=True),
+            ):
+                controller.save_state(sync=False, immediate=False)
+                controller.save_state(sync=False, immediate=False)
+                self.assertEqual(gather_mock.call_count, 0)
+                controller._flush_pending_save()
+                self.assertEqual(gather_mock.call_count, 1)
+        finally:
+            controller.shutdown(flush=False)
+            tmp.cleanup()
+
     def test_pending_sync_is_merged_until_save_flush(self):
         tmp, mw, controller = self._make_controller()
         try:
@@ -200,9 +216,11 @@ class TestStateSyncController(unittest.TestCase):
         try:
             mw.online_mode = False
             controller._pending_sync_payload = [{"role": "Tank", "names": ["A"]}]
+            controller._pending_sync_dirty = True
             controller._sync_timer.start(1_000)
             controller.sync_all_roles()
             self.assertIsNone(controller._pending_sync_payload)
+            self.assertFalse(controller._pending_sync_dirty)
             self.assertFalse(controller._sync_timer.isActive())
         finally:
             controller.shutdown(flush=False)
@@ -213,8 +231,31 @@ class TestStateSyncController(unittest.TestCase):
         try:
             mw.online_mode = True
             controller.sync_all_roles()
-            self.assertIsNotNone(controller._pending_sync_payload)
+            self.assertTrue(controller._pending_sync_dirty)
+            self.assertIsNone(controller._pending_sync_payload)
             self.assertTrue(controller._sync_timer.isActive())
+        finally:
+            controller.shutdown(flush=False)
+            tmp.cleanup()
+
+    def test_executor_is_lazy_until_first_network_post(self):
+        tmp, _mw, controller = self._make_controller()
+        try:
+            self.assertIsNone(controller._executor)
+            with (
+                patch("controller.state_sync.requests", None),
+                patch.object(controller, "_ensure_executor", wraps=controller._ensure_executor) as ensure_mock,
+            ):
+                controller._post_json_async(
+                    endpoint="/roles-sync",
+                    payload={"roles": []},
+                    payload_log="SYNC →",
+                    success_log="SYNC OK:",
+                    error_log="Fehler beim Rollen-Sync:",
+                    missing_requests_log="Requests not available – roles not synced.",
+                )
+                ensure_mock.assert_not_called()
+            self.assertIsNone(controller._executor)
         finally:
             controller.shutdown(flush=False)
             tmp.cleanup()
@@ -228,6 +269,20 @@ class TestStateSyncController(unittest.TestCase):
                 controller._flush_role_sync()
                 sync_mock.assert_called_once_with([{"role": "Tank", "names": ["A"]}])
                 self.assertIsNone(controller._pending_sync_payload)
+        finally:
+            controller.shutdown(flush=False)
+            tmp.cleanup()
+
+    def test_flush_role_sync_skips_identical_payloads(self):
+        tmp, mw, controller = self._make_controller()
+        try:
+            mw.online_mode = True
+            with patch.object(controller, "_sync_roles") as sync_mock:
+                controller._pending_sync_payload = [{"role": "Tank", "names": ["A"]}]
+                controller._flush_role_sync()
+                controller._pending_sync_payload = [{"role": "Tank", "names": ["A"]}]
+                controller._flush_role_sync()
+                sync_mock.assert_called_once_with([{"role": "Tank", "names": ["A"]}])
         finally:
             controller.shutdown(flush=False)
             tmp.cleanup()

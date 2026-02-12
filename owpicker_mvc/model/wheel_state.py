@@ -44,55 +44,72 @@ class WheelState:
         if not base:
             return []
 
+        pair_mode = bool(self.pair_mode)
+        use_subrole_filter = bool(self.use_subrole_filter)
+        labels_key: tuple = tuple(self.subrole_labels[:2]) if use_subrole_filter else ()
+        filter_pairs_by_subroles = bool(pair_mode and use_subrole_filter and len(self.subrole_labels) >= 2)
+
+        base_names: list[str] = []
+        role_entries: list[tuple[str, set[str]]] = []
+
         # Back-compat: allow a plain list of names.
         if base and isinstance(base[0], str):
-            entries = [{"name": n, "subroles": set()} for n in base if n]
+            for raw in base:  # type: ignore[index]
+                name = str(raw).strip()
+                if not name:
+                    continue
+                base_names.append(name)
+                if filter_pairs_by_subroles:
+                    role_entries.append((name, set()))
         else:
-            entries = base  # type: ignore
+            for raw in base:  # type: ignore[assignment]
+                if not isinstance(raw, dict):
+                    continue
+                name = str(raw.get("name", "")).strip()
+                if not name:
+                    continue
+                base_names.append(name)
+                if not filter_pairs_by_subroles:
+                    continue
+                roles_raw = raw.get("subroles", set()) or set()
+                if isinstance(roles_raw, (list, set, tuple)):
+                    roles = {
+                        str(role).strip()
+                        for role in roles_raw
+                        if str(role).strip()
+                    }
+                else:
+                    roles = set()
+                role_entries.append((name, roles))
 
-        entries = [
-            {
-                "name": str(e.get("name", "")).strip(),
-                "subroles": e.get("subroles", set()) or set(),
-            }
-            for e in entries
-            if str(e.get("name", "")).strip()
-        ]
-
-        labels_key: tuple = ()
-        if self.use_subrole_filter:
-            labels_key = tuple(self.subrole_labels[:2])
-        entry_key = tuple(
-            (
-                e["name"],
-                tuple(sorted(str(s) for s in (e.get("subroles", set()) or set()) if str(s).strip())),
+        if filter_pairs_by_subroles:
+            entry_key = tuple(
+                (name, tuple(sorted(roles)))
+                for name, roles in role_entries
             )
-            for e in entries
-        )
-        cache_key = (bool(self.pair_mode), bool(self.use_subrole_filter), labels_key, entry_key)
+        else:
+            entry_key = tuple(base_names)
+
+        cache_key = (pair_mode, use_subrole_filter, labels_key, entry_key)
         names: list[str]
         if cache_key == self._cached_effective_key and self._cached_effective_names is not None:
             names = list(self._cached_effective_names)
         else:
-            base_names = [e["name"] for e in entries]
-            if not self.pair_mode:
-                names = base_names
+            if not pair_mode:
+                names = list(base_names)
+            elif filter_pairs_by_subroles:
+                role_a, role_b = self.subrole_labels[:2]
+                pairs: list[str] = []
+                for (a_name, roles_a), (b_name, roles_b) in itertools.combinations(role_entries, 2):
+                    if not roles_a or not roles_b:
+                        continue
+                    cond1 = role_a in roles_a and role_b in roles_b
+                    cond2 = role_b in roles_a and role_a in roles_b
+                    if cond1 or cond2:
+                        pairs.append(f"{a_name} + {b_name}")
+                names = pairs
             else:
-                if self.use_subrole_filter and len(self.subrole_labels) >= 2:
-                    role_a, role_b = self.subrole_labels[:2]
-                    pairs: list[str] = []
-                    for a, b in itertools.combinations(entries, 2):
-                        roles_a = set(a.get("subroles", set()) or set())
-                        roles_b = set(b.get("subroles", set()) or set())
-                        if not roles_a or not roles_b:
-                            continue
-                        cond1 = role_a in roles_a and role_b in roles_b
-                        cond2 = role_b in roles_a and role_a in roles_b
-                        if cond1 or cond2:
-                            pairs.append(f"{a['name']} + {b['name']}")
-                    names = pairs
-                else:
-                    names = [f"{a['name']} + {b['name']}" for a, b in itertools.combinations(entries, 2)]
+                names = [f"{a} + {b}" for a, b in itertools.combinations(base_names, 2)]
             self._cached_effective_key = cache_key
             self._cached_effective_names = list(names)
 
