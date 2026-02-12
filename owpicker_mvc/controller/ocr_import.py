@@ -4,9 +4,11 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from difflib import SequenceMatcher
+import os
 import re
 import shutil
 import subprocess
+import sys
 from typing import Iterable
 from logic.name_normalization import normalize_name_alnum_key, normalize_name_tokens
 
@@ -17,17 +19,252 @@ class OCRRunResult:
     error: str | None = None
 
 
-def tesseract_available(cmd: str = "tesseract") -> bool:
-    return shutil.which(cmd) is not None
+def _runtime_search_roots() -> list[Path]:
+    roots: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        roots.append(Path(str(meipass)))
+    if getattr(sys, "frozen", False):
+        try:
+            roots.append(Path(sys.executable).resolve().parent)
+        except Exception:
+            pass
+    here = Path(__file__).resolve()
+    roots.extend([here.parent, here.parent.parent, Path.cwd()])
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            key = str(root.resolve())
+        except Exception:
+            key = str(root)
+        key = key.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(root)
+    return unique
 
 
-@lru_cache(maxsize=8)
-def _list_tesseract_languages(cmd: str) -> tuple[str, ...] | None:
-    if not tesseract_available(cmd):
+def _command_candidate_names(lookup: str) -> list[str]:
+    names: list[str] = []
+    base_name = Path(lookup).name.strip()
+    if base_name:
+        names.append(base_name)
+    names.extend(["tesseract.exe", "tesseract"])
+    if sys.platform != "win32":
+        names = [name for name in names if not name.lower().endswith(".exe")]
+    unique_names: list[str] = []
+    seen_names: set[str] = set()
+    for name in names:
+        key = name.lower()
+        if key in seen_names:
+            continue
+        seen_names.add(key)
+        unique_names.append(name)
+    return unique_names
+
+
+def _is_auto_cmd_lookup(raw_value: str) -> bool:
+    token = str(raw_value or "").strip().lower()
+    return token in {"", "auto", "bundle", "bundled", "default"}
+
+
+def _resolve_direct_cmd_path(lookup: str) -> str | None:
+    direct = Path(lookup).expanduser()
+    if direct.is_file():
+        return str(direct)
+    if sys.platform == "win32" and direct.suffix.lower() != ".exe":
+        direct_exe = direct.with_suffix(".exe")
+        if direct_exe.is_file():
+            return str(direct_exe)
+    return None
+
+
+def _resolve_cmd_from_path(lookup: str) -> str | None:
+    which_hit = shutil.which(lookup)
+    if which_hit:
+        return which_hit
+    if sys.platform == "win32" and not lookup.lower().endswith(".exe"):
+        which_hit = shutil.which(f"{lookup}.exe")
+        if which_hit:
+            return which_hit
+    return None
+
+
+def _resolve_bundled_cmd(lookup: str) -> str | None:
+    unique_names = _command_candidate_names(lookup)
+    rel_dirs = (
+        "",
+        "OCR",
+        "OCR/bin",
+        "ocr",
+        "ocr/bin",
+        "Tesseract",
+        "tesseract",
+        "Tesseract-OCR",
+        "tools/tesseract",
+        "vendor/tesseract",
+    )
+    for root in _runtime_search_roots():
+        for rel in rel_dirs:
+            base = root / rel if rel else root
+            for name in unique_names:
+                candidate = base / name
+                if candidate.is_file():
+                    return str(candidate)
+        nested = _recursive_tesseract_search(root, unique_names)
+        if nested:
+            return nested
+    return None
+
+
+def _recursive_tesseract_search(root: Path, candidate_names: list[str]) -> str | None:
+    recursive_dirs: list[Path] = []
+    for rel in ("OCR", "ocr", "Tesseract-OCR", "Tesseract", "tesseract", "tools", "vendor"):
+        directory = root / rel
+        if directory.exists() and directory.is_dir():
+            recursive_dirs.append(directory)
+    lowered_root = str(root).lower()
+    if "ocr" in lowered_root or "tesseract" in lowered_root:
+        recursive_dirs.append(root)
+
+    seen_dirs: set[str] = set()
+    for directory in recursive_dirs:
+        key = str(directory).lower()
+        if key in seen_dirs:
+            continue
+        seen_dirs.add(key)
+        for name in candidate_names:
+            try:
+                for candidate in directory.rglob(name):
+                    if candidate.is_file():
+                        return str(candidate)
+            except Exception:
+                continue
+    return None
+
+
+@lru_cache(maxsize=16)
+def resolve_tesseract_cmd(cmd: str = "auto") -> str | None:
+    raw = str(cmd or "").strip()
+    auto_mode = _is_auto_cmd_lookup(raw)
+    lookup = "tesseract" if auto_mode else (raw or "tesseract")
+
+    # Manual path/command overrides are still respected.
+    if not auto_mode:
+        direct_hit = _resolve_direct_cmd_path(lookup)
+        if direct_hit:
+            return direct_hit
+
+    prefer_bundled_first = auto_mode or bool(getattr(sys, "frozen", False))
+
+    if prefer_bundled_first:
+        bundled_hit = _resolve_bundled_cmd(lookup)
+        if bundled_hit:
+            return bundled_hit
+
+    which_hit = _resolve_cmd_from_path(lookup)
+    if which_hit:
+        return which_hit
+
+    if not prefer_bundled_first:
+        bundled_hit = _resolve_bundled_cmd(lookup)
+        if bundled_hit:
+            return bundled_hit
+    return None
+
+
+def _has_traineddata_files(folder: Path) -> bool:
+    try:
+        for entry in folder.iterdir():
+            if entry.is_file() and entry.suffix.lower() == ".traineddata":
+                return True
+    except Exception:
+        return False
+    return False
+
+
+@lru_cache(maxsize=16)
+def resolve_tessdata_dir(cmd: str = "auto") -> str | None:
+    cmd_path = resolve_tesseract_cmd(cmd)
+    candidates: list[Path] = []
+
+    if cmd_path:
+        cmd_file = Path(cmd_path)
+        candidates.extend(
+            [
+                cmd_file.parent / "tessdata",
+                cmd_file.parent.parent / "tessdata",
+            ]
+        )
+
+    for root in _runtime_search_roots():
+        candidates.extend(
+            [
+                root / "tessdata",
+                root / "OCR" / "tessdata",
+                root / "ocr" / "tessdata",
+                root / "Tesseract" / "tessdata",
+                root / "Tesseract-OCR" / "tessdata",
+                root / "tools" / "tesseract" / "tessdata",
+                root / "vendor" / "tesseract" / "tessdata",
+            ]
+        )
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            key = str(candidate.resolve()).lower()
+        except Exception:
+            key = str(candidate).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if candidate.is_dir() and _has_traineddata_files(candidate):
+            return str(candidate)
+    return None
+
+
+def tesseract_resolution_diagnostics(cmd: str = "auto") -> str:
+    raw_lookup = str(cmd or "").strip()
+    auto_mode = _is_auto_cmd_lookup(raw_lookup)
+    lookup = "tesseract" if auto_mode else (raw_lookup or "tesseract")
+    resolve_key = raw_lookup if raw_lookup else "auto"
+    resolved_cmd = resolve_tesseract_cmd(resolve_key)
+    resolved_tessdata = resolve_tessdata_dir(resolve_key)
+    roots = _runtime_search_roots()
+    names = _command_candidate_names(lookup)
+    lines = [
+        f"configured={raw_lookup or 'auto'}",
+        f"normalized_lookup={lookup}",
+        f"mode={'auto' if auto_mode else 'manual'}",
+        f"prefer_bundled_first={auto_mode or bool(getattr(sys, 'frozen', False))}",
+        f"resolved_cmd={resolved_cmd or '-'}",
+        f"resolved_tessdata={resolved_tessdata or '-'}",
+        "candidate_names=" + ", ".join(names),
+        "search_roots:",
+    ]
+    for root in roots[:8]:
+        lines.append(f"- {root}")
+    return "\n".join(lines)
+
+
+def tesseract_available(cmd: str = "auto") -> bool:
+    return resolve_tesseract_cmd(cmd) is not None
+
+
+@lru_cache(maxsize=32)
+def _list_tesseract_languages(cmd_path: str, tessdata_dir: str | None) -> tuple[str, ...] | None:
+    if not cmd_path:
         return None
+    proc_args = [cmd_path, "--list-langs"]
+    if tessdata_dir:
+        proc_args.extend(["--tessdata-dir", tessdata_dir])
     try:
         completed = subprocess.run(
-            [cmd, "--list-langs"],
+            proc_args,
             capture_output=True,
             text=True,
             check=False,
@@ -50,13 +287,13 @@ def _list_tesseract_languages(cmd: str) -> tuple[str, ...] | None:
     return tuple(sorted(set(langs)))
 
 
-def _resolve_tesseract_lang(cmd: str, lang: str | None) -> str | None:
+def _resolve_tesseract_lang(cmd_path: str, tessdata_dir: str | None, lang: str | None) -> str | None:
     if not lang:
         return None
     tokens = [token.strip() for token in str(lang).split("+") if token.strip()]
     if not tokens:
         return None
-    available = _list_tesseract_languages(cmd)
+    available = _list_tesseract_languages(cmd_path, tessdata_dir)
     if not available:
         return "+".join(tokens)
     available_set = set(available)
@@ -71,27 +308,39 @@ def _resolve_tesseract_lang(cmd: str, lang: str | None) -> str | None:
 def run_tesseract(
     image_path: Path,
     *,
-    cmd: str = "tesseract",
+    cmd: str = "auto",
     psm: int = 6,
     timeout_s: float = 8.0,
     lang: str | None = None,
 ) -> OCRRunResult:
-    if not tesseract_available(cmd):
+    cmd_path = resolve_tesseract_cmd(cmd)
+    if not cmd_path:
         return OCRRunResult("", error=f"tesseract-not-found:{cmd}")
     if not image_path.exists():
         return OCRRunResult("", error=f"image-not-found:{image_path}")
+    tessdata_dir = resolve_tessdata_dir(cmd)
     proc_args = [
-        cmd,
+        cmd_path,
         str(image_path),
         "stdout",
     ]
-    resolved_lang = _resolve_tesseract_lang(cmd, lang)
+    if tessdata_dir:
+        proc_args.extend(["--tessdata-dir", tessdata_dir])
+    resolved_lang = _resolve_tesseract_lang(cmd_path, tessdata_dir, lang)
     if resolved_lang:
         proc_args.extend(["-l", resolved_lang])
     proc_args.extend([
         "--psm",
         str(max(0, int(psm))),
     ])
+    env = os.environ.copy()
+    try:
+        cmd_dir = str(Path(cmd_path).resolve().parent)
+        existing_path = env.get("PATH", "")
+        if cmd_dir and cmd_dir not in existing_path.split(os.pathsep):
+            env["PATH"] = cmd_dir + os.pathsep + existing_path if existing_path else cmd_dir
+    except Exception:
+        pass
     try:
         completed = subprocess.run(
             proc_args,
@@ -99,6 +348,7 @@ def run_tesseract(
             text=True,
             check=False,
             timeout=max(0.5, float(timeout_s)),
+            env=env,
         )
     except subprocess.TimeoutExpired:
         return OCRRunResult("", error="timeout")
@@ -115,10 +365,11 @@ def run_tesseract(
 def run_tesseract_multi(
     image_path: Path,
     *,
-    cmd: str = "tesseract",
+    cmd: str = "auto",
     psm_values: Iterable[int] = (6, 11),
     timeout_s: float = 8.0,
     lang: str | None = None,
+    stop_on_first_success: bool = False,
 ) -> OCRRunResult:
     merged_lines: list[str] = []
     seen_lines: set[str] = set()
@@ -146,6 +397,8 @@ def run_tesseract_multi(
                 continue
             seen_lines.add(key)
             merged_lines.append(norm)
+        if stop_on_first_success and merged_lines:
+            break
 
     if merged_lines:
         return OCRRunResult("\n".join(merged_lines))

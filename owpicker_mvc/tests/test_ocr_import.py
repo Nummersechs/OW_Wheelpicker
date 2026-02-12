@@ -1,9 +1,103 @@
+import sys
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
-from controller.ocr_import import extract_candidate_names, extract_candidate_names_multi
+from controller.ocr_import import (
+    extract_candidate_names,
+    extract_candidate_names_multi,
+    resolve_tesseract_cmd,
+    resolve_tessdata_dir,
+)
 
 
 class TestOCRImport(unittest.TestCase):
+    def setUp(self):
+        resolve_tesseract_cmd.cache_clear()
+        resolve_tessdata_dir.cache_clear()
+
+    def tearDown(self):
+        resolve_tesseract_cmd.cache_clear()
+        resolve_tessdata_dir.cache_clear()
+
+    @staticmethod
+    def _platform_tesseract_name() -> str:
+        return "tesseract.exe" if sys.platform == "win32" else "tesseract"
+
+    def test_resolve_tesseract_cmd_finds_bundled_binary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            exe_name = self._platform_tesseract_name()
+            bundled_cmd = root / "OCR" / exe_name
+            bundled_cmd.parent.mkdir(parents=True, exist_ok=True)
+            bundled_cmd.write_text("stub", encoding="utf-8")
+            with (
+                patch("controller.ocr_import.shutil.which", return_value=None),
+                patch("controller.ocr_import._runtime_search_roots", return_value=[root]),
+            ):
+                resolved = resolve_tesseract_cmd("tesseract")
+            self.assertEqual(resolved, str(bundled_cmd))
+
+    def test_resolve_tesseract_cmd_auto_prefers_bundled_over_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            exe_name = self._platform_tesseract_name()
+            bundled_cmd = root / "OCR" / exe_name
+            bundled_cmd.parent.mkdir(parents=True, exist_ok=True)
+            bundled_cmd.write_text("stub", encoding="utf-8")
+            with (
+                patch("controller.ocr_import.shutil.which", return_value="/usr/bin/tesseract"),
+                patch("controller.ocr_import._runtime_search_roots", return_value=[root]),
+            ):
+                resolved = resolve_tesseract_cmd("auto")
+            self.assertEqual(resolved, str(bundled_cmd))
+
+    def test_resolve_tesseract_cmd_manual_prefers_path_before_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            exe_name = self._platform_tesseract_name()
+            bundled_cmd = root / "OCR" / exe_name
+            bundled_cmd.parent.mkdir(parents=True, exist_ok=True)
+            bundled_cmd.write_text("stub", encoding="utf-8")
+            with (
+                patch("controller.ocr_import.shutil.which", return_value="/usr/bin/tesseract"),
+                patch("controller.ocr_import._runtime_search_roots", return_value=[root]),
+            ):
+                resolved = resolve_tesseract_cmd("tesseract")
+            self.assertEqual(resolved, "/usr/bin/tesseract")
+
+    def test_resolve_tesseract_cmd_finds_nested_bundled_binary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            exe_name = self._platform_tesseract_name()
+            bundled_cmd = root / "OCR" / "Tesseract-OCR" / "bin" / exe_name
+            bundled_cmd.parent.mkdir(parents=True, exist_ok=True)
+            bundled_cmd.write_text("stub", encoding="utf-8")
+            with (
+                patch("controller.ocr_import.shutil.which", return_value=None),
+                patch("controller.ocr_import._runtime_search_roots", return_value=[root]),
+            ):
+                resolved = resolve_tesseract_cmd("tesseract")
+            self.assertEqual(resolved, str(bundled_cmd))
+
+    def test_resolve_tessdata_dir_finds_bundled_traineddata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            exe_name = self._platform_tesseract_name()
+            bundled_cmd = root / "OCR" / exe_name
+            bundled_cmd.parent.mkdir(parents=True, exist_ok=True)
+            bundled_cmd.write_text("stub", encoding="utf-8")
+            tessdata = root / "OCR" / "tessdata"
+            tessdata.mkdir(parents=True, exist_ok=True)
+            (tessdata / "eng.traineddata").write_text("stub", encoding="utf-8")
+            with (
+                patch("controller.ocr_import.shutil.which", return_value=None),
+                patch("controller.ocr_import._runtime_search_roots", return_value=[root]),
+            ):
+                resolved = resolve_tessdata_dir("tesseract")
+            self.assertEqual(resolved, str(tessdata))
+
     def test_extract_candidate_names_normalizes_and_deduplicates(self):
         text = """
         1) Nummersechs

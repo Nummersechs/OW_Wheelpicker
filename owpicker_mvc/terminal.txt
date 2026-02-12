@@ -4,15 +4,36 @@ py -m venv .venv
 pip install --upgrade pip
 pip install PySide6 pyinstaller
 
+# Optional (for OCR without end-user install):
+# Copy Tesseract runtime into bundle folder before build.
+# Adjust source path if Tesseract is installed elsewhere.
+mkdir owpicker_mvc\OCR
+copy "C:\Program Files\Tesseract-OCR\tesseract.exe" owpicker_mvc\OCR\
+copy "C:\Program Files\Tesseract-OCR\*.dll" owpicker_mvc\OCR\
+mkdir owpicker_mvc\OCR\tessdata
+copy "C:\Program Files\Tesseract-OCR\tessdata\deu.traineddata" owpicker_mvc\OCR\tessdata\
+copy "C:\Program Files\Tesseract-OCR\tessdata\eng.traineddata" owpicker_mvc\OCR\tessdata\
+# add more languages as needed:
+# copy "C:\Program Files\Tesseract-OCR\tessdata\jpn.traineddata" owpicker_mvc\OCR\tessdata\
+# copy "C:\Program Files\Tesseract-OCR\tessdata\chi_sim.traineddata" owpicker_mvc\OCR\tessdata\
+# copy "C:\Program Files\Tesseract-OCR\tessdata\chi_tra.traineddata" owpicker_mvc\OCR\tessdata\
+# copy "C:\Program Files\Tesseract-OCR\tessdata\kor.traineddata" owpicker_mvc\OCR\tessdata\
+
 # Onefile build (optimized spec, smaller than collect-all)
 pyinstaller --noconfirm --clean owpicker_mvc/OverwatchWheels.spec
 
 # Smaller build while keeping sound (QtMultimedia remains enabled):
 # - prunes unneeded Qt runtime blocks (QML/WebEngine/etc)
 # - keeps Spin/Ding assets and QSoundEffect
+# - bundles OCR engine from owpicker_mvc/OCR/ (if present)
+#   expected layout example:
+#   owpicker_mvc/OCR/tesseract.exe
+#   owpicker_mvc/OCR/*.dll
+#   owpicker_mvc/OCR/tessdata/*.traineddata
 set OW_BUILD_PROFILE=full
 set OW_PRUNE_QT=1
 set OW_INCLUDE_REQUESTS=1
+set OW_INCLUDE_OCR_BUNDLE=1
 pyinstaller --noconfirm --clean owpicker_mvc/OverwatchWheels.spec
 
 # Minimal-size profile:

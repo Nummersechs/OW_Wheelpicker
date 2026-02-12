@@ -117,15 +117,22 @@ def extract_names_from_ocr_pixmap(
 ) -> tuple[list[str], str, str | None]:
     all_texts: list[str] = []
     errors: list[str] = []
+    fast_mode = bool(mw._cfg("OCR_FAST_MODE", True))
+    max_variants = int(mw._cfg("OCR_MAX_VARIANTS", 2 if fast_mode else 0))
+    stop_after_variant_success = bool(mw._cfg("OCR_STOP_AFTER_FIRST_VARIANT_SUCCESS", True))
     psm_primary = int(mw._cfg("OCR_TESSERACT_PSM", 6))
     psm_fallback = int(mw._cfg("OCR_TESSERACT_FALLBACK_PSM", 11))
     psm_values = [psm_primary]
-    if psm_fallback not in psm_values:
+    if (not fast_mode) and psm_fallback not in psm_values:
         psm_values.append(psm_fallback)
-    lang = str(mw._cfg("OCR_TESSERACT_LANG", "eng")).strip() or None
+    lang = str(mw._cfg("OCR_TESSERACT_LANG", "deu+eng")).strip() or None
     timeout_s = float(mw._cfg("OCR_TESSERACT_TIMEOUT_S", 8.0))
 
-    for variant in build_ocr_pixmap_variants(mw, pixmap):
+    variants = build_ocr_pixmap_variants(mw, pixmap)
+    if max_variants > 0:
+        variants = variants[:max_variants]
+
+    for variant in variants:
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
             tmp_path = Path(tmp.name)
         try:
@@ -138,9 +145,12 @@ def extract_names_from_ocr_pixmap(
                 psm_values=psm_values,
                 timeout_s=timeout_s,
                 lang=lang,
+                stop_on_first_success=fast_mode,
             )
             if run_result.text:
                 all_texts.append(run_result.text)
+                if fast_mode and stop_after_variant_success:
+                    break
             elif run_result.error:
                 errors.append(run_result.error)
         finally:
@@ -246,12 +256,18 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
             _handle_ocr_selection_error(mw, select_error)
             return
 
-        tesseract_cmd = str(mw._cfg("OCR_TESSERACT_CMD", "tesseract"))
-        if not ocr_import.tesseract_available(tesseract_cmd):
+        configured_tesseract_cmd = str(mw._cfg("OCR_TESSERACT_CMD", "auto"))
+        resolved_tesseract_cmd = ocr_import.resolve_tesseract_cmd(configured_tesseract_cmd)
+        if not resolved_tesseract_cmd:
+            diag = ocr_import.tesseract_resolution_diagnostics(configured_tesseract_cmd)
             QtWidgets.QMessageBox.warning(
                 mw,
                 i18n.t("ocr.error_title"),
-                i18n.t("ocr.error_tesseract_missing", cmd=tesseract_cmd),
+                i18n.t("ocr.error_tesseract_missing", cmd=configured_tesseract_cmd)
+                + "\n\n"
+                + i18n.t("ocr.error_tesseract_bundle_hint")
+                + "\n\n"
+                + diag,
             )
             return
 
@@ -260,7 +276,7 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
             names, raw_text, ocr_error = extract_names_from_ocr_pixmap(
                 mw,
                 selected_pixmap,
-                tesseract_cmd=tesseract_cmd,
+                tesseract_cmd=resolved_tesseract_cmd,
             )
         finally:
             try:

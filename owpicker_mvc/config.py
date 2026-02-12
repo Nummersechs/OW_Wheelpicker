@@ -57,11 +57,22 @@ STATE_SAVE_DEBOUNCE_MS = 160
 NETWORK_SYNC_WORKERS = 2
 
 # ---------- OCR Import (prototype) ----------
-OCR_TESSERACT_CMD = "tesseract"
-OCR_TESSERACT_LANG = "eng+jpn+chi_sim+chi_tra+kor"
+# OCR_TESSERACT_CMD:
+# - "auto" (recommended): prefers bundled OCR runtime in EXE, then falls back to PATH
+# - absolute path (optional): force a specific binary
+OCR_TESSERACT_CMD = "auto"
+# OCR language packs are the biggest speed factor.
+# Keep this minimal for fast OCR; add more languages only when needed.
+# German + English mixed default.
+OCR_TESSERACT_LANG = "deu+eng"
 OCR_TESSERACT_PSM = 6
 OCR_TESSERACT_FALLBACK_PSM = 11
 OCR_TESSERACT_TIMEOUT_S = 8.0
+OCR_FAST_MODE = True
+# 0 = all generated variants, >0 = cap variant count per OCR run
+OCR_MAX_VARIANTS = 2
+# In fast mode, stop after the first variant that yields text
+OCR_STOP_AFTER_FIRST_VARIANT_SUCCESS = True
 OCR_NAME_MIN_CHARS = 2
 OCR_NAME_MAX_CHARS = 24
 OCR_NAME_MAX_WORDS = 2

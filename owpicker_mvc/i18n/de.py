@@ -43,6 +43,7 @@ TRANSLATIONS_DE = {
     "ocr.error_selection_failed": "Der ausgewählte Bildschirmbereich konnte nicht erfasst werden.",
     "ocr.error_screen_permission_hint": "Wenn Discord nicht sichtbar ist: Bildschirmaufnahme für diese App/Python unter macOS Einstellungen > Datenschutz & Sicherheit > Bildschirmaufnahme erlauben.",
     "ocr.error_tesseract_missing": "Tesseract ist nicht installiert oder nicht im PATH ({cmd}).",
+    "ocr.error_tesseract_bundle_hint": "Für Windows-EXE ohne extra Installation: OCR-Bundle mitliefern unter OCR/tesseract.exe + OCR/tessdata/*.traineddata (inkl. benötigter DLLs).",
     "ocr.error_image_write_failed": "Das aufgenommene Bild konnte nicht für OCR vorbereitet werden.",
     "ocr.error_run_failed": "OCR fehlgeschlagen: {reason}",
     "ocr.error_unexpected": "Unerwarteter OCR-Fehler: {reason}",

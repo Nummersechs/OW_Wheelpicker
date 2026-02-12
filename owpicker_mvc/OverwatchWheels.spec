@@ -25,8 +25,16 @@ ENABLE_UPX = str(os.environ.get("OW_UPX", "1")).strip().lower() not in {"0", "fa
 INCLUDE_QT_MULTIMEDIA = not MIN_SIZE_BUILD
 INCLUDE_REQUESTS = str(os.environ.get("OW_INCLUDE_REQUESTS", "1")).strip().lower() not in {"0", "false", "no", "off"}
 PRUNE_QT_RUNTIME = str(os.environ.get("OW_PRUNE_QT", "1")).strip().lower() not in {"0", "false", "no", "off"}
+INCLUDE_OCR_BUNDLE = str(os.environ.get("OW_INCLUDE_OCR_BUNDLE", "1")).strip().lower() not in {"0", "false", "no", "off"}
 
 _AUDIO_EXTENSIONS = {".wav", ".ogg", ".mp3"}
+_OCR_FOLDER_NAMES = ("OCR", "ocr", "Tesseract-OCR", "Tesseract", "tesseract")
+_OCR_EXECUTABLE_NAMES = ("tesseract.exe", "tesseract")
+_OCR_EXTERNAL_DIR_ENV_VARS = ("OW_TESSERACT_DIR", "TESSERACT_ROOT")
+_WINDOWS_TESSERACT_DIR_CANDIDATES = (
+    Path("C:/Program Files/Tesseract-OCR"),
+    Path("C:/Program Files (x86)/Tesseract-OCR"),
+)
 
 
 def _audio_datas(folder_name: str, target_name: str) -> list[tuple[str, str]]:
@@ -44,9 +52,151 @@ def _audio_datas(folder_name: str, target_name: str) -> list[tuple[str, str]]:
     return [(str(p), target_name) for p in files]
 
 
+def _external_ocr_candidate_dirs() -> list[Path]:
+    candidates: list[Path] = []
+    for env_name in _OCR_EXTERNAL_DIR_ENV_VARS:
+        value = str(os.environ.get(env_name, "")).strip()
+        if value:
+            candidates.append(Path(value).expanduser())
+    if os.name == "nt":
+        candidates.extend(_WINDOWS_TESSERACT_DIR_CANDIDATES)
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            key = str(candidate.resolve()).lower()
+        except Exception:
+            key = str(candidate).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    return unique
+
+
+def _existing_external_ocr_dirs() -> list[Path]:
+    return [candidate for candidate in _external_ocr_candidate_dirs() if candidate.exists() and candidate.is_dir()]
+
+
+def _append_ocr_source(
+    datas_local: list[tuple[str, str]],
+    source_dirs: list[Path],
+    seen_sources: set[str],
+    folder: Path,
+    target_name: str,
+) -> None:
+    if not folder.exists() or not folder.is_dir():
+        return
+    try:
+        key = str(folder.resolve()).lower()
+    except Exception:
+        key = str(folder).lower()
+    if key in seen_sources:
+        return
+    seen_sources.add(key)
+    datas_local.append((str(folder), target_name))
+    source_dirs.append(folder)
+
+
+def _collect_ocr_datas() -> tuple[list[tuple[str, str]], list[Path]]:
+    datas_local: list[tuple[str, str]] = []
+    source_dirs: list[Path] = []
+    seen_sources: set[str] = set()
+    # Accept both locations:
+    # - alongside this spec (owpicker_mvc/)
+    # - repo root (parent of owpicker_mvc/)
+    candidate_roots = [project_root, project_root.parent]
+    for root in candidate_roots:
+        for folder_name in _OCR_FOLDER_NAMES:
+            folder = root / folder_name
+            _append_ocr_source(datas_local, source_dirs, seen_sources, folder, folder_name)
+
+    # Allow bundling directly from system install folders on Windows, so a local OCR copy is optional.
+    for folder in _existing_external_ocr_dirs():
+        _append_ocr_source(datas_local, source_dirs, seen_sources, folder, "OCR")
+    return datas_local, source_dirs
+
+
+def _bundle_contains_tesseract_executable(source_dirs: list[Path]) -> bool:
+    for src in source_dirs:
+        for name in _OCR_EXECUTABLE_NAMES:
+            try:
+                if any(candidate.is_file() for candidate in src.rglob(name)):
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def _bundle_contains_traineddata(source_dirs: list[Path]) -> bool:
+    for src in source_dirs:
+        try:
+            if any(candidate.is_file() for candidate in src.rglob("*.traineddata")):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _ocr_bundle_stats(source_dirs: list[Path]) -> tuple[int, int, list[str]]:
+    file_count = 0
+    total_bytes = 0
+    traineddata_files: list[str] = []
+    for src in source_dirs:
+        try:
+            for candidate in src.rglob("*"):
+                if not candidate.is_file():
+                    continue
+                file_count += 1
+                try:
+                    total_bytes += int(candidate.stat().st_size)
+                except Exception:
+                    pass
+                if candidate.suffix.lower() == ".traineddata":
+                    traineddata_files.append(candidate.name)
+        except Exception:
+            continue
+    traineddata_files = sorted(set(traineddata_files))
+    return file_count, total_bytes, traineddata_files
+
+
 datas = []
 datas.extend(_audio_datas("Spin", "Spin"))
 datas.extend(_audio_datas("Ding", "Ding"))
+if INCLUDE_OCR_BUNDLE:
+    ocr_datas, ocr_source_dirs = _collect_ocr_datas()
+    if not ocr_datas:
+        roots = [str(project_root), str(project_root.parent)]
+        external_candidates = [str(p) for p in _external_ocr_candidate_dirs()]
+        expected = ", ".join(_OCR_FOLDER_NAMES)
+        raise SystemExit(
+            "OW_INCLUDE_OCR_BUNDLE=1 but no OCR bundle folder was found.\n"
+            f"Searched roots: {roots}\n"
+            f"Searched external dirs: {external_candidates}\n"
+            f"Expected one of: {expected}"
+        )
+    if not _bundle_contains_tesseract_executable(ocr_source_dirs):
+        raise SystemExit(
+            "OW_INCLUDE_OCR_BUNDLE=1 but no tesseract executable was found in OCR bundle.\n"
+            f"Searched dirs: {[str(p) for p in ocr_source_dirs]}"
+        )
+    if not _bundle_contains_traineddata(ocr_source_dirs):
+        raise SystemExit(
+            "OW_INCLUDE_OCR_BUNDLE=1 but no tessdata (*.traineddata) was found in OCR bundle.\n"
+            f"Searched dirs: {[str(p) for p in ocr_source_dirs]}"
+        )
+    datas.extend(ocr_datas)
+    print("[spec] OCR bundle enabled. Included source dirs:")
+    for src in ocr_source_dirs:
+        print(f"[spec]   - {src}")
+    file_count, total_bytes, traineddata_files = _ocr_bundle_stats(ocr_source_dirs)
+    size_mb = total_bytes / (1024 * 1024)
+    print(f"[spec] OCR bundle files: {file_count} (total ~{size_mb:.1f} MB)")
+    if traineddata_files:
+        print(f"[spec] OCR languages: {', '.join(traineddata_files)}")
+else:
+    print("[spec] OCR bundle disabled (OW_INCLUDE_OCR_BUNDLE=0)")
 
 hiddenimports = [
     *(
