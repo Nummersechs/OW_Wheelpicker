@@ -9,7 +9,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 import config
 import i18n
-from . import mode_manager, spin_service
+from . import mode_manager, runtime_tracing, shutdown_manager, spin_service
 from . import ocr_import
 from .ocr_role_import import (
     PendingOCRImport,
@@ -17,8 +17,9 @@ from .ocr_role_import import (
     resolve_selected_candidates as resolve_selected_ocr_candidates,
 )
 from services import state_store
+from services.app_settings import AppSettings
 from services.sound import SoundManager
-from model.role_keys import role_wheel_map
+from model.role_keys import role_wheel_map, role_wheels
 from utils import flag_icons, theme as theme_util, ui_helpers
 from view.overlay import ResultOverlay
 from view.screen_region_selector import (
@@ -77,9 +78,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._asset_dir = self._asset_base_dir()
         self._state_dir = self._state_base_dir()
         self._state_file = self._get_state_file()
+        self.settings = AppSettings.from_module(config)
         self._run_id = f"{int(time.time() * 1000)}_{os.getpid()}"
         saved = StateSyncController.load_saved_state(self._state_file)
-        default_lang = getattr(config, "DEFAULT_LANGUAGE", "en")
+        default_lang = self._cfg("DEFAULT_LANGUAGE", "en")
         self.language = saved.get("language", default_lang) if isinstance(saved, dict) else default_lang
         i18n.set_language(self.language)
         self.theme = saved.get("theme", "light") if isinstance(saved, dict) else "light"
@@ -123,26 +125,26 @@ class MainWindow(QtWidgets.QMainWindow):
         self._map_lists_ready = False
         self._map_prebuild_in_progress = False
         self._map_spin_connected = False
-        self._focus_trace_enabled = bool(getattr(config, "TRACE_FOCUS", False))
+        self._focus_trace_enabled = bool(self._cfg("TRACE_FOCUS", False))
         self._focus_trace_count = 0
-        self._focus_trace_max_events = int(getattr(config, "FOCUS_TRACE_MAX_EVENTS", 120))
-        self._focus_trace_until = time.monotonic() + float(getattr(config, "FOCUS_TRACE_DURATION_S", 3.0))
-        self._focus_trace_window_events = bool(getattr(config, "FOCUS_TRACE_WINDOW_EVENTS", True))
-        self._focus_trace_windows_only = bool(getattr(config, "FOCUS_TRACE_WINDOWS_ONLY", False))
-        self._focus_trace_snapshot_interval_ms = int(getattr(config, "FOCUS_TRACE_SNAPSHOT_INTERVAL_MS", 0))
-        self._focus_trace_snapshot_remaining = int(getattr(config, "FOCUS_TRACE_SNAPSHOT_COUNT", 0))
+        self._focus_trace_max_events = int(self._cfg("FOCUS_TRACE_MAX_EVENTS", 120))
+        self._focus_trace_until = time.monotonic() + float(self._cfg("FOCUS_TRACE_DURATION_S", 3.0))
+        self._focus_trace_window_events = bool(self._cfg("FOCUS_TRACE_WINDOW_EVENTS", True))
+        self._focus_trace_windows_only = bool(self._cfg("FOCUS_TRACE_WINDOWS_ONLY", False))
+        self._focus_trace_snapshot_interval_ms = int(self._cfg("FOCUS_TRACE_SNAPSHOT_INTERVAL_MS", 0))
+        self._focus_trace_snapshot_remaining = int(self._cfg("FOCUS_TRACE_SNAPSHOT_COUNT", 0))
         self._focus_trace_snapshot_timer: QtCore.QTimer | None = None
         self._focus_trace_window_handle_installed = False
         self._focus_trace_last_t: float | None = None
         self._hover_rearm_last: float | None = None
-        self._hover_trace_enabled = bool(getattr(config, "TRACE_HOVER", False))
+        self._hover_trace_enabled = bool(self._cfg("TRACE_HOVER", False))
         self._hover_trace_count = 0
-        self._hover_trace_max_events = int(getattr(config, "HOVER_TRACE_MAX_EVENTS", 200))
+        self._hover_trace_max_events = int(self._cfg("HOVER_TRACE_MAX_EVENTS", 200))
         self._hover_trace_last_t: float | None = None
         self._hover_trace_file = self._state_dir / "hover_trace.log"
         if self._hover_trace_enabled:
             try:
-                if bool(getattr(config, "TRACE_CLEAR_ON_START", False)):
+                if bool(self._cfg("TRACE_CLEAR_ON_START", False)):
                     self._hover_trace_file.write_text("", encoding="utf-8")
                 with self._hover_trace_file.open("a", encoding="utf-8") as f:
                     f.write(f"=== run {self._run_id} ===\n")
@@ -183,22 +185,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self._focus_trace_file = self._state_dir / "focus_trace.log"
         if self._focus_trace_enabled:
             try:
-                if bool(getattr(config, "TRACE_CLEAR_ON_START", False)):
+                if bool(self._cfg("TRACE_CLEAR_ON_START", False)):
                     self._focus_trace_file.write_text("", encoding="utf-8")
                 with self._focus_trace_file.open("a", encoding="utf-8") as f:
                     f.write(f"=== run {self._run_id} ===\n")
             except Exception:
                 pass
         self._trace_enabled = bool(
-            getattr(config, "TRACE_FLOW", False)
-            or getattr(config, "TRACE_SHUTDOWN", False)
-            or getattr(config, "DEBUG", False)
+            self._cfg("TRACE_FLOW", False)
+            or self._cfg("TRACE_SHUTDOWN", False)
+            or self._cfg("DEBUG", False)
         )
         self._trace_last_t: float | None = None
         self._trace_file = self._state_dir / "flow_trace.log"
         if self._trace_enabled:
             self._trace_event("startup", run_id=self._run_id)
-        if getattr(config, "DISABLE_TOOLTIPS", False):
+        if self._cfg("DISABLE_TOOLTIPS", False):
             try:
                 QtWidgets.QToolTip.setEnabled(False)
             except Exception:
@@ -207,13 +209,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._post_choice_timer = self._timers.register(self._post_choice_timer) or self._post_choice_timer
         self._stack_switch_timer = self._timers.register(self._stack_switch_timer) or self._stack_switch_timer
         self._hover_pump_timer = QtCore.QTimer(self)
-        self._hover_pump_timer.setInterval(max(20, int(getattr(config, "HOVER_PUMP_INTERVAL_MS", 40))))
+        self._hover_pump_timer.setInterval(max(20, int(self._cfg("HOVER_PUMP_INTERVAL_MS", 40))))
         self._hover_pump_timer.timeout.connect(self._hover_pump_tick)
         self._hover_pump_timer = self._timers.register(self._hover_pump_timer) or self._hover_pump_timer
         self._map_button_loading = False
         self._pending_map_mode_switch = False
         self._hover_watchdog_timer = QtCore.QTimer(self)
-        self._hover_watchdog_timer.setInterval(max(100, int(getattr(config, "HOVER_WATCHDOG_INTERVAL_MS", 250))))
+        self._hover_watchdog_timer.setInterval(max(100, int(self._cfg("HOVER_WATCHDOG_INTERVAL_MS", 250))))
         self._hover_watchdog_timer.timeout.connect(self._hover_watchdog_tick)
         self._hover_watchdog_timer = self._timers.register(self._hover_watchdog_timer) or self._hover_watchdog_timer
         self._tooltip_manager = TooltipManager(self)
@@ -244,6 +246,26 @@ class MainWindow(QtWidgets.QMainWindow):
             central.setMouseTracking(True)
         except Exception:
             pass
+
+    def _cfg(self, key: str, default=None):
+        settings = getattr(self, "settings", None)
+        if settings is not None and hasattr(settings, "get"):
+            try:
+                return settings.get(key, default)
+            except Exception:
+                pass
+        return getattr(config, key, default)
+
+    def _role_wheels(self) -> list[tuple[str, object]]:
+        return role_wheels(self)
+
+    @staticmethod
+    def _role_state_key(role: str) -> str:
+        return {
+            "Tank": "tank",
+            "Damage": "dps",
+            "Support": "support",
+        }.get(role, role.strip().lower())
 
     def _build_root(self) -> tuple[QtWidgets.QWidget, QtWidgets.QVBoxLayout]:
         central = QtWidgets.QWidget()
@@ -568,7 +590,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._state_store,
                 self.language,
                 self.theme,
-                (self.tank, self.dps, self.support),
+                tuple(wheel for _role, wheel in self._role_wheels()),
                 defer_lists=True,
             )
             self.map_ui.listsBuilt.connect(self._on_map_lists_ready)
@@ -671,7 +693,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._result_sent_this_spin = False
         self._last_results_snapshot: dict | None = None
         self.open_queue = OpenQueueController(self)
-        for w in (self.tank, self.dps, self.support):
+        for _role, w in self._role_wheels():
             w.spun.connect(self._wheel_finished)
         if hasattr(self, "map_main"):
             self.map_main.spun.connect(self._wheel_finished)
@@ -776,11 +798,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 pass
             return
         tasks: list[tuple[str, callable]] = []
-        if getattr(config, "SOUND_WARMUP_ON_START", True):
+        if self._cfg("SOUND_WARMUP_ON_START", True):
             tasks.append(("sound_warmup", self._startup_task_sound))
-        if getattr(config, "TOOLTIP_CACHE_ON_START", True) and not getattr(config, "DISABLE_TOOLTIPS", False):
+        if self._cfg("TOOLTIP_CACHE_ON_START", True) and not self._cfg("DISABLE_TOOLTIPS", False):
             tasks.append(("tooltip_cache", self._startup_task_tooltips))
-        if getattr(config, "MAP_PREBUILD_ON_START", True):
+        if self._cfg("MAP_PREBUILD_ON_START", True):
             tasks.append(("map_prebuild", self._startup_task_map_prebuild))
         self._startup_task_queue = tasks
         self._startup_warmup_running = True
@@ -841,7 +863,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sync_mode_stack()
         self._trace_event("startup_warmup:done")
         self._rearm_hover_tracking(reason="startup_warmup:done")
-        if not getattr(config, "DISABLE_TOOLTIPS", False) and not getattr(config, "TOOLTIP_CACHE_ON_START", True):
+        if not self._cfg("DISABLE_TOOLTIPS", False) and not self._cfg("TOOLTIP_CACHE_ON_START", True):
             self._refresh_tooltip_caches_async(reason="startup_warmup_done")
 
     def _record_blocked_input_event(self, etype: int) -> None:
@@ -970,7 +992,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._trace_event("posted_events_flushed", reason=reason, scope="targets", targets=count)
 
     def _startup_task_sound(self) -> None:
-        if not getattr(config, "SOUND_WARMUP_ON_START", True):
+        if not self._cfg("SOUND_WARMUP_ON_START", True):
             self._startup_task_done("sound_warmup")
             return
         try:
@@ -983,10 +1005,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self._startup_task_done("sound_warmup")
 
     def _startup_task_tooltips(self) -> None:
-        if getattr(config, "DISABLE_TOOLTIPS", False):
+        if self._cfg("DISABLE_TOOLTIPS", False):
             self._startup_task_done("tooltip_cache")
             return
-        if not getattr(config, "TOOLTIP_CACHE_ON_START", True):
+        if not self._cfg("TOOLTIP_CACHE_ON_START", True):
             self._startup_task_done("tooltip_cache")
             return
         self._refresh_tooltip_caches_async(
@@ -995,7 +1017,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def _startup_task_map_prebuild(self) -> None:
-        if not getattr(config, "MAP_PREBUILD_ON_START", True):
+        if not self._cfg("MAP_PREBUILD_ON_START", True):
             self._startup_task_done("map_prebuild")
             return
         if getattr(self, "_map_initialized", False) and getattr(self, "_map_lists_ready", False):
@@ -1006,7 +1028,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _connect_state_signals(self) -> None:
         # JETZT: Save-Hooks anschließen
-        for w in (self.tank, self.dps, self.support):
+        for _role, w in self._role_wheels():
             w.stateChanged.connect(self.state_sync.save_state)
             w.btn_include_in_all.toggled.connect(self._update_spin_all_enabled)
             w.stateChanged.connect(self._update_spin_all_enabled)
@@ -1045,7 +1067,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._rearm_hover_tracking(reason="overlay_closed", force=True)
         QtCore.QTimer.singleShot(200, lambda: self._rearm_hover_tracking(reason="overlay_closed:late"))
         # Tooltip/Truncation nach finalem Layout aktualisieren
-        if not getattr(config, "DISABLE_TOOLTIPS", False):
+        if not self._cfg("DISABLE_TOOLTIPS", False):
             self._set_tooltips_ready(False)
             QtCore.QTimer.singleShot(
                 120,
@@ -1057,9 +1079,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if last_view.get("type") != "result":
             return
         data = last_view.get("data") or ()
-        if len(data) != 3:
+        role_wheels_list = self._role_wheels()
+        if len(data) != len(role_wheels_list):
             return
-        mapping = [(self.tank, data[0]), (self.dps, data[1]), (self.support, data[2])]
+        mapping = [(wheel, data[idx]) for idx, (_role, wheel) in enumerate(role_wheels_list)]
         names_to_remove: set[str] = set()
         for wheel, label in mapping:
             if hasattr(wheel, "result_label_names"):
@@ -1068,7 +1091,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 names_to_remove.add(label.strip())
         if not names_to_remove:
             return
-        for wheel in (self.tank, self.dps, self.support):
+        for _role, wheel in role_wheels_list:
             if hasattr(wheel, "deactivate_names"):
                 wheel.deactivate_names(names_to_remove)
 
@@ -1507,7 +1530,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     self._hover_seen = False
                     self._hover_forward_last = None
                     self._start_hover_pump(reason=reason, duration_ms=900, force=True)
-        if etype == QtCore.QEvent.MouseMove and getattr(config, "HOVER_FORWARD_MOUSEMOVE", False):
+        if etype == QtCore.QEvent.MouseMove and self._cfg("HOVER_FORWARD_MOUSEMOVE", False):
             try:
                 if isinstance(event, QtGui.QMouseEvent):
                     self._forward_hover_from_app_mousemove(event)
@@ -1550,7 +1573,7 @@ class MainWindow(QtWidgets.QMainWindow):
         ms = int(
             duration_ms
             if duration_ms is not None
-            else getattr(config, "MODE_CHOICE_INPUT_GUARD_MS", 220)
+            else self._cfg("MODE_CHOICE_INPUT_GUARD_MS", 220)
         )
         if ms <= 0:
             self._post_choice_input_guard_until = None
@@ -1596,7 +1619,7 @@ class MainWindow(QtWidgets.QMainWindow):
         return self._post_choice_input_guard_active()
 
     def _should_drop_disabled_choice_pointer_event(self, etype: int) -> bool:
-        if not bool(getattr(config, "STARTUP_DROP_CHOICE_POINTER_EVENTS", True)):
+        if not bool(self._cfg("STARTUP_DROP_CHOICE_POINTER_EVENTS", True)):
             return False
         if etype not in _CHOICE_POINTER_DROP_EVENT_TYPES:
             return False
@@ -1640,302 +1663,20 @@ class MainWindow(QtWidgets.QMainWindow):
                 pass
         self._trace_event("map_button_loading", active=self._map_button_loading, reason=reason)
 
-    def _focus_trace_delta(self, now: float) -> float | None:
-        last = getattr(self, "_focus_trace_last_t", None)
-        self._focus_trace_last_t = now
-        if last is None:
-            return None
-        return round(now - last, 4)
-
     def _trace_focus_signal(self, old, new) -> None:
-        if not getattr(self, "_focus_trace_enabled", False):
-            return
-        try:
-            now = time.monotonic()
-            dt = self._focus_trace_delta(now)
-            if now > getattr(self, "_focus_trace_until", 0):
-                self._focus_trace_enabled = False
-                return
-            if self._focus_trace_count >= getattr(self, "_focus_trace_max_events", 0):
-                self._focus_trace_enabled = False
-                return
-            old_name = type(old).__name__ if old is not None else None
-            new_name = type(new).__name__ if new is not None else None
-            old_obj = old.objectName() if old is not None else None
-            new_obj = new.objectName() if new is not None else None
-            old_win = None
-            old_win_title = None
-            new_win = None
-            new_win_title = None
-            if isinstance(old, QtWidgets.QWidget):
-                try:
-                    win = old.window()
-                    old_win = type(win).__name__ if win is not None else None
-                    old_win_title = win.windowTitle() if win is not None else None
-                except Exception:
-                    pass
-            if isinstance(new, QtWidgets.QWidget):
-                try:
-                    win = new.window()
-                    new_win = type(win).__name__ if win is not None else None
-                    new_win_title = win.windowTitle() if win is not None else None
-                except Exception:
-                    pass
-            app_state = None
-            try:
-                app_state = int(QtGui.QGuiApplication.applicationState())
-            except Exception:
-                pass
-            line = (
-                f"t={round(now, 3)} | dt={dt} | signal=focusChanged | old={old_name} | old_name={old_obj} | "
-                f"old_win={old_win} | old_win_title={old_win_title} | new={new_name} | new_name={new_obj} | "
-                f"new_win={new_win} | new_win_title={new_win_title} | app_state={app_state}"
-            )
-            with self._focus_trace_file.open("a", encoding="utf-8") as f:
-                f.write(line + "\n")
-            self._focus_trace_count += 1
-        except Exception:
-            pass
+        runtime_tracing.trace_focus_signal(self, old, new)
 
     def _trace_focus_window_signal(self, win) -> None:
-        if not getattr(self, "_focus_trace_enabled", False):
-            return
-        try:
-            now = time.monotonic()
-            dt = self._focus_trace_delta(now)
-            if now > getattr(self, "_focus_trace_until", 0):
-                self._focus_trace_enabled = False
-                return
-            if self._focus_trace_count >= getattr(self, "_focus_trace_max_events", 0):
-                self._focus_trace_enabled = False
-                return
-            win_name = type(win).__name__ if win is not None else None
-            win_obj = win.objectName() if win is not None else None
-            try:
-                win_title = win.title() if win is not None else None
-            except Exception:
-                win_title = None
-            is_active = None
-            is_visible = None
-            window_state = None
-            flags = None
-            screen_name = None
-            if isinstance(win, QtGui.QWindow):
-                try:
-                    is_active = win.isActive()
-                    is_visible = win.isVisible()
-                    window_state = int(win.windowState())
-                    flags = int(win.flags())
-                    screen = win.screen()
-                    screen_name = screen.name() if screen is not None else None
-                except Exception:
-                    pass
-            app_state = None
-            try:
-                app_state = int(QtGui.QGuiApplication.applicationState())
-            except Exception:
-                pass
-            line = (
-                f"t={round(now, 3)} | dt={dt} | signal=focusWindowChanged | win={win_name} | win_name={win_obj} | "
-                f"title={win_title} | active={is_active} | visible={is_visible} | "
-                f"window_state={window_state} | flags={flags} | screen={screen_name} | app_state={app_state}"
-            )
-            with self._focus_trace_file.open("a", encoding="utf-8") as f:
-                f.write(line + "\n")
-            self._focus_trace_count += 1
-        except Exception:
-            pass
+        runtime_tracing.trace_focus_window_signal(self, win)
 
     def _trace_app_state(self, state) -> None:
-        if not getattr(self, "_focus_trace_enabled", False):
-            return
-        try:
-            now = time.monotonic()
-            dt = self._focus_trace_delta(now)
-            if now > getattr(self, "_focus_trace_until", 0):
-                self._focus_trace_enabled = False
-                return
-            if self._focus_trace_count >= getattr(self, "_focus_trace_max_events", 0):
-                self._focus_trace_enabled = False
-                return
-            focus_name = None
-            focus_obj = None
-            focus_win = None
-            focus_win_title = None
-            app = QtWidgets.QApplication.instance()
-            if app:
-                focus_widget = app.focusWidget()
-                if focus_widget is not None:
-                    focus_name = type(focus_widget).__name__
-                    focus_obj = focus_widget.objectName()
-                    try:
-                        win = focus_widget.window()
-                        focus_win = type(win).__name__ if win is not None else None
-                        focus_win_title = win.windowTitle() if win is not None else None
-                    except Exception:
-                        pass
-            line = (
-                f"t={round(now, 3)} | dt={dt} | signal=appState | state={state} | "
-                f"focus={focus_name} | focus_name={focus_obj} | focus_win={focus_win} | "
-                f"focus_win_title={focus_win_title}"
-            )
-            with self._focus_trace_file.open("a", encoding="utf-8") as f:
-                f.write(line + "\n")
-            self._focus_trace_count += 1
-        except Exception:
-            pass
+        runtime_tracing.trace_app_state(self, state)
 
     def _trace_window_snapshot(self) -> None:
-        if not getattr(self, "_focus_trace_enabled", False):
-            return
-        try:
-            now = time.monotonic()
-            dt = self._focus_trace_delta(now)
-            if now > getattr(self, "_focus_trace_until", 0):
-                self._focus_trace_enabled = False
-                return
-            if self._focus_trace_count >= getattr(self, "_focus_trace_max_events", 0):
-                self._focus_trace_enabled = False
-                return
-            app = QtGui.QGuiApplication.instance()
-            windows = []
-            if app:
-                for win in app.allWindows():
-                    try:
-                        info = {
-                            "type": type(win).__name__,
-                            "title": win.title(),
-                            "name": win.objectName(),
-                            "visible": win.isVisible(),
-                            "active": win.isActive(),
-                            "state": int(win.windowState()),
-                            "flags": int(win.flags()),
-                        }
-                    except Exception:
-                        continue
-                    windows.append(info)
-            app_state = None
-            try:
-                app_state = int(QtGui.QGuiApplication.applicationState())
-            except Exception:
-                pass
-            line = f"t={round(now, 3)} | dt={dt} | snapshot=windows | app_state={app_state} | data={windows}"
-            with self._focus_trace_file.open("a", encoding="utf-8") as f:
-                f.write(line + "\n")
-            self._focus_trace_count += 1
-            self._focus_trace_snapshot_remaining -= 1
-            if self._focus_trace_snapshot_remaining <= 0 and self._focus_trace_snapshot_timer:
-                self._focus_trace_snapshot_timer.stop()
-        except Exception:
-            pass
+        runtime_tracing.trace_window_snapshot(self)
 
     def _trace_focus_event(self, obj, event) -> None:
-        if not getattr(self, "_focus_trace_enabled", False):
-            return
-        try:
-            now = time.monotonic()
-            dt = self._focus_trace_delta(now)
-            if now > getattr(self, "_focus_trace_until", 0):
-                self._focus_trace_enabled = False
-                return
-            if self._focus_trace_count >= getattr(self, "_focus_trace_max_events", 0):
-                self._focus_trace_enabled = False
-                return
-            etype = int(event.type())
-            focus_events = (
-                QtCore.QEvent.FocusIn,
-                QtCore.QEvent.FocusOut,
-                QtCore.QEvent.WindowActivate,
-                QtCore.QEvent.WindowDeactivate,
-                QtCore.QEvent.ApplicationActivate,
-                QtCore.QEvent.ApplicationDeactivate,
-            )
-            window_events = (
-                QtCore.QEvent.Show,
-                QtCore.QEvent.Hide,
-                QtCore.QEvent.ShowToParent,
-                QtCore.QEvent.HideToParent,
-                QtCore.QEvent.WindowStateChange,
-                QtCore.QEvent.ActivationChange,
-                QtCore.QEvent.Move,
-                QtCore.QEvent.Resize,
-            )
-            if etype not in focus_events:
-                if not self._focus_trace_window_events or etype not in window_events:
-                    return
-            app = QtWidgets.QApplication.instance()
-            focus_widget = app.focusWidget() if app else None
-            focus_name = type(focus_widget).__name__ if focus_widget is not None else None
-            focus_obj = focus_widget.objectName() if focus_widget is not None else None
-            focus_win = None
-            focus_win_title = None
-            if isinstance(focus_widget, QtWidgets.QWidget):
-                try:
-                    win = focus_widget.window()
-                    focus_win = type(win).__name__ if win is not None else None
-                    focus_win_title = win.windowTitle() if win is not None else None
-                except Exception:
-                    pass
-            obj_name = obj.objectName() if hasattr(obj, "objectName") else None
-            obj_type = type(obj).__name__ if obj is not None else None
-            is_window = False
-            is_visible = None
-            is_active = None
-            window_state = None
-            obj_geom = None
-            obj_win = None
-            obj_win_title = None
-            if isinstance(obj, QtWidgets.QWidget):
-                try:
-                    is_window = obj.isWindow()
-                    is_visible = obj.isVisible()
-                    is_active = obj.isActiveWindow()
-                    window_state = int(obj.windowState())
-                    g = obj.geometry()
-                    obj_geom = f"{g.x()},{g.y()},{g.width()},{g.height()}"
-                    win = obj.window()
-                    obj_win = type(win).__name__ if win is not None else None
-                    obj_win_title = win.windowTitle() if win is not None else None
-                except Exception:
-                    pass
-            elif isinstance(obj, QtGui.QWindow):
-                try:
-                    is_window = True
-                    is_visible = obj.isVisible()
-                    is_active = obj.isActive()
-                    window_state = int(obj.windowState())
-                    g = obj.geometry()
-                    obj_geom = f"{g.x()},{g.y()},{g.width()},{g.height()}"
-                    obj_win = type(obj).__name__
-                    obj_win_title = obj.title()
-                except Exception:
-                    pass
-            if getattr(self, "_focus_trace_windows_only", False) and not is_window:
-                return
-            text = None
-            if hasattr(obj, "text"):
-                try:
-                    text = obj.text()
-                except Exception:
-                    text = None
-            app_state = None
-            try:
-                app_state = int(QtGui.QGuiApplication.applicationState())
-            except Exception:
-                pass
-            line = (
-                f"t={round(now, 3)} | dt={dt} | etype={etype} | etype_name={self._event_type_name(etype)} | "
-                f"obj={obj_type} | obj_name={obj_name} | obj_text={text} | "
-                f"obj_geom={obj_geom} | obj_win={obj_win} | obj_win_title={obj_win_title} | "
-                f"is_window={is_window} | is_visible={is_visible} | is_active={is_active} | "
-                f"window_state={window_state} | focus={focus_name} | focus_name={focus_obj} | "
-                f"focus_win={focus_win} | focus_win_title={focus_win_title} | app_state={app_state}"
-            )
-            with self._focus_trace_file.open("a", encoding="utf-8") as f:
-                f.write(line + "\n")
-            self._focus_trace_count += 1
-        except Exception:
-            pass
+        runtime_tracing.trace_focus_event(self, obj, event)
 
     def _apply_focus_policy_defaults(self) -> None:
         """Avoid automatic focus on startup by forcing ClickFocus for focusable widgets."""
@@ -1965,23 +1706,7 @@ class MainWindow(QtWidgets.QMainWindow):
         return
 
     def _trace_hover_event(self, name: str, **extra) -> None:
-        if not getattr(self, "_hover_trace_enabled", False):
-            return
-        try:
-            if self._hover_trace_count >= self._hover_trace_max_events:
-                return
-            now = time.monotonic()
-            last = getattr(self, "_hover_trace_last_t", None)
-            dt = round(now - last, 4) if last is not None else None
-            self._hover_trace_last_t = now
-            line = f"t={round(now, 3)} | dt={dt} | event={name}"
-            for key, val in extra.items():
-                line += f" | {key}={val}"
-            with self._hover_trace_file.open("a", encoding="utf-8") as f:
-                f.write(line + "\n")
-            self._hover_trace_count += 1
-        except Exception:
-            pass
+        runtime_tracing.trace_hover_event(self, name, **extra)
 
     def _mark_hover_activity(self) -> None:
         self._hover_activity_last = time.monotonic()
@@ -1994,7 +1719,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._ensure_hover_watchdog_started()
 
     def _ensure_hover_watchdog_started(self) -> None:
-        if not getattr(config, "HOVER_WATCHDOG_ON", False):
+        if not self._cfg("HOVER_WATCHDOG_ON", False):
             return
         if self._hover_watchdog_started:
             return
@@ -2053,7 +1778,7 @@ class MainWindow(QtWidgets.QMainWindow):
         duration_ms: int | None = None,
         force: bool = False,
     ) -> None:
-        if not force and not getattr(config, "HOVER_PUMP_ON_START", False):
+        if not force and not self._cfg("HOVER_PUMP_ON_START", False):
             return
         if getattr(self, "_closing", False):
             return
@@ -2065,7 +1790,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         if self._hover_seen:
             return
-        duration_ms = int(duration_ms or getattr(config, "HOVER_PUMP_DURATION_MS", 1200))
+        duration_ms = int(duration_ms or self._cfg("HOVER_PUMP_DURATION_MS", 1200))
         if duration_ms <= 0:
             self._hover_pump_until = None
         else:
@@ -2120,7 +1845,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._mark_hover_seen(source="hover_pump")
 
     def _hover_poke_under_cursor(self, reason: str | None = None) -> None:
-        if not getattr(config, "HOVER_POKE_ON_REARM", False):
+        if not self._cfg("HOVER_POKE_ON_REARM", False):
             return
         if getattr(self, "_closing", False):
             return
@@ -2149,7 +1874,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _iter_hover_views(self, include_maps: bool | None = None) -> list:
         views: list = []
-        for w in (self.tank, self.dps, self.support):
+        for _role, w in self._role_wheels():
             if not w:
                 continue
             view = getattr(w, "view", None)
@@ -2171,7 +1896,7 @@ class MainWindow(QtWidgets.QMainWindow):
         return views
 
     def _hover_watchdog_tick(self) -> None:
-        if not getattr(config, "HOVER_WATCHDOG_ON", False):
+        if not self._cfg("HOVER_WATCHDOG_ON", False):
             return
         if getattr(self, "_closing", False):
             return
@@ -2185,7 +1910,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         if not self.isVisible():
             return
-        req_move_ms = int(getattr(config, "HOVER_WATCHDOG_REQUIRE_MOVE_MS", 0))
+        req_move_ms = int(self._cfg("HOVER_WATCHDOG_REQUIRE_MOVE_MS", 0))
         if req_move_ms > 0:
             last_move = getattr(self, "_hover_user_move_last", None)
             if last_move is None:
@@ -2196,10 +1921,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if last is None:
             return
         now = time.monotonic()
-        stale_ms = int(getattr(config, "HOVER_WATCHDOG_STALE_MS", 650))
+        stale_ms = int(self._cfg("HOVER_WATCHDOG_STALE_MS", 650))
         if (now - last) < (stale_ms / 1000.0):
             return
-        cooldown_ms = int(getattr(config, "HOVER_WATCHDOG_COOLDOWN_MS", 700))
+        cooldown_ms = int(self._cfg("HOVER_WATCHDOG_COOLDOWN_MS", 700))
         last_watch = getattr(self, "_hover_watchdog_last", None)
         if last_watch is not None and (now - last_watch) < (cooldown_ms / 1000.0):
             return
@@ -2291,7 +2016,7 @@ class MainWindow(QtWidgets.QMainWindow):
         return hit
 
     def _forward_hover_from_app_mousemove(self, event: QtGui.QMouseEvent) -> None:
-        if not getattr(config, "HOVER_FORWARD_MOUSEMOVE", False):
+        if not self._cfg("HOVER_FORWARD_MOUSEMOVE", False):
             return
         if getattr(self, "_closing", False):
             return
@@ -2306,7 +2031,7 @@ class MainWindow(QtWidgets.QMainWindow):
             pass
         now = time.monotonic()
         last = getattr(self, "_hover_forward_last", None)
-        interval_ms = float(getattr(config, "HOVER_FORWARD_INTERVAL_MS", 30))
+        interval_ms = float(self._cfg("HOVER_FORWARD_INTERVAL_MS", 30))
         if last is not None and (now - last) < (interval_ms / 1000.0):
             return
         self._hover_forward_last = now
@@ -2408,7 +2133,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _apply_theme_heavy(self, theme: theme_util.Theme, step_ms: int = 15):
         # Größere Widget-Mengen in kleinen Paketen aktualisieren
         targets = []
-        for w in (getattr(self, "tank", None), getattr(self, "dps", None), getattr(self, "support", None)):
+        for _role, w in self._role_wheels():
             if w and hasattr(w, "apply_theme"):
                 targets.append(w)
         if hasattr(self, "map_ui"):
@@ -2446,7 +2171,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _capture_role_base_widths(self):
         """Merkt sich die aktuelle Breite jeder Rollen-Karte als Referenz."""
         widths: dict[str, int] = {}
-        for name, widget in (("Tank", self.tank), ("Damage", self.dps), ("Support", self.support)):
+        for name, widget in self._role_wheels():
             w = widget.width() or widget.sizeHint().width()
             widths[name] = max(1, int(w))
         self._role_base_widths = widths
@@ -2458,7 +2183,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         if not self._role_base_widths:
             self._capture_role_base_widths()
-        for name, widget in (("Tank", self.tank), ("Damage", self.dps), ("Support", self.support)):
+        for name, widget in self._role_wheels():
             base = self._role_base_widths.get(name, widget.sizeHint().width() or widget.width())
             if lock:
                 widget.setMaximumWidth(base)
@@ -2476,7 +2201,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """Aktiviere/Deaktiviere den 'Drehen'-Button je nach Auswahl."""
         open_names: list[str] | None = None
         if getattr(self, "hero_ban_active", False):
-            any_selected = any(w.btn_include_in_all.isChecked() for w in (self.tank, self.dps, self.support))
+            any_selected = any(w.btn_include_in_all.isChecked() for _role, w in self._role_wheels())
             # In Hero-Ban zählen die effektiven Namen des zentralen Rads (inkl. Override).
             has_candidates = bool(self.dps.get_effective_wheel_names())
             self.btn_spin_all.setEnabled(any_selected and has_candidates and self.pending == 0)
@@ -2525,12 +2250,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 "map": getattr(self, "_map_result_text", "–"),
             }
         else:
+            wheels_payload: dict[str, dict] = {}
+            for role, wheel in self._role_wheels():
+                wheels_payload[self._role_state_key(role)] = wheel.get_result_payload()
             self._mode_results[key] = {
-                "wheels": {
-                    "tank": self.tank.get_result_payload(),
-                    "dps": self.dps.get_result_payload(),
-                    "support": self.support.get_result_payload(),
-                }
+                "wheels": wheels_payload
             }
 
     def _apply_mode_results(self, key: str):
@@ -2543,7 +2267,7 @@ class MainWindow(QtWidgets.QMainWindow):
             if self.current_mode == "maps":
                 self._map_result_text = "–"
             else:
-                for wheel in (self.tank, self.dps, self.support):
+                for _role, wheel in self._role_wheels():
                     wheel.clear_result()
             self.summary.setText("")
             return
@@ -2552,10 +2276,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self._map_result_text = snap.get("map", "–")
             self._update_summary_from_results()
         else:
-            mapping = [("tank", self.tank), ("dps", self.dps), ("support", self.support)]
             wheel_payloads = snap.get("wheels", {})
-            for name, wheel in mapping:
-                wheel.apply_result_payload(wheel_payloads.get(name))
+            for role, wheel in self._role_wheels():
+                wheel.apply_result_payload(wheel_payloads.get(self._role_state_key(role)))
             self._update_summary_from_results()
 
     def _update_summary_from_results(self):
@@ -2591,7 +2314,7 @@ class MainWindow(QtWidgets.QMainWindow):
         damit der UI-Thread beim Online/Offline-Klick nicht blockiert.
         Mehrfachaufrufe werden kurz gesammelt, um die Render-Last zu drosseln.
         """
-        if getattr(config, "DISABLE_TOOLTIPS", False):
+        if self._cfg("DISABLE_TOOLTIPS", False):
             return
         if hasattr(self, "_tooltip_manager"):
             self._tooltip_manager.refresh_caches_async(
@@ -2628,7 +2351,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.btn_open_q_ocr.setEnabled(False)
             if hasattr(self, "player_list_panel"):
                 self.player_list_panel.hide_panel()
-        for w in (self.tank, self.dps, self.support):
+        for _role, w in self._role_wheels():
             w.set_interactive_enabled(en)
         if getattr(self, "current_mode", "") == "maps" and hasattr(self, "map_lists"):
             for w in self.map_lists.values():
@@ -2642,7 +2365,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_role_ocr_buttons_enabled()
         # Kein automatischer Hover-Refresh beim Aktivieren
     def _stop_all_wheels(self):
-        for w in (self.tank, self.dps, self.support):
+        for _role, w in self._role_wheels():
             w.hard_stop()
         if hasattr(self, "map_main"):
             try:
@@ -2653,7 +2376,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_cancel_spin.setEnabled(self.pending > 0)
 
     def _capture_region_for_ocr(self) -> tuple[QtGui.QPixmap | None, str | None]:
-        use_native_mac_capture = bool(getattr(config, "OCR_USE_NATIVE_MAC_CAPTURE", True)) and sys.platform == "darwin"
+        use_native_mac_capture = bool(self._cfg("OCR_USE_NATIVE_MAC_CAPTURE", True)) and sys.platform == "darwin"
         if not use_native_mac_capture:
             return select_region_from_primary_screen(
                 hint_text=i18n.t("ocr.select_hint"),
@@ -2672,7 +2395,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.hide()
             QtWidgets.QApplication.processEvents()
 
-        delay_ms = max(0, int(getattr(config, "OCR_CAPTURE_PREPARE_DELAY_MS", 120)))
+        delay_ms = max(0, int(self._cfg("OCR_CAPTURE_PREPARE_DELAY_MS", 120)))
         if delay_ms > 0:
             time.sleep(delay_ms / 1000.0)
 
@@ -2682,7 +2405,7 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             selected_pixmap, select_error = select_region_with_macos_screencapture(
                 capture_path,
-                timeout_s=float(getattr(config, "OCR_CAPTURE_TIMEOUT_S", 45.0)),
+                timeout_s=float(self._cfg("OCR_CAPTURE_TIMEOUT_S", 45.0)),
             )
         finally:
             try:
@@ -2719,7 +2442,7 @@ class MainWindow(QtWidgets.QMainWindow):
             variants.append(pix)
 
         _add_variant(source)
-        scale_factor = max(1, int(getattr(config, "OCR_SCALE_FACTOR", 2)))
+        scale_factor = max(1, int(self._cfg("OCR_SCALE_FACTOR", 2)))
         if scale_factor > 1 and not source.isNull():
             scaled = source.scaled(
                 max(1, source.width() * scale_factor),
@@ -2751,13 +2474,13 @@ class MainWindow(QtWidgets.QMainWindow):
     ) -> tuple[list[str], str, str | None]:
         all_texts: list[str] = []
         errors: list[str] = []
-        psm_primary = int(getattr(config, "OCR_TESSERACT_PSM", 6))
-        psm_fallback = int(getattr(config, "OCR_TESSERACT_FALLBACK_PSM", 11))
+        psm_primary = int(self._cfg("OCR_TESSERACT_PSM", 6))
+        psm_fallback = int(self._cfg("OCR_TESSERACT_FALLBACK_PSM", 11))
         psm_values = [psm_primary]
         if psm_fallback not in psm_values:
             psm_values.append(psm_fallback)
-        lang = str(getattr(config, "OCR_TESSERACT_LANG", "eng")).strip() or None
-        timeout_s = float(getattr(config, "OCR_TESSERACT_TIMEOUT_S", 8.0))
+        lang = str(self._cfg("OCR_TESSERACT_LANG", "eng")).strip() or None
+        timeout_s = float(self._cfg("OCR_TESSERACT_TIMEOUT_S", 8.0))
 
         for variant in self._build_ocr_pixmap_variants(pixmap):
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
@@ -2799,20 +2522,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
         names = ocr_import.extract_candidate_names_multi(
             all_texts,
-            min_chars=int(getattr(config, "OCR_NAME_MIN_CHARS", 2)),
-            max_chars=int(getattr(config, "OCR_NAME_MAX_CHARS", 24)),
-            max_words=int(getattr(config, "OCR_NAME_MAX_WORDS", 2)),
-            max_digit_ratio=float(getattr(config, "OCR_NAME_MAX_DIGIT_RATIO", 0.45)),
-            min_support=int(getattr(config, "OCR_NAME_MIN_SUPPORT", 1)),
-            high_count_threshold=int(getattr(config, "OCR_NAME_HIGH_COUNT_THRESHOLD", 8)),
-            high_count_min_support=int(getattr(config, "OCR_NAME_HIGH_COUNT_MIN_SUPPORT", 2)),
-            max_candidates=int(getattr(config, "OCR_NAME_MAX_CANDIDATES", 12)),
-            near_dup_min_chars=int(getattr(config, "OCR_NAME_NEAR_DUP_MIN_CHARS", 8)),
-            near_dup_max_len_delta=int(getattr(config, "OCR_NAME_NEAR_DUP_MAX_LEN_DELTA", 1)),
-            near_dup_similarity=float(getattr(config, "OCR_NAME_NEAR_DUP_SIMILARITY", 0.90)),
-            near_dup_tail_min_chars=int(getattr(config, "OCR_NAME_NEAR_DUP_TAIL_MIN_CHARS", 3)),
+            min_chars=int(self._cfg("OCR_NAME_MIN_CHARS", 2)),
+            max_chars=int(self._cfg("OCR_NAME_MAX_CHARS", 24)),
+            max_words=int(self._cfg("OCR_NAME_MAX_WORDS", 2)),
+            max_digit_ratio=float(self._cfg("OCR_NAME_MAX_DIGIT_RATIO", 0.45)),
+            min_support=int(self._cfg("OCR_NAME_MIN_SUPPORT", 1)),
+            high_count_threshold=int(self._cfg("OCR_NAME_HIGH_COUNT_THRESHOLD", 8)),
+            high_count_min_support=int(self._cfg("OCR_NAME_HIGH_COUNT_MIN_SUPPORT", 2)),
+            max_candidates=int(self._cfg("OCR_NAME_MAX_CANDIDATES", 12)),
+            near_dup_min_chars=int(self._cfg("OCR_NAME_NEAR_DUP_MIN_CHARS", 8)),
+            near_dup_max_len_delta=int(self._cfg("OCR_NAME_NEAR_DUP_MAX_LEN_DELTA", 1)),
+            near_dup_similarity=float(self._cfg("OCR_NAME_NEAR_DUP_SIMILARITY", 0.90)),
+            near_dup_tail_min_chars=int(self._cfg("OCR_NAME_NEAR_DUP_TAIL_MIN_CHARS", 3)),
             near_dup_tail_head_similarity=float(
-                getattr(config, "OCR_NAME_NEAR_DUP_TAIL_HEAD_SIMILARITY", 0.70)
+                self._cfg("OCR_NAME_NEAR_DUP_TAIL_HEAD_SIMILARITY", 0.70)
             ),
         )
         error_text = "; ".join(errors) if errors else None
@@ -2873,7 +2596,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
                 return
 
-            tesseract_cmd = str(getattr(config, "OCR_TESSERACT_CMD", "tesseract"))
+            tesseract_cmd = str(self._cfg("OCR_TESSERACT_CMD", "tesseract"))
             if not ocr_import.tesseract_available(tesseract_cmd):
                 QtWidgets.QMessageBox.warning(
                     self,
@@ -3032,13 +2755,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 "map": getattr(self, "_map_result_text", "–"),
             }
         else:
+            wheels_payload: dict[str, dict] = {}
+            for role, wheel in self._role_wheels():
+                wheels_payload[self._role_state_key(role)] = wheel.get_result_payload()
             self._last_results_snapshot = {
                 "mode": self._mode_key(),
-                "wheels": {
-                    "tank": self.tank.get_result_payload(),
-                    "dps": self.dps.get_result_payload(),
-                    "support": self.support.get_result_payload(),
-                },
+                "wheels": wheels_payload,
             }
 
     def _restore_results_snapshot(self):
@@ -3051,10 +2773,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._map_result_text = txt
             self._update_summary_from_results()
         else:
-            mapping = [("tank", self.tank), ("dps", self.dps), ("support", self.support)]
             wheel_payloads = snap.get("wheels", {})
-            for key, wheel in mapping:
-                wheel.apply_result_payload(wheel_payloads.get(key))
+            for role, wheel in self._role_wheels():
+                wheel.apply_result_payload(wheel_payloads.get(self._role_state_key(role)))
             self._update_summary_from_results()
         self._last_results_snapshot = None
 
@@ -3127,7 +2848,7 @@ class MainWindow(QtWidgets.QMainWindow):
         prev_restoring = getattr(self, "_restoring_state", False)
         self._restoring_state = True
         try:
-            for role, wheel in (("Tank", self.tank), ("Damage", self.dps), ("Support", self.support)):
+            for role, wheel in self._role_wheels():
                 role_state = state.get(role) or self._state_store.default_role_state(role, mode)
                 state[role] = role_state
                 wheel.load_entries(
@@ -3143,7 +2864,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._update_hero_ban_wheel()
         else:
             self._set_hero_ban_visuals(False)
-            for w in (self.tank, self.dps, self.support):
+            for _role, w in self._role_wheels():
                 w.set_header_controls_visible(True)
                 w.set_subrole_controls_visible(True)
                 w.set_show_names_visible(True)
@@ -3215,7 +2936,7 @@ class MainWindow(QtWidgets.QMainWindow):
         mode_manager.on_mode_button_clicked(self, target)
         self._sync_mode_stack()
         self._trace_event("mode_switch:roles_done", target=target)
-        if not getattr(config, "DISABLE_TOOLTIPS", False) and not getattr(config, "TOOLTIP_CACHE_ON_START", True):
+        if not self._cfg("DISABLE_TOOLTIPS", False) and not self._cfg("TOOLTIP_CACHE_ON_START", True):
             self._refresh_tooltip_caches_async()
 
     def _update_title(self):
@@ -3316,7 +3037,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._apply_language_heavy()
 
     def _apply_language_heavy(self):
-        for w in (self.tank, self.dps, self.support):
+        for _role, w in self._role_wheels():
             w.set_language(self.language)
         if hasattr(self, "map_mode"):
             self.map_mode.retranslate_ui()
@@ -3408,7 +3129,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def _set_heavy_ui_updates_enabled(self, enabled: bool) -> None:
         """Defer expensive wheel painting while the mode-choice overlay is visible."""
         self._trace_event("set_heavy_ui_updates", enabled=enabled)
-        for w in (self.tank, self.dps, self.support, getattr(self, "map_main", None)):
+        wheels_to_update = [wheel for _role, wheel in self._role_wheels()]
+        wheels_to_update.append(getattr(self, "map_main", None))
+        for w in wheels_to_update:
             if not w:
                 continue
             try:
@@ -3463,9 +3186,9 @@ class MainWindow(QtWidgets.QMainWindow):
             theme = theme_util.get_theme(getattr(self, "theme", "light"))
             self._apply_theme_heavy(theme, step_ms=int(self._post_choice_step_ms))
             self._theme_heavy_pending = False
-        if getattr(config, "SOUND_WARMUP_ON_START", True):
+        if self._cfg("SOUND_WARMUP_ON_START", True):
             self.sound.warmup_async(self, step_ms=int(self._post_choice_warmup_step_ms))
-        if getattr(config, "TOOLTIP_CACHE_ON_START", True) and not getattr(config, "DISABLE_TOOLTIPS", False):
+        if self._cfg("TOOLTIP_CACHE_ON_START", True) and not self._cfg("DISABLE_TOOLTIPS", False):
             self._refresh_tooltip_caches_async(delay_step_ms=int(self._post_choice_step_ms))
         self._schedule_map_prebuild()
         self._post_choice_init_done = True
@@ -3475,7 +3198,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _schedule_map_prebuild(self, force: bool = False) -> None:
         if getattr(self, "_closing", False):
             return
-        if not getattr(config, "MAP_PREBUILD_ON_START", True) and not force:
+        if not self._cfg("MAP_PREBUILD_ON_START", True) and not force:
             return
         if getattr(self, "_map_initialized", False) or getattr(self, "_map_prebuild_in_progress", False):
             return
@@ -3560,228 +3283,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self._trace_event("sync_mode_stack:after")
 
     def _merge_shutdown_snapshot(self, prefix: str, payload: dict | None, target: dict) -> None:
-        if not isinstance(payload, dict):
-            return
-        for key, value in payload.items():
-            target[f"{prefix}_{key}"] = value
+        shutdown_manager.merge_shutdown_snapshot(prefix, payload, target)
 
     def _shutdown_resource_snapshot(self) -> dict:
-        snap: dict[str, object] = {}
-        try:
-            timers = self.findChildren(QtCore.QTimer)
-            active = 0
-            for timer in timers:
-                try:
-                    if timer.isActive():
-                        active += 1
-                except Exception:
-                    pass
-            snap["qt_timers_total"] = len(timers)
-            snap["qt_timers_active"] = active
-        except Exception:
-            snap["qt_timers_total"] = None
-            snap["qt_timers_active"] = None
-
-        registry = getattr(self, "_timers", None)
-        if registry is not None and hasattr(registry, "snapshot"):
-            try:
-                self._merge_shutdown_snapshot("registry", registry.snapshot(), snap)
-            except Exception:
-                pass
-
-        state_sync = getattr(self, "state_sync", None)
-        if state_sync is not None and hasattr(state_sync, "resource_snapshot"):
-            try:
-                self._merge_shutdown_snapshot("state_sync", state_sync.resource_snapshot(), snap)
-            except Exception:
-                pass
-
-        tooltip = getattr(self, "_tooltip_manager", None)
-        if tooltip is not None and hasattr(tooltip, "resource_snapshot"):
-            try:
-                self._merge_shutdown_snapshot("tooltip", tooltip.resource_snapshot(), snap)
-            except Exception:
-                pass
-
-        sound = getattr(self, "sound", None)
-        if sound is not None and hasattr(sound, "resource_snapshot"):
-            try:
-                self._merge_shutdown_snapshot("sound", sound.resource_snapshot(), snap)
-            except Exception:
-                pass
-
-        panel = getattr(self, "player_list_panel", None)
-        if panel is not None and hasattr(panel, "resource_snapshot"):
-            try:
-                self._merge_shutdown_snapshot("player_panel", panel.resource_snapshot(), snap)
-            except Exception:
-                pass
-
-        map_ui = getattr(self, "map_ui", None)
-        if map_ui is not None and hasattr(map_ui, "resource_snapshot"):
-            try:
-                self._merge_shutdown_snapshot("map_ui", map_ui.resource_snapshot(), snap)
-            except Exception:
-                pass
-
-        return snap
+        return shutdown_manager.shutdown_resource_snapshot(self)
 
     def _run_shutdown_step(self, step: str, callback: Callable[[], None]) -> None:
-        self._trace_event("shutdown_step:start", step=step)
-        try:
-            callback()
-            self._trace_event("shutdown_step:ok", step=step)
-        except Exception as exc:
-            self._trace_event("shutdown_step:error", step=step, error=repr(exc))
+        shutdown_manager.run_shutdown_step(self, step, callback)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
-        self._closing = True
-        self._trace_event("close_event")
-
-        if bool(getattr(config, "TRACE_SHUTDOWN", False)):
-            self._trace_event("shutdown_snapshot", stage="begin", **self._shutdown_resource_snapshot())
-
-        def _stop_wheels() -> None:
-            self._stop_all_wheels()
-            if getattr(self, "map_main", None):
-                self.map_main.hard_stop()
-
-        def _shutdown_map_ui() -> None:
-            if hasattr(self, "map_ui"):
-                self.map_ui.shutdown()
-
-        def _shutdown_player_panel() -> None:
-            if hasattr(self, "player_list_panel"):
-                self.player_list_panel.shutdown()
-
-        def _shutdown_tooltips() -> None:
-            if hasattr(self, "_tooltip_manager"):
-                self._tooltip_manager.shutdown()
-
-        def _stop_registered_timers() -> None:
-            if hasattr(self, "_timers"):
-                self._timers.stop_all()
-
-        def _shutdown_state_sync() -> None:
-            self.state_sync.save_state(sync=False, immediate=True)
-            self.state_sync.shutdown(flush=False)
-
-        def _shutdown_sound() -> None:
-            self.sound.shutdown()
-
-        def _remove_app_filter() -> None:
-            app = QtWidgets.QApplication.instance()
-            if app:
-                app.removeEventFilter(self)
-        self._run_shutdown_step("stop_wheels", _stop_wheels)
-        self._run_shutdown_step("map_ui", _shutdown_map_ui)
-        self._run_shutdown_step("player_list_panel", _shutdown_player_panel)
-        self._run_shutdown_step("tooltip_manager", _shutdown_tooltips)
-        self._run_shutdown_step("timer_registry", _stop_registered_timers)
-        self._run_shutdown_step("state_sync", _shutdown_state_sync)
-        self._run_shutdown_step("sound", _shutdown_sound)
-        self._run_shutdown_step("remove_event_filter", _remove_app_filter)
-
-        if bool(getattr(config, "TRACE_SHUTDOWN", False)):
-            self._trace_event("shutdown_snapshot", stage="pre_super", **self._shutdown_resource_snapshot())
-
-        super().closeEvent(event)
+        shutdown_manager.handle_close_event(self, event)
 
     def _trace_event(self, name: str, **extra) -> None:
-        if not getattr(self, "_trace_enabled", False):
-            return
-        try:
-            now = time.monotonic()
-            last = getattr(self, "_trace_last_t", None)
-            dt = round(now - last, 4) if last is not None else None
-            self._trace_last_t = now
-            stack_idx = self.mode_stack.currentIndex() if hasattr(self, "mode_stack") else None
-            stack_widget = None
-            if hasattr(self, "mode_stack"):
-                try:
-                    stack_widget = self.mode_stack.currentWidget()
-                except Exception:
-                    stack_widget = None
-            stack_widget_name = type(stack_widget).__name__ if stack_widget is not None else None
-            overlay = getattr(self, "overlay", None)
-            overlay_visible = overlay.isVisible() if overlay else False
-            overlay_type = getattr(overlay, "_last_view", {}) or {}
-            overlay_type = overlay_type.get("type") if isinstance(overlay_type, dict) else None
-            tank_updates = self.tank.updatesEnabled() if hasattr(self, "tank") else None
-            map_updates = getattr(self, "map_main", None)
-            map_updates = map_updates.updatesEnabled() if map_updates else None
-            role_vis = None
-            map_vis = None
-            if getattr(self, "role_container", None):
-                role_vis = self.role_container.isVisible()
-            if getattr(self, "map_container", None):
-                map_vis = self.map_container.isVisible()
-            app_state = None
-            try:
-                app_state = int(QtGui.QGuiApplication.applicationState())
-            except Exception:
-                pass
-            focus_name = None
-            focus_obj = None
-            focus_win = None
-            focus_win_title = None
-            app = QtWidgets.QApplication.instance()
-            if app:
-                focus_widget = app.focusWidget()
-                if focus_widget is not None:
-                    focus_name = type(focus_widget).__name__
-                    focus_obj = focus_widget.objectName()
-                    try:
-                        win = focus_widget.window()
-                        focus_win = type(win).__name__ if win is not None else None
-                        focus_win_title = win.windowTitle() if win is not None else None
-                    except Exception:
-                        pass
-            if extra.pop("force_vis", False):
-                # no-op, but keeps the visibility fields in the trace for sync events
-                pass
-            base = {
-                "t": round(now, 3),
-                "dt": dt,
-                "event": name,
-                "mode": getattr(self, "current_mode", None),
-                "stack": stack_idx,
-                "stack_widget": stack_widget_name,
-                "overlay": overlay_type,
-                "overlay_visible": overlay_visible,
-                "post_init": getattr(self, "_post_choice_init_done", None),
-                "map_init": getattr(self, "_map_initialized", None),
-                "stack_switching": getattr(self, "_stack_switching", None),
-                "stack_timer": self._stack_switch_timer.isActive() if hasattr(self, "_stack_switch_timer") else None,
-                "post_timer": self._post_choice_timer.isActive() if hasattr(self, "_post_choice_timer") else None,
-                "pending": getattr(self, "pending", None),
-                "cancel_enabled": self.btn_cancel_spin.isEnabled() if hasattr(self, "btn_cancel_spin") else None,
-                "hero_ban": getattr(self, "hero_ban_active", None),
-                "hero_ban_pending": getattr(self, "_hero_ban_pending", None),
-                "hero_ban_rebuild": getattr(self, "_hero_ban_rebuild", None),
-                "restoring": getattr(self, "_restoring_state", None),
-                "closing": getattr(self, "_closing", None),
-                "map_lists_ready": getattr(self, "_map_lists_ready", None),
-                "map_prebuild": getattr(self, "_map_prebuild_in_progress", None),
-                "map_temp_override": getattr(self, "_map_temp_override", None),
-                "focus": focus_name,
-                "focus_name": focus_obj,
-                "focus_win": focus_win,
-                "focus_win_title": focus_win_title,
-                "app_state": app_state,
-                "tank_updates": tank_updates,
-                "map_updates": map_updates,
-                "role_vis": role_vis,
-                "map_vis": map_vis,
-            }
-            base.update(extra)
-            line = " | ".join(f"{k}={v}" for k, v in base.items())
-            try:
-                with self._trace_file.open("a", encoding="utf-8") as f:
-                    f.write(line + "\n")
-            except Exception:
-                pass
-            if getattr(config, "DEBUG", False):
-                config.debug_print(line)
-        except Exception:
-            pass
+        runtime_tracing.trace_event(self, name, **extra)

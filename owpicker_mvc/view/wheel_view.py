@@ -1,11 +1,10 @@
 from contextlib import contextmanager
 from typing import List, Optional, Union
-import random
 from PySide6 import QtCore, QtWidgets
-from logic.spin_engine import plan_spin
 from view.base_panel import BasePanel
 from view.wheel_widget import WheelWidget
 from view.name_list import NameRowWidget
+from view import wheel_entries_ops, wheel_spin_ops
 from model.wheel_state import WheelState
 import i18n
 from utils import theme as theme_util, ui_helpers
@@ -253,30 +252,7 @@ class WheelView(BasePanel):
             self._rebuild_entries_cache()
 
     def _rebuild_entries_cache(self) -> None:
-        entries: list[dict] = []
-        active_entries: list[dict] = []
-        base_names: list[str] = []
-        active_names: list[str] = []
-        for i in range(self.names.count()):
-            item = self.names.item(i)
-            if item is None:
-                continue
-            name = self._item_text(item)
-            if not name:
-                continue
-            subroles = list(self._item_subroles(item))
-            active = item.checkState() == QtCore.Qt.Checked
-            entries.append({"name": name, "subroles": subroles, "active": active})
-            base_names.append(name)
-            if active:
-                active_entries.append({"name": name, "subroles": subroles})
-                active_names.append(name)
-        self._entries_cache = {
-            "entries": entries,
-            "active_entries": active_entries,
-            "base_names": base_names,
-            "active_names": active_names,
-        }
+        self._entries_cache = wheel_entries_ops.rebuild_entries_cache(self.names)
 
     def set_language(self, lang: str):
         """Reapply translated labels for the current wheel."""
@@ -697,18 +673,10 @@ class WheelView(BasePanel):
         )
         return self._effective_names_from(base_entries, include_disabled=include_disabled)
     def _item_text(self, item: QtWidgets.QListWidgetItem) -> str:
-        widget = self.names.itemWidget(item)
-        if isinstance(widget, NameRowWidget):
-            return widget.edit.text().strip()
-        return item.text().strip()
+        return wheel_entries_ops.item_text(self.names, item)
+
     def _item_subroles(self, item: QtWidgets.QListWidgetItem) -> set[str]:
-        widget = self.names.itemWidget(item)
-        if isinstance(widget, NameRowWidget):
-            return widget.selected_subroles()
-        data = item.data(self.names.SUBROLE_ROLE)
-        if isinstance(data, (list, set, tuple)):
-            return set(data)
-        return set()
+        return wheel_entries_ops.item_subroles(self.names, item)
     def _base_names(self) -> List[str]:
         """Alle Namen aus der Liste (ohne Leerzeilen, Häkchen egal)."""
         self._ensure_entries_cache()
@@ -784,11 +752,7 @@ class WheelView(BasePanel):
         if self._subrole_visibility_applied == desired:
             return
         self._subrole_visibility_applied = desired
-        for i in range(self.names.count()):
-            widget = self.names.itemWidget(self.names.item(i))
-            if isinstance(widget, NameRowWidget):
-                for cb in widget.subrole_checks:
-                    cb.setVisible(self._subrole_controls_visible)
+        wheel_entries_ops.apply_subrole_visibility(self.names, self._subrole_controls_visible)
     def _apply_override(self):
         """Wendet die Override-Liste auf das Rad an, ohne die sichtbare Liste zu ändern."""
         if self._wheel_state.override_entries is None:
@@ -921,37 +885,12 @@ class WheelView(BasePanel):
             self.set_result_too_few()
             return None
         duration_ms = max(1, int(duration_ms))
-
-        # Index wählen (kannst du auch vorgeben/seeded machen)
-        idx = random.choice(enabled_indices)
-        target_name = names[idx]
-
-        # Mitte des Zielsegments in Grad (0° = rechts, mathematischer Winkel)
-        step = 360.0 / len(names)
-        slice_center = (idx + 0.5) * step
-
-        # Sauber neu starten
-        self.hard_stop()
-        current = float(self.wheel.rotation()) % 360.0
-        self.wheel.setRotation(current)
-
-        # → Korrigierter Plan: Rot_end ≡ slice_center - 90°
-        plan = plan_spin(current_deg=current,
-                         slice_center_deg=slice_center,
-                         duration_ms=duration_ms)
-
-        # Animation mit starker Ease-Out (schneller Start, langsames Ausrollen)
-        self.anim = QtCore.QPropertyAnimation(self.wheel, b"rotation", self)
-        self.anim.setDuration(plan.duration_ms)
-        self.anim.setStartValue(plan.start_deg)
-        self.anim.setEndValue(plan.end_deg)
-        self.anim.setEasingCurve(QtCore.QEasingCurve.OutCubic)
-
-        self._pending_result = target_name
-        self._is_spinning = True
-        self.anim.finished.connect(self._emit_result)
-        self.anim.start()
-        return target_name
+        return wheel_spin_ops.spin_to_label(
+            self,
+            names,
+            enabled_indices,
+            duration_ms=duration_ms,
+        )
     def spin_to_name(self, target_name: str, duration_ms: int = 2500):
         """Spinnt das Rad gezielt auf einen bestimmten Namen.
 
@@ -971,42 +910,13 @@ class WheelView(BasePanel):
             self.set_result_too_few()
             return None
         duration_ms = max(1, int(duration_ms))
-
-        try:
-            idx = names.index(target_name)
-            if idx not in enabled_indices:
-                raise ValueError("disabled target")
-        except ValueError:
-            # Zielname existiert nicht auf diesem Rad → normales Zufalls-Spin
-            return self.spin(duration_ms=duration_ms)
-
-        # Mitte des Zielsegments in Grad (0° = rechts, mathematischer Winkel)
-        step = 360.0 / len(names)
-        slice_center = (idx + 0.5) * step
-
-        # Sauber neu starten
-        self.hard_stop()
-        current = float(self.wheel.rotation()) % 360.0
-        self.wheel.setRotation(current)
-
-        plan = plan_spin(
-            current_deg=current,
-            slice_center_deg=slice_center,
+        return wheel_spin_ops.spin_to_label(
+            self,
+            names,
+            enabled_indices,
             duration_ms=duration_ms,
+            target_label=target_name,
         )
-
-        # Animation mit starker Ease-Out (schneller Start, langsames Ausrollen)
-        self.anim = QtCore.QPropertyAnimation(self.wheel, b"rotation", self)
-        self.anim.setDuration(plan.duration_ms)
-        self.anim.setStartValue(plan.start_deg)
-        self.anim.setEndValue(plan.end_deg)
-        self.anim.setEasingCurve(QtCore.QEasingCurve.OutCubic)
-
-        self._pending_result = target_name
-        self._is_spinning = True
-        self.anim.finished.connect(self._emit_result)
-        self.anim.start()
-        return target_name
 
 
     def _emit_result(self):

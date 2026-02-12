@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 import json
 import threading
@@ -22,13 +23,18 @@ class StateSyncController(QtCore.QObject):
     def __init__(self, main_window, state_file: Path) -> None:
         super().__init__(main_window)
         self._mw = main_window
+        self._settings = getattr(main_window, "settings", None)
         self._state_file = state_file
         self._closed = False
         self._network_threads_active = 0
         self._network_threads_lock = threading.Lock()
+        self._network_futures: set[Future] = set()
+        self._network_futures_lock = threading.Lock()
         self._pending_state: Dict[str, Any] | None = None
         self._pending_save_sync = False
-        self._save_debounce_ms = max(0, int(getattr(config, "STATE_SAVE_DEBOUNCE_MS", 160)))
+        self._save_debounce_ms = max(0, int(self._cfg("STATE_SAVE_DEBOUNCE_MS", 160)))
+        workers = max(1, int(self._cfg("NETWORK_SYNC_WORKERS", 2)))
+        self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="state_sync")
         self._last_saved_signature: str | None = None
         existing = self._load_state(state_file)
         if existing:
@@ -40,6 +46,15 @@ class StateSyncController(QtCore.QObject):
         self._sync_timer = QtCore.QTimer(self)
         self._sync_timer.setSingleShot(True)
         self._sync_timer.timeout.connect(self._flush_role_sync)
+
+    def _cfg(self, key: str, default: Any = None) -> Any:
+        settings = self._settings
+        if settings is not None and hasattr(settings, "get"):
+            try:
+                return settings.get(key, default)
+            except Exception:
+                pass
+        return getattr(config, key, default)
 
     @staticmethod
     def state_file(base_dir: Path) -> Path:
@@ -158,6 +173,10 @@ class StateSyncController(QtCore.QObject):
         self._pending_state = None
         self._pending_save_sync = False
         self._pending_sync_payload = None
+        try:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            self._executor.shutdown(wait=False)
 
     def resource_snapshot(self) -> dict:
         save_timer_active = False
@@ -172,6 +191,8 @@ class StateSyncController(QtCore.QObject):
             pass
         with self._network_threads_lock:
             active_threads = int(self._network_threads_active)
+        with self._network_futures_lock:
+            pending_futures = len(self._network_futures)
         return {
             "closed": bool(self._closed),
             "save_timer_active": save_timer_active,
@@ -180,6 +201,7 @@ class StateSyncController(QtCore.QObject):
             "pending_save_sync": bool(self._pending_save_sync),
             "has_pending_sync_payload": bool(self._pending_sync_payload is not None),
             "network_threads_active": active_threads,
+            "network_futures_pending": pending_futures,
         }
 
     def send_spin_result(self, tank: str, damage: str, support: str) -> None:
@@ -258,7 +280,7 @@ class StateSyncController(QtCore.QObject):
                         self._network_threads_active = max(0, self._network_threads_active - 1)
                 return
             try:
-                base = config.API_BASE_URL
+                base = str(self._cfg("API_BASE_URL", config.API_BASE_URL))
                 url = base.rstrip("/") + endpoint
                 config.debug_print(payload_log, payload)
                 resp = requests.post(url, json=payload, timeout=3)
@@ -272,7 +294,18 @@ class StateSyncController(QtCore.QObject):
 
         if self._closed:
             return
-        threading.Thread(target=_worker, daemon=True).start()
+        try:
+            future = self._executor.submit(_worker)
+        except RuntimeError:
+            return
+        with self._network_futures_lock:
+            self._network_futures.add(future)
+
+        def _on_done(done: Future) -> None:
+            with self._network_futures_lock:
+                self._network_futures.discard(done)
+
+        future.add_done_callback(_on_done)
 
     def _send_spin_result(self, tank: str, damage: str, support: str, pair_modes: Dict[str, bool]) -> None:
         """Send spin result to the server in a background thread."""
