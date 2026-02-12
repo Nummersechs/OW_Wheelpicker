@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 from PySide6 import QtCore
 
 import config
+from model.role_keys import role_wheel_map
 
 try:
     import requests  # type: ignore
@@ -93,7 +94,7 @@ class StateSyncController(QtCore.QObject):
                 mode_to_capture = "players"
         self._mw._state_store.capture_mode_from_wheels(
             mode_to_capture,
-            {"Tank": self._mw.tank, "Damage": self._mw.dps, "Support": self._mw.support},
+            role_wheel_map(self._mw),
             hero_ban_active=self._mw.hero_ban_active if mode_to_capture == "heroes" else False,
         )
         if getattr(self._mw, "map_lists", None):
@@ -188,9 +189,8 @@ class StateSyncController(QtCore.QObject):
             config.debug_print("Spin-Result: Offline-Modus - kein Senden.")
             return
         pair_modes = {
-            "Tank": getattr(self._mw.tank, "pair_mode", False),
-            "Damage": getattr(self._mw.dps, "pair_mode", False),
-            "Support": getattr(self._mw.support, "pair_mode", False),
+            role: getattr(wheel, "pair_mode", False)
+            for role, wheel in role_wheel_map(self._mw).items()
         }
         self._send_spin_result(tank, damage, support, pair_modes)
 
@@ -204,9 +204,8 @@ class StateSyncController(QtCore.QObject):
                 self._sync_timer.stop()
             return
         payload = [
-            {"role": "Tank", "names": self._mw.tank.get_current_names()},
-            {"role": "Damage", "names": self._mw.dps.get_current_names()},
-            {"role": "Support", "names": self._mw.support.get_current_names()},
+            {"role": role, "names": wheel.get_current_names()}
+            for role, wheel in role_wheel_map(self._mw).items()
         ]
         self._pending_sync_payload = payload
         # kurze Verzoegerung, um schnelle State-Aenderungen zu buendeln

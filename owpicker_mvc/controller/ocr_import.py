@@ -7,8 +7,8 @@ from difflib import SequenceMatcher
 import re
 import shutil
 import subprocess
-import unicodedata
 from typing import Iterable
+from logic.name_normalization import normalize_name_alnum_key, normalize_name_tokens
 
 
 @dataclass
@@ -203,9 +203,7 @@ def _looks_like_name(
 
 
 def _candidate_key(value: str) -> str:
-    normalized = unicodedata.normalize("NFKC", value).casefold()
-    alnum_only = "".join(ch for ch in normalized if ch.isalnum())
-    return alnum_only or normalized
+    return normalize_name_alnum_key(value)
 
 
 def _display_name_quality(value: str) -> tuple[int, int]:
@@ -214,8 +212,7 @@ def _display_name_quality(value: str) -> tuple[int, int]:
 
 
 def _normalized_tokens(value: str) -> list[str]:
-    normalized = unicodedata.normalize("NFKC", value).casefold()
-    return [token for token in normalized.split(" ") if token]
+    return normalize_name_tokens(value)
 
 
 def _find_near_duplicate_key(

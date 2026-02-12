@@ -18,6 +18,7 @@ from .ocr_role_import import (
 )
 from services import state_store
 from services.sound import SoundManager
+from model.role_keys import role_wheel_map
 from utils import flag_icons, theme as theme_util, ui_helpers
 from view.overlay import ResultOverlay
 from view.screen_region_selector import (
@@ -381,7 +382,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self._state_store.capture_mode_from_wheels(
             "players",
-            {"Tank": self.tank, "Damage": self.dps, "Support": self.support},
+            role_wheel_map(self),
             hero_ban_active=False,
         )
 
@@ -3196,7 +3197,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # vorherige Zustände sichern
             self._state_store.capture_mode_from_wheels(
                 self.current_mode,
-                {"Tank": self.tank, "Damage": self.dps, "Support": self.support},
+                role_wheel_map(self),
                 hero_ban_active=self.hero_ban_active,
             )
             self.map_mode.capture_state()

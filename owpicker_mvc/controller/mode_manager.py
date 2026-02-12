@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import List
 from logic import hero_ban_merge
+from model.role_keys import role_wheel_map, role_wheels
 from PySide6 import QtWidgets, QtCore
 import i18n
 
@@ -11,10 +12,10 @@ import i18n
 def set_hero_ban_visuals(mw, active: bool):
     """Stellt die UI entsprechend Hero-Ban an/aus."""
     mw.hero_ban_active = active
-    for wheel in (mw.tank, mw.dps, mw.support):
+    for role, wheel in role_wheels(mw):
         effect = QtWidgets.QGraphicsOpacityEffect(wheel.view) if active else None
         if active:
-            is_center = wheel is mw.dps
+            is_center = role == "Damage"
             op = 1.0 if is_center else 0.25
             effect.setOpacity(op)
             wheel.view.setGraphicsEffect(effect)
@@ -84,17 +85,14 @@ def update_hero_ban_wheel(mw):
     mw._hero_ban_pending = False
 
     selected_roles: List[str] = []
+    role_to_wheel = role_wheel_map(mw)
     if mw._hero_ban_override_role:
         selected_roles.append(mw._hero_ban_override_role)
     else:
-        if mw.tank.btn_include_in_all.isChecked():
-            selected_roles.append("Tank")
-        if mw.dps.btn_include_in_all.isChecked():
-            selected_roles.append("Damage")
-        if mw.support.btn_include_in_all.isChecked():
-            selected_roles.append("Support")
+        for role, wheel in role_to_wheel.items():
+            if wheel.btn_include_in_all.isChecked():
+                selected_roles.append(role)
 
-    role_to_wheel = {"Tank": mw.tank, "Damage": mw.dps, "Support": mw.support}
     combined = hero_ban_merge.merge_selected_roles(selected_roles, role_to_wheel)
 
     try:
@@ -119,7 +117,7 @@ def on_mode_button_clicked(mw, target: str):
         mw.last_non_hero_mode = mw.current_mode
         mw._state_store.capture_mode_from_wheels(
             mw.current_mode,
-            {"Tank": mw.tank, "Damage": mw.dps, "Support": mw.support},
+            role_wheel_map(mw),
             hero_ban_active=mw.hero_ban_active,
         )
         mw.current_mode = "heroes"
@@ -134,7 +132,7 @@ def on_mode_button_clicked(mw, target: str):
     if mw.hero_ban_active:
         mw._state_store.capture_mode_from_wheels(
             mw.current_mode,
-            {"Tank": mw.tank, "Damage": mw.dps, "Support": mw.support},
+            role_wheel_map(mw),
             hero_ban_active=mw.hero_ban_active,
         )
         mw.hero_ban_active = False

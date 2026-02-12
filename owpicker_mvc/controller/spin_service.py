@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 from logic import spin_planner
+from model.role_keys import role_for_wheel, role_wheels
 import i18n
 
 
@@ -61,13 +62,8 @@ def spin_all(mw):
     if hasattr(mw, "role_mode"):
         active = mw.role_mode.active_wheels()
     else:
-        role_wheels = [
-            ("Tank", mw.tank),
-            ("Damage", mw.dps),
-            ("Support", mw.support),
-        ]
         active = [
-            (role, wheel) for role, wheel in role_wheels if wheel.is_selected_for_global_spin()
+            (role, wheel) for role, wheel in role_wheels(mw) if wheel.is_selected_for_global_spin()
         ]
     if not active:
         return
@@ -144,13 +140,8 @@ def spin_open_queue(mw):
     if hasattr(mw, "role_mode"):
         active = mw.role_mode.active_wheels()
     else:
-        role_wheels = [
-            ("Tank", mw.tank),
-            ("Damage", mw.dps),
-            ("Support", mw.support),
-        ]
         active = [
-            (role, wheel) for role, wheel in role_wheels if wheel.is_selected_for_global_spin()
+            (role, wheel) for role, wheel in role_wheels(mw) if wheel.is_selected_for_global_spin()
         ]
     if not active:
         return
@@ -248,8 +239,8 @@ def spin_single(mw, wheel, mult: float = 1.0, hero_ban_override: bool = True):
     if mw.pending > 0:
         return
     if mw.hero_ban_active:
-        role_map = {mw.tank: "Tank", mw.dps: "Damage", mw.support: "Support"}
-        mw._hero_ban_override_role = role_map.get(wheel) if hero_ban_override else None
+        resolved_role = role_for_wheel(mw, wheel)
+        mw._hero_ban_override_role = resolved_role if hero_ban_override else None
         mw._update_hero_ban_wheel()
         target_wheel = mw.dps
     else:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from model.role_keys import role_wheels
 from view.wheel_view import WheelView
 
 
@@ -23,7 +24,7 @@ class OpenQueueController:
         return bool(toggle and toggle.value() == 1)
 
     def selected_wheels(self) -> list[WheelView]:
-        return [w for w in (self._mw.tank, self._mw.dps, self._mw.support) if w.is_selected_for_global_spin()]
+        return [wheel for _role, wheel in role_wheels(self._mw) if wheel.is_selected_for_global_spin()]
 
     def names(self) -> list[str]:
         names: list[str] = []

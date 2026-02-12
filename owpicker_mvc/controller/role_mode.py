@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from model.role_keys import role_wheels as build_role_wheels
+
 
 class RoleModeController:
     """Role-mode helpers to keep MainWindow and spin_service consistent."""
@@ -8,11 +10,7 @@ class RoleModeController:
         self._mw = main_window
 
     def role_wheels(self) -> list[tuple[str, object]]:
-        return [
-            ("Tank", self._mw.tank),
-            ("Damage", self._mw.dps),
-            ("Support", self._mw.support),
-        ]
+        return build_role_wheels(self._mw)
 
     def active_wheels(self) -> list[tuple[str, object]]:
         return [

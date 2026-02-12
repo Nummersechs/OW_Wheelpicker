@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
+from logic.name_normalization import normalize_name_casefold
 
 
 @dataclass
@@ -12,7 +13,7 @@ class PendingOCRImport:
 
 
 def normalize_name_key(value: str) -> str:
-    return str(value or "").strip().casefold()
+    return normalize_name_casefold(value)
 
 
 def name_key_set(values: Iterable[str] | None) -> set[str]:

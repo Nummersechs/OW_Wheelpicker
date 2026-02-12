@@ -8,10 +8,11 @@ import copy
 from typing import Dict, List, Any
 
 import config
+from model.role_keys import ROLE_KEYS, PAIR_MODE_DEFAULTS
 
 
 class ModeStateStore:
-    _ROLES = ("Tank", "Damage", "Support")
+    _ROLES = ROLE_KEYS
 
     def __init__(
         self,
@@ -82,7 +83,6 @@ class ModeStateStore:
 
     @classmethod
     def _default_role_state(cls, role: str, mode: str) -> dict:
-        pair_defaults = {"Tank": False, "Damage": True, "Support": True}
         if mode == "heroes":
             defaults = config.DEFAULT_HEROES.get(role, [])
         elif mode == "maps":
@@ -101,7 +101,7 @@ class ModeStateStore:
         return {
             "entries": cls._normalize_entries_for_state(defaults),
             "include_in_all": include_default,
-            "pair_mode": pair_defaults.get(role, False),
+            "pair_mode": PAIR_MODE_DEFAULTS.get(role, False),
             "use_subroles": False,
         }
 
