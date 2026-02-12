@@ -1988,27 +1988,6 @@ class MainWindow(QtWidgets.QMainWindow):
     def _update_cancel_enabled(self):
         self.btn_cancel_spin.setEnabled(self.pending > 0)
 
-    def _capture_region_for_ocr(self) -> tuple[QtGui.QPixmap | None, str | None]:
-        return ocr_capture_ops.capture_region_for_ocr(self)
-
-    def _build_ocr_pixmap_variants(self, source: QtGui.QPixmap) -> list[QtGui.QPixmap]:
-        return ocr_capture_ops.build_ocr_pixmap_variants(self, source)
-
-    def _extract_names_from_ocr_pixmap(
-        self,
-        pixmap: QtGui.QPixmap,
-        *,
-        tesseract_cmd: str,
-    ) -> tuple[list[str], str, str | None]:
-        return ocr_capture_ops.extract_names_from_ocr_pixmap(
-            self,
-            pixmap,
-            tesseract_cmd=tesseract_cmd,
-        )
-
-    def _ocr_preview_text(self, text: str, max_chars: int = 420) -> str:
-        return ocr_capture_ops.ocr_preview_text(text, max_chars=max_chars)
-
     def _on_role_ocr_import_clicked(self, role_key: str) -> None:
         ocr_capture_ops.on_role_ocr_import_clicked(self, role_key)
 

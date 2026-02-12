@@ -417,9 +417,6 @@ class WheelView(BasePanel):
         """Monotonic revision for tooltip cache invalidation."""
         return self._tooltip_rev
 
-    def _pair_parts_from_label(self, label: str) -> list[str]:
-        return self._wheel_state.pair_parts_from_label(label)
-
     def result_label_names(self, label: str) -> list[str]:
         """Return the underlying name(s) for a result label."""
         return self._wheel_state.label_names(label)
@@ -593,13 +590,6 @@ class WheelView(BasePanel):
             self.stateChanged.emit()
         return changed
 
-    def disable_current_result(self, include_related: bool = False) -> bool:
-        """Disable the currently selected result segment, if any."""
-        label = self.get_result_value() or ""
-        if include_related:
-            return self.disable_label_with_related_pairs(label)
-        return self.disable_label(label)
-
     def reset_disabled_segments(self) -> None:
         """Re-enable all segments on this wheel."""
         self._wheel_state.reset_disabled()
@@ -675,8 +665,6 @@ class WheelView(BasePanel):
     def _item_text(self, item: QtWidgets.QListWidgetItem) -> str:
         return wheel_entries_ops.item_text(self.names, item)
 
-    def _item_subroles(self, item: QtWidgets.QListWidgetItem) -> set[str]:
-        return wheel_entries_ops.item_subroles(self.names, item)
     def _base_names(self) -> List[str]:
         """Alle Namen aus der Liste (ohne Leerzeilen, Häkchen egal)."""
         self._ensure_entries_cache()
@@ -693,10 +681,6 @@ class WheelView(BasePanel):
     def _entries_for_spin(self) -> List[dict]:
         """Nutzt Override-Einträge, falls gesetzt, sonst die aktiven Einträge."""
         return self._wheel_state.entries_for_spin(self._active_entries())
-
-    def _active_names(self) -> List[str]:
-        self._ensure_entries_cache()
-        return list(self._entries_cache["active_names"]) if self._entries_cache else []
 
     def _on_names_list_changed(self, *args):
         """Wenn Namen geändert, hinzugefügt oder entfernt werden (debounced)."""
@@ -776,10 +760,6 @@ class WheelView(BasePanel):
             self._wheel_state.disabled_indices.discard(idx)
         self._refresh_disabled_indices()
         self.stateChanged.emit()
-
-    def _enabled_labels(self) -> set[str]:
-        names = list(getattr(self.wheel, "names", []))
-        return self._wheel_state.enabled_labels(names)
 
     def _rebuild_disabled_indices(self, old_names: List[str], new_names: List[str]):
         """

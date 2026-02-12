@@ -5,7 +5,6 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from view.wheel_disc import WheelDisc
 from logic.spin_engine import plan_spin
 import config
-import random
 
 
 class WheelWidget(QtWidgets.QGraphicsView):
@@ -218,17 +217,6 @@ class WheelWidget(QtWidgets.QGraphicsView):
 
         self._prepare_anim(slice_center, duration_ms)
         return names[idx]
-
-    def spin_to_random(self, enabled_indices: List[int], duration_ms: int):
-        names = self.names_list()
-        if not names or not enabled_indices:
-            return None
-        idx = random.choice(enabled_indices)
-        target_name = names[idx]
-        step = 360.0 / len(names)
-        slice_center = (idx + 0.5) * step
-        self._prepare_anim(slice_center, duration_ms)
-        return target_name
 
     def _prepare_anim(self, slice_center: float, duration_ms: int):
         self._reset_anim()

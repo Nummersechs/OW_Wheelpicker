@@ -153,8 +153,12 @@ class ModeStateStore:
 
     @classmethod
     def _player_profile_capacity(cls) -> int:
-        # UI/Storage intentionally fixed to 6 slots.
-        return 6
+        try:
+            cap = int(getattr(config, "PLAYER_PROFILE_MAX_SLOTS", 6))
+        except Exception:
+            cap = 6
+        # Keep at least one profile slot to preserve valid state.
+        return max(1, cap)
 
     @classmethod
     def _default_player_profile_names(cls, capacity: int | None = None) -> List[str]:
