@@ -332,6 +332,9 @@ def hover_poke_at_global(mw, pos: QtCore.QPoint, reason: str | None = None) -> b
                 QtWidgets.QApplication.sendEvent(vp, mouse)
             except Exception:
                 pass
+            # A single hit under cursor is enough to revive hover handling.
+            # Poking additional views can create avoidable UI stalls.
+            break
         except Exception:
             continue
     mw._hover_forwarding = prev_forwarding
@@ -409,8 +412,20 @@ def rearm_hover_tracking(mw, reason: str | None = None, force: bool = False) -> 
             vp.setAttribute(QtCore.Qt.WA_Hover, True)
         except Exception:
             pass
+    # When tooltips are globally disabled, skip cache/poke/pump work completely.
+    # This avoids unnecessary expensive hover cache rebuilds during map interactions.
+    if _cfg(mw, "DISABLE_TOOLTIPS", False):
+        return
     reset_hover_cache_under_cursor(mw)
-    if reason:
+    if not reason:
+        return
+    reason_text = str(reason).lower()
+    suppress_poke = False
+    # During/after map stack switches, immediate synthetic hover events can
+    # block the UI thread on some systems. Let natural mouse movement recover.
+    if "stack_switching" in reason_text and getattr(mw, "current_mode", "") == "maps":
+        suppress_poke = True
+    if not suppress_poke:
         hover_poke_under_cursor(mw, reason=reason)
         start_hover_pump(mw, reason=reason, duration_ms=1200)
 

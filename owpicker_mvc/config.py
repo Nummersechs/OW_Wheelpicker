@@ -10,11 +10,11 @@ DEBUG = False
 # - deaktiviert zusätzlich alle internen Debug-/Trace-Logs
 # - Save-State bleibt davon unberührt
 QUIET = False
-TRACE_FLOW = False
-TRACE_SHUTDOWN = False
-TRACE_FOCUS = False
-TRACE_HOVER = False
-TRACE_CLEAR_ON_START = False
+TRACE_FLOW = True
+TRACE_SHUTDOWN = True
+TRACE_FOCUS = True
+TRACE_HOVER = True
+TRACE_CLEAR_ON_START = True
 FOCUS_TRACE_DURATION_S = 12.0
 FOCUS_TRACE_MAX_EVENTS = 800
 DISABLE_TOOLTIPS = True

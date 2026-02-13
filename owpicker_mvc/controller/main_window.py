@@ -339,7 +339,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
                 self.btn_mode_maps,
             ],
             ["mode.players", "mode.heroes", "mode.hero_ban", "mode.maps", "mode.maps_loading"],
-            padding=48,
+            padding=56,
         )
         self._mode_buttons = [
             self.btn_mode_players,
@@ -349,6 +349,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         ]
         for btn in self._mode_buttons:
             btn.setProperty("modeButton", True)
+            btn.setFixedHeight(38)
             btn.toggled.connect(self._update_mode_button_styles)
         self.btn_mode_players.clicked.connect(lambda: self._on_mode_button_clicked("players"))
         self.btn_mode_heroes.clicked.connect(lambda: self._on_mode_button_clicked("heroes"))
@@ -1259,6 +1260,9 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         if getattr(self, "_mode_buttons", None):
             for btn in self._mode_buttons:
                 style_helpers.style_mode_button(btn, theme)
+            # Ensure initial checked mode button gets the correct visual state
+            # immediately, even before deferred heavy-theme updates run.
+            self._update_mode_button_styles(force=True)
         if hasattr(self, "btn_spin_all"):
             style_helpers.style_primary_button(self.btn_spin_all, theme)
         if hasattr(self, "spin_mode_toggle"):

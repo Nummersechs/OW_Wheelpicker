@@ -11,7 +11,7 @@ DELETE_MARK_BUTTON_WIDTH = 28
 DELETE_MARK_ROW_RIGHT_MARGIN = 0
 NAME_LIST_ROW_HEIGHT = 20
 NAME_EDIT_HEIGHT = 18
-SUBROLE_CHECK_SPACING = 10
+SUBROLE_CHECK_SPACING = 8
 _DELETE_MARKED_STYLE_CACHE: dict[str, str] = {}
 
 
@@ -95,9 +95,11 @@ class NamesList(QtWidgets.QListWidget):
         self._auto_focus_enabled = True
         self._auto_focus_requires_active = False
         self._viewport_right_margin = -1
+        self._syncing_viewport_margin = False
         self.setFocusPolicy(QtCore.Qt.NoFocus)
         self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.setSpacing(0)
         self.setUniformItemSizes(True)
         self.setItemDelegate(_NoPaintDelegate(self))
@@ -127,19 +129,25 @@ class NamesList(QtWidgets.QListWidget):
         return max(0, int(extent), int(hint))
 
     def _sync_viewport_right_padding(self, *_args) -> None:
+        if self._syncing_viewport_margin:
+            return
         sb = self.verticalScrollBar()
-        if sb is None:
-            margin_right = 0
-        else:
-            # Reserve the scrollbar width while hidden so right-aligned controls
-            # (delete checkbox column) stay visually stable when it appears.
-            extent = self._scrollbar_extent(sb)
-            has_vertical_scroll = sb.isVisible() and sb.maximum() > sb.minimum()
-            margin_right = 0 if has_vertical_scroll else extent
+        # Reserve right space only for subrole rows with delete marker column.
+        # For simple rows this can make the list unnecessarily wide and trigger
+        # a horizontal scrollbar.
+        reserve_right = self.has_subroles and self.enable_mark_for_delete
+        has_vertical_scroll = bool(
+            sb is not None and sb.isVisible() and sb.maximum() > sb.minimum()
+        )
+        margin_right = self._scrollbar_extent(sb) if (reserve_right and has_vertical_scroll) else 0
         if margin_right == self._viewport_right_margin:
             return
-        self.setViewportMargins(0, 0, margin_right, 0)
         self._viewport_right_margin = margin_right
+        self._syncing_viewport_margin = True
+        try:
+            self.setViewportMargins(0, 0, margin_right, 0)
+        finally:
+            self._syncing_viewport_margin = False
 
     def eventFilter(self, obj: QtCore.QObject, ev: QtCore.QEvent) -> bool:
         sb = self.verticalScrollBar()
@@ -154,7 +162,7 @@ class NamesList(QtWidgets.QListWidget):
 
     def resizeEvent(self, ev: QtGui.QResizeEvent) -> None:
         super().resizeEvent(ev)
-        self._sync_viewport_right_padding()
+        QtCore.QTimer.singleShot(0, self._sync_viewport_right_padding)
 
     def wheelEvent(self, ev: QtGui.QWheelEvent):
         """Etwas weniger sensibles Scrollen als Qt-Default."""
@@ -366,8 +374,9 @@ class NameRowWidget(QtWidgets.QWidget):
 
         self.edit = NameLineEdit()
         self.edit.setText(item.text())
-        # Keep editable field flexible so subrole checkboxes remain readable.
-        self.edit.setMinimumWidth(220)
+        # Keep field flexible, but avoid forcing row overflow with subrole checkboxes.
+        min_name_width = 188 if subrole_labels else 196
+        self.edit.setMinimumWidth(min_name_width)
         self.edit.setFixedHeight(NAME_EDIT_HEIGHT)
         self.edit.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
         self.edit.setFocusPolicy(QtCore.Qt.ClickFocus)
@@ -383,7 +392,7 @@ class NameRowWidget(QtWidgets.QWidget):
         if subrole_labels:
             self._subrole_group = QtWidgets.QWidget(self)
             subrole_layout = QtWidgets.QHBoxLayout(self._subrole_group)
-            subrole_layout.setContentsMargins(8, 0, 0, 0)
+            subrole_layout.setContentsMargins(6, 0, 0, 0)
             subrole_layout.setSpacing(SUBROLE_CHECK_SPACING)
             for lbl in subrole_labels:
                 cb = QtWidgets.QCheckBox(lbl)

@@ -137,7 +137,7 @@ def _mode_button_style(theme: theme_util.Theme) -> str:
         "}"
         f"QPushButton:hover {{ background:{theme.frame_bg}; color:{theme.text}; }}"
         f"QPushButton:pressed {{ background:{theme.slider_groove}; color:{theme.text}; }}"
-        f"QPushButton:checked {{ background:{theme.primary}; color:{theme.button_text}; border:2px solid {theme.primary_hover}; padding:10px 18px; font-size:14px; }}"
+        f"QPushButton:checked {{ background:{theme.primary}; color:{theme.button_text}; border:2px solid {theme.primary_hover}; padding:8px 18px; font-size:14px; }}"
         f"QPushButton:checked:hover {{ background:{theme.primary_hover}; color:{theme.button_text}; }}"
         f"QPushButton:checked:pressed {{ background:{theme.primary_pressed}; color:{theme.button_text}; }}"
         f"QPushButton:disabled {{ background:{theme.disabled_bg}; color:{theme.disabled_text}; border:1px solid {theme.border}; }}"

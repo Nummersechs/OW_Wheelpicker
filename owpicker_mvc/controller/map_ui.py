@@ -9,6 +9,29 @@ from view import style_helpers
 from view.wheel_view import WheelView
 from view.list_panel import ListPanel
 
+_MAP_TYPE_LIST_STYLE_CACHE: dict[str, str] = {}
+
+
+def _map_type_list_style(theme: theme_util.Theme) -> str:
+    cached = _MAP_TYPE_LIST_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    cached = (
+        "QListWidget {"
+        f" background:{theme.base}; color:{theme.text};"
+        f" border:1px solid {theme.border}; border-radius:8px; padding:2px;"
+        "}"
+        f"QListWidget::item {{ color:{theme.text}; padding:4px 6px; border-radius:6px; }}"
+        f"QListWidget::item:selected {{ background:{theme.primary}; color:{theme.button_text}; }}"
+        f"QListWidget::item:hover {{ background:{theme.alt_base}; color:{theme.text}; }}"
+        "QListWidget QLineEdit {"
+        f" background:{theme.base}; color:{theme.text};"
+        f" border:1px solid {theme.border}; border-radius:4px; padding:1px 4px;"
+        "}"
+    )
+    _MAP_TYPE_LIST_STYLE_CACHE[theme.key] = cached
+    return cached
+
 
 class MapUI(QtCore.QObject):
     """
@@ -249,16 +272,11 @@ class MapUI(QtCore.QObject):
     def _show_map_type_editor(self, parent_widget: QtWidgets.QWidget):
         if not hasattr(self, "_map_type_editor"):
             self._map_type_editor = QtWidgets.QFrame(parent_widget)
-            theme = theme_util.get_theme(self.theme_key)
-            self._map_type_editor.setStyleSheet(
-                f"QFrame {{ background: {theme.card_bg}; border: 2px solid {theme.card_border}; border-radius: 10px; }}"
-            )
             self._map_type_editor.setFixedSize(360, 320)
             layout = QtWidgets.QVBoxLayout(self._map_type_editor)
             layout.setContentsMargins(10, 10, 10, 10)
             layout.setSpacing(8)
             self._map_type_editor_title = QtWidgets.QLabel(i18n.t("map.editor.title"))
-            self._map_type_editor_title.setStyleSheet("font-weight:700; font-size:14px;")
             ui_helpers.set_fixed_width_from_translations([self._map_type_editor_title], ["map.editor.title"], padding=28)
             layout.addWidget(self._map_type_editor_title)
 
@@ -282,8 +300,6 @@ class MapUI(QtCore.QObject):
                 ["map.editor.add", "map.editor.delete"],
                 padding=40,
             )
-            style_helpers.style_primary_button(self._map_type_btn_add, theme)
-            style_helpers.style_primary_button(self._map_type_btn_del, theme)
             btn_grid.addWidget(self._map_type_btn_add, 0, 0, QtCore.Qt.AlignLeft)
             btn_grid.addWidget(self._map_type_btn_del, 0, 1, QtCore.Qt.AlignRight)
             btn_grid.setColumnStretch(0, 1)
@@ -301,11 +317,11 @@ class MapUI(QtCore.QObject):
                 ["map.editor.apply", "map.editor.cancel"],
                 padding=44,
             )
-            style_helpers.style_success_button(self._map_type_btn_ok, theme)
-            style_helpers.style_danger_button(self._map_type_btn_cancel, theme)
             confirm_row.addWidget(self._map_type_btn_ok, 0, QtCore.Qt.AlignLeft)
             confirm_row.addWidget(self._map_type_btn_cancel, 0, QtCore.Qt.AlignRight)
             layout.addLayout(confirm_row)
+
+        self._apply_theme_to_map_controls(theme_util.get_theme(self.theme_key))
 
         # Inhalte aktualisieren
         self._map_type_list_widget.clear()
@@ -437,6 +453,34 @@ class MapUI(QtCore.QObject):
         if hasattr(self, "_map_type_btn_cancel"):
             self._map_type_btn_cancel.setText(i18n.t("map.editor.cancel"))
 
+    def _apply_theme_to_map_controls(self, theme: theme_util.Theme):
+        style_helpers.set_stylesheet_if_needed(
+            self.lbl_map_types,
+            f"map_label:{theme.key}",
+            f"font-weight:600; color:{theme.text};",
+        )
+        style_helpers.style_primary_button(getattr(self, "btn_edit_map_types", None), theme)
+        if hasattr(self, "_map_type_editor"):
+            style_helpers.set_stylesheet_if_needed(
+                self._map_type_editor,
+                f"map_editor_frame:{theme.key}",
+                f"QFrame {{ background:{theme.card_bg}; border:2px solid {theme.card_border}; border-radius:10px; }}",
+            )
+            style_helpers.set_stylesheet_if_needed(
+                getattr(self, "_map_type_editor_title", None),
+                f"map_editor_title:{theme.key}",
+                f"font-weight:700; font-size:14px; color:{theme.text};",
+            )
+            style_helpers.set_stylesheet_if_needed(
+                getattr(self, "_map_type_list_widget", None),
+                f"map_editor_list:{theme.key}",
+                _map_type_list_style(theme),
+            )
+            style_helpers.style_primary_button(getattr(self, "_map_type_btn_add", None), theme)
+            style_helpers.style_primary_button(getattr(self, "_map_type_btn_del", None), theme)
+            style_helpers.style_success_button(getattr(self, "_map_type_btn_ok", None), theme)
+            style_helpers.style_danger_button(getattr(self, "_map_type_btn_cancel", None), theme)
+
     def apply_theme(self, theme: theme_util.Theme):
         signature = (theme.key, len(self.map_lists), bool(hasattr(self, "_map_type_editor")))
         if self._theme_apply_signature == signature:
@@ -446,14 +490,7 @@ class MapUI(QtCore.QObject):
             self.map_main.apply_theme(theme)
         for w in self.map_lists.values():
             w.apply_theme(theme)
-        if hasattr(self, "_map_type_editor"):
-            self._map_type_editor.setStyleSheet(
-                f"QFrame {{ background: {theme.card_bg}; border: 2px solid {theme.card_border}; border-radius: 10px; }}"
-            )
-            style_helpers.style_primary_button(getattr(self, "_map_type_btn_add", None), theme)
-            style_helpers.style_primary_button(getattr(self, "_map_type_btn_del", None), theme)
-            style_helpers.style_success_button(getattr(self, "_map_type_btn_ok", None), theme)
-            style_helpers.style_danger_button(getattr(self, "_map_type_btn_cancel", None), theme)
+        self._apply_theme_to_map_controls(theme)
         self._theme_apply_signature = signature
 
     def load_state(self):
