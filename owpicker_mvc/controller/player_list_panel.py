@@ -22,6 +22,7 @@ class PlayerListPanelController(QtCore.QObject):
         self._syncing = False
         self._sync_timer: QtCore.QTimer | None = None
         self._snapshot: dict[str, dict[str, set]] = {}
+        self._applied_theme_key: str | None = None
 
     def allowed(self) -> bool:
         return self._mw.current_mode == "players" and not getattr(self._mw, "hero_ban_active", False)
@@ -119,6 +120,8 @@ class PlayerListPanelController(QtCore.QObject):
         if not panel:
             return
         theme = theme_util.get_theme(getattr(self._mw, "theme", "light"))
+        if self._applied_theme_key == theme.key:
+            return
         panel.setStyleSheet(
             f"QFrame#playerListPanel {{ background: {theme.card_bg}; border: 2px solid {theme.card_border}; border-radius: 10px; }}"
         )
@@ -128,6 +131,7 @@ class PlayerListPanelController(QtCore.QObject):
             self._names_panel.apply_theme(theme)
         if self._close:
             self._close.setStyleSheet(theme_util.tool_button_stylesheet(theme))
+        self._applied_theme_key = theme.key
 
     def set_language(self, lang: str) -> None:
         i18n.set_language(lang)

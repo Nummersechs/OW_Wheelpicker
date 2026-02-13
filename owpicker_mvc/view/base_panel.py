@@ -28,6 +28,7 @@ class BasePanel(QtWidgets.QWidget):
         self._title_fallback = title
         self._names_hint_key = names_hint_key
         self.subrole_labels = subrole_labels or []
+        self._applied_theme_key: str | None = None
 
         self.card = QtWidgets.QFrame()
         self.card.setObjectName("card")
@@ -155,6 +156,8 @@ class BasePanel(QtWidgets.QWidget):
             self.names_panel.set_interactive_enabled(enabled)
 
     def apply_theme(self, theme: theme_util.Theme) -> None:
+        if self._applied_theme_key == theme.key:
+            return
         self.card.setStyleSheet(
             "#card { "
             f"background: {theme.card_bg}; "
@@ -169,3 +172,4 @@ class BasePanel(QtWidgets.QWidget):
         style_helpers.style_include_button(self.btn_include_in_all, theme)
         if hasattr(self, "names_panel"):
             self.names_panel.apply_theme(theme)
+        self._applied_theme_key = theme.key

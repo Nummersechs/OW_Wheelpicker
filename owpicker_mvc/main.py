@@ -25,7 +25,6 @@ def main():
     _apply_quiet_mode()
 
     from PySide6 import QtCore, QtGui, QtWidgets  # nach Quiet-Setup laden
-    from controller.main_window import MainWindow
     from utils.qt_runtime import apply_preferred_app_font
 
     app = QtWidgets.QApplication([])
@@ -49,6 +48,10 @@ def main():
         app.processEvents()
     except Exception:
         splash = None
+
+    # Erst nach sichtbarem Splash laden, damit "Klick -> sichtbares Feedback"
+    # schneller passiert, auch wenn MainWindow-Module länger importieren.
+    from controller.main_window import MainWindow
 
     win = MainWindow()
     win.show()

@@ -5,6 +5,85 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from utils import qt_runtime
 from utils import theme as theme_util
 
+_HEADER_STYLE_CACHE: dict[str, str] = {}
+_NAME_EDIT_STYLE_CACHE: dict[str, str] = {}
+_TOGGLE_STYLE_CACHE: dict[str, str] = {}
+_POPUP_STYLE_CACHE: dict[str, str] = {}
+_LIST_STYLE_CACHE: dict[str, str] = {}
+
+
+def _header_style(theme: theme_util.Theme) -> str:
+    cached = _HEADER_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    cached = (
+        "QFrame#profileHeader {"
+        f" background:{theme.base}; border:1px solid {theme.border}; border-radius:10px;"
+        "}"
+    )
+    _HEADER_STYLE_CACHE[theme.key] = cached
+    return cached
+
+
+def _name_edit_style(theme: theme_util.Theme) -> str:
+    cached = _NAME_EDIT_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    cached = (
+        "QLineEdit {"
+        " border:0; background:transparent; padding:0 4px 0 2px;"
+        f" color:{theme.text}; font-size:13px; font-weight:600;"
+        " selection-background-color: rgba(64,128,255,0.35);"
+        "}"
+    )
+    _NAME_EDIT_STYLE_CACHE[theme.key] = cached
+    return cached
+
+
+def _toggle_style(theme: theme_util.Theme) -> str:
+    cached = _TOGGLE_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    cached = (
+        "QToolButton {"
+        f" border:0; border-left:1px solid {theme.border}; background:{theme.base}; padding:0;"
+        " border-top-right-radius:10px; border-bottom-right-radius:10px;"
+        f" color:{theme.muted_text}; font-size:24px; font-weight:700;"
+        "}"
+        f"QToolButton:hover {{ background:{theme.frame_bg}; color:{theme.text}; }}"
+        f"QToolButton:pressed {{ background:{theme.tool_hover}; color:{theme.text}; }}"
+    )
+    _TOGGLE_STYLE_CACHE[theme.key] = cached
+    return cached
+
+
+def _popup_style(theme: theme_util.Theme) -> str:
+    cached = _POPUP_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    cached = (
+        "QFrame#profilePopup {"
+        f" background:{theme.base}; border:1px solid {theme.border}; border-radius:10px;"
+        "}"
+    )
+    _POPUP_STYLE_CACHE[theme.key] = cached
+    return cached
+
+
+def _list_style(theme: theme_util.Theme) -> str:
+    cached = _LIST_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    cached = (
+        "QListWidget {"
+        f" background:transparent; color:{theme.text}; border:0; border-radius:0; padding:0;"
+        "}"
+        f"QListWidget::item {{ color:{theme.text}; height:28px; padding:0 8px; }}"
+        f"QListWidget::item:selected {{ background:rgba(64,128,255,0.28); color:{theme.text}; }}"
+    )
+    _LIST_STYLE_CACHE[theme.key] = cached
+    return cached
+
 
 class _ProfileListWidget(QtWidgets.QListWidget):
     reorderFinished = QtCore.Signal()
@@ -146,6 +225,7 @@ class PlayerProfileDropdown(QtWidgets.QWidget):
         self._app = QtWidgets.QApplication.instance()
         self._app_filter_installed = False
         self._embedded_popup = qt_runtime.is_headless_qpa()
+        self._applied_theme_key: str | None = None
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -401,38 +481,13 @@ class PlayerProfileDropdown(QtWidgets.QWidget):
             self.orderChanged.emit(order)
 
     def apply_theme(self, theme: theme_util.Theme) -> None:
+        if self._applied_theme_key == theme.key:
+            return
         self._row_delegate.set_theme(theme)
-        self.header.setStyleSheet(
-            "QFrame#profileHeader {"
-            f" background:{theme.base}; border:1px solid {theme.border}; border-radius:10px;"
-            "}"
-        )
-        self.name_edit.setStyleSheet(
-            "QLineEdit {"
-            " border:0; background:transparent; padding:0 4px 0 2px;"
-            f" color:{theme.text}; font-size:13px; font-weight:600;"
-            " selection-background-color: rgba(64,128,255,0.35);"
-            "}"
-        )
-        self.btn_toggle.setStyleSheet(
-            "QToolButton {"
-            f" border:0; border-left:1px solid {theme.border}; background:{theme.base}; padding:0;"
-            " border-top-right-radius:10px; border-bottom-right-radius:10px;"
-            f" color:{theme.muted_text}; font-size:24px; font-weight:700;"
-            "}"
-            f"QToolButton:hover {{ background:{theme.frame_bg}; color:{theme.text}; }}"
-            f"QToolButton:pressed {{ background:{theme.tool_hover}; color:{theme.text}; }}"
-        )
-        self.popup.setStyleSheet(
-            "QFrame#profilePopup {"
-            f" background:{theme.base}; border:1px solid {theme.border}; border-radius:10px;"
-            "}"
-        )
-        self.list_widget.setStyleSheet(
-            "QListWidget {"
-            f" background:transparent; color:{theme.text}; border:0; border-radius:0; padding:0;"
-            "}"
-            f"QListWidget::item {{ color:{theme.text}; height:28px; padding:0 8px; }}"
-            f"QListWidget::item:selected {{ background:rgba(64,128,255,0.28); color:{theme.text}; }}"
-        )
+        self.header.setStyleSheet(_header_style(theme))
+        self.name_edit.setStyleSheet(_name_edit_style(theme))
+        self.btn_toggle.setStyleSheet(_toggle_style(theme))
+        self.popup.setStyleSheet(_popup_style(theme))
+        self.list_widget.setStyleSheet(_list_style(theme))
         self.list_widget.viewport().update()
+        self._applied_theme_key = theme.key

@@ -5,6 +5,44 @@ from utils import flag_icons, qt_runtime, theme as theme_util
 from . import style_helpers
 from .name_list import NameRowWidget, NamesListPanel
 
+_OVERLAY_CARD_STYLE_CACHE: dict[str, str] = {}
+_OVERLAY_TITLE_STYLE_CACHE: dict[str, str] = {}
+_OVERLAY_LABEL_STYLE_CACHE: dict[str, str] = {}
+
+
+def _overlay_card_style(theme: theme_util.Theme) -> str:
+    cached = _OVERLAY_CARD_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    cached = (
+        "#resultCard { "
+        f"background: {theme.card_bg}; "
+        "border-radius: 16px; "
+        f"border: 1px solid {theme.card_border}; "
+        "}"
+    )
+    _OVERLAY_CARD_STYLE_CACHE[theme.key] = cached
+    return cached
+
+
+def _overlay_title_style(theme: theme_util.Theme) -> str:
+    cached = _OVERLAY_TITLE_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    cached = f"font-size:22px; font-weight:800; margin:0; color:{theme.text};"
+    _OVERLAY_TITLE_STYLE_CACHE[theme.key] = cached
+    return cached
+
+
+def _overlay_label_style(theme: theme_util.Theme) -> str:
+    cached = _OVERLAY_LABEL_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    cached = f"font-size:17px; margin:4px 0; color:{theme.text};"
+    _OVERLAY_LABEL_STYLE_CACHE[theme.key] = cached
+    return cached
+
+
 class ResultOverlay(QtWidgets.QWidget):
     closed = QtCore.Signal()
     modeChosen = QtCore.Signal(bool)
@@ -126,6 +164,7 @@ class ResultOverlay(QtWidgets.QWidget):
 
         self.hide()
         self._last_view: dict | None = None
+        self._applied_theme_key: str | None = None
         # Default to light; caller reapplies with the persisted theme.
         default_theme = theme_util.get_theme("light")
         self.apply_theme(default_theme, theme_util.tool_button_stylesheet(default_theme))
@@ -406,16 +445,13 @@ class ResultOverlay(QtWidgets.QWidget):
 
     def apply_theme(self, theme: theme_util.Theme, tool_style: str | None = None) -> None:
         """Update overlay colors to match the active theme."""
-        self.card.setStyleSheet(
-            "#resultCard { "
-            f"background: {theme.card_bg}; "
-            "border-radius: 16px; "
-            f"border: 1px solid {theme.card_border}; "
-            "}"
-        )
-        self.title.setStyleSheet(f"font-size:22px; font-weight:800; margin:0; color:{theme.text};")
+        if self._applied_theme_key == theme.key:
+            return
+        self.card.setStyleSheet(_overlay_card_style(theme))
+        self.title.setStyleSheet(_overlay_title_style(theme))
+        label_style = _overlay_label_style(theme)
         for lab in (self.lab_tank, self.lab_dps, self.lab_sup):
-            lab.setStyleSheet(f"font-size:17px; margin:4px 0; color:{theme.text};")
+            lab.setStyleSheet(label_style)
         if tool_style:
             self.btn_language.setStyleSheet(tool_style)
         self.ocr_names_panel.apply_theme(theme)
@@ -424,6 +460,7 @@ class ResultOverlay(QtWidgets.QWidget):
         style_helpers.style_danger_button(self.btn_ocr_cancel, theme)
         style_helpers.style_warning_button(self.btn_ocr_replace, theme)
         style_helpers.style_success_button(self.btn_ocr_confirm, theme)
+        self._applied_theme_key = theme.key
 
     def _apply_button_labels(self):
         self.btn_close.setText(i18n.t("overlay.button_ok"))

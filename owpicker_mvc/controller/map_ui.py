@@ -40,6 +40,7 @@ class MapUI(QtCore.QObject):
         self._pending_list_state: dict = {}
         self._list_build_timer: QtCore.QTimer | None = None
         self._update_delay_ms = 140
+        self._theme_apply_signature: tuple[str, int, bool] | None = None
         self._update_timer = QtCore.QTimer(self)
         self._update_timer.setSingleShot(True)
         self._update_timer.timeout.connect(self._flush_updates)
@@ -197,6 +198,8 @@ class MapUI(QtCore.QObject):
             role_state = map_state.get(cat) or {"entries": [], "pair_mode": False, "use_subroles": False}
             self._add_map_list(cat, role_state)
         self._map_type_list_layout.addStretch(1)
+        self._theme_apply_signature = None
+        self.apply_theme(theme_util.get_theme(self.theme_key))
         self.listsBuilt.emit()
 
     def _start_list_build(self):
@@ -212,6 +215,8 @@ class MapUI(QtCore.QObject):
         if not self._pending_list_categories:
             self._map_type_list_layout.addStretch(1)
             self.rebuild_combined(emit_state=False, force_wheel=True)
+            self._theme_apply_signature = None
+            self.apply_theme(theme_util.get_theme(self.theme_key))
             self.listsBuilt.emit()
             return
         # Build one category per tick to keep UI responsive
@@ -433,6 +438,9 @@ class MapUI(QtCore.QObject):
             self._map_type_btn_cancel.setText(i18n.t("map.editor.cancel"))
 
     def apply_theme(self, theme: theme_util.Theme):
+        signature = (theme.key, len(self.map_lists), bool(hasattr(self, "_map_type_editor")))
+        if self._theme_apply_signature == signature:
+            return
         self.theme_key = theme.key
         if hasattr(self, "map_main") and hasattr(self.map_main, "apply_theme"):
             self.map_main.apply_theme(theme)
@@ -446,6 +454,7 @@ class MapUI(QtCore.QObject):
             style_helpers.style_primary_button(getattr(self, "_map_type_btn_del", None), theme)
             style_helpers.style_success_button(getattr(self, "_map_type_btn_ok", None), theme)
             style_helpers.style_danger_button(getattr(self, "_map_type_btn_cancel", None), theme)
+        self._theme_apply_signature = signature
 
     def load_state(self):
         state = self.state_store.get_mode_state("maps") or {}

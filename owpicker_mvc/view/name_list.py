@@ -9,6 +9,28 @@ from utils import ui_helpers
 DELETE_MARK_COLUMN_WIDTH = 20
 DELETE_MARK_BUTTON_WIDTH = 28
 DELETE_MARK_ROW_RIGHT_MARGIN = 0
+_DELETE_MARKED_STYLE_CACHE: dict[str, str] = {}
+
+
+def _delete_marked_button_style(theme) -> str:
+    theme_key = str(getattr(theme, "key", "light"))
+    cached = _DELETE_MARKED_STYLE_CACHE.get(theme_key)
+    if cached is not None:
+        return cached
+    cached = (
+        "QToolButton {"
+        f" color:{theme.text}; background:{theme.base}; border:1px solid {theme.border};"
+        " border-radius:8px; font-size:15px; }"
+        f"QToolButton:hover {{ background:{theme.tool_hover}; }}"
+        f"QToolButton:pressed {{ background:{theme.tool_pressed}; }}"
+        "QToolButton[dangerActive=\"true\"] {"
+        " color:white; background:#c62828; border:1px solid #8e1f1f; }"
+        "QToolButton[dangerActive=\"true\"]:hover { background:#d32f2f; }"
+        "QToolButton[dangerActive=\"true\"]:pressed { background:#b71c1c; }"
+        f"QToolButton:disabled {{ color:{theme.disabled_text}; background:{theme.alt_base}; border:1px solid {theme.border}; }}"
+    )
+    _DELETE_MARKED_STYLE_CACHE[theme_key] = cached
+    return cached
 
 
 class _NoPaintDelegate(QtWidgets.QStyledItemDelegate):
@@ -505,6 +527,7 @@ class NamesListPanel(QtWidgets.QWidget):
         self._enable_mark_for_delete = bool(enable_mark_for_delete)
         self._interaction_enabled = True
         self._delete_confirm_handler: Callable[[int], bool] | None = None
+        self._applied_theme_key: str | None = None
 
         self.btn_delete_marked = QtWidgets.QToolButton()
         self.btn_delete_marked.setText("🗑")
@@ -567,21 +590,14 @@ class NamesListPanel(QtWidgets.QWidget):
         self.apply_fixed_widths()
 
     def apply_theme(self, theme):
+        theme_key = str(getattr(theme, "key", "light"))
+        if self._applied_theme_key == theme_key:
+            return
         style_helpers.style_primary_button(self.btn_sort_names, theme)
         style_helpers.style_primary_button(self.btn_toggle_all_names, theme)
-        self.btn_delete_marked.setStyleSheet(
-            "QToolButton {"
-            f" color:{theme.text}; background:{theme.base}; border:1px solid {theme.border};"
-            " border-radius:8px; font-size:15px; }"
-            f"QToolButton:hover {{ background:{theme.tool_hover}; }}"
-            f"QToolButton:pressed {{ background:{theme.tool_pressed}; }}"
-            "QToolButton[dangerActive=\"true\"] {"
-            " color:white; background:#c62828; border:1px solid #8e1f1f; }"
-            "QToolButton[dangerActive=\"true\"]:hover { background:#d32f2f; }"
-            "QToolButton[dangerActive=\"true\"]:pressed { background:#b71c1c; }"
-            f"QToolButton:disabled {{ color:{theme.disabled_text}; background:{theme.alt_base}; border:1px solid {theme.border}; }}"
-        )
+        self.btn_delete_marked.setStyleSheet(_delete_marked_button_style(theme))
         style_helpers.style_names_list(self.names, theme)
+        self._applied_theme_key = theme_key
 
     def apply_fixed_widths(self):
         ui_helpers.set_fixed_width_from_translations(

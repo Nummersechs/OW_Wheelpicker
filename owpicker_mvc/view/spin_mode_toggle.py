@@ -3,6 +3,60 @@ from __future__ import annotations
 from PySide6 import QtCore, QtGui, QtWidgets
 from utils import theme as theme_util
 
+_TOGGLE_FRAME_STYLE_CACHE: dict[str, str] = {}
+_THUMB_STYLE_CACHE: dict[tuple[str, bool], str] = {}
+_LABEL_STYLE_CACHE: dict[tuple[str, str], str] = {}
+
+
+def _frame_style(theme: theme_util.Theme) -> str:
+    cached = _TOGGLE_FRAME_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    cached = (
+        "#spinModeToggle { "
+        f"background-color: {theme.frame_bg}; "
+        f"border: 1px solid {theme.border}; "
+        "border-radius: 12px; "
+        "}"
+        "#spinModeToggle:disabled { "
+        f"background-color: {theme.disabled_bg}; "
+        f"border: 1px solid {theme.border}; "
+        "}"
+    )
+    _TOGGLE_FRAME_STYLE_CACHE[theme.key] = cached
+    return cached
+
+
+def _thumb_style(theme: theme_util.Theme, enabled: bool) -> str:
+    cache_key = (theme.key, bool(enabled))
+    cached = _THUMB_STYLE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    if enabled:
+        bg = theme.primary
+        border = theme.primary_hover
+    else:
+        bg = theme.disabled_bg
+        border = theme.border
+    cached = f"background-color: {bg}; border: 1px solid {border}; border-radius: 10px;"
+    _THUMB_STYLE_CACHE[cache_key] = cached
+    return cached
+
+
+def _label_style(theme: theme_util.Theme, mode: str) -> str:
+    cache_key = (theme.key, mode)
+    cached = _LABEL_STYLE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    if mode == "disabled":
+        cached = f"color:{theme.disabled_text}; font-weight:600;"
+    elif mode == "active":
+        cached = f"color:{theme.button_text}; font-weight:600;"
+    else:
+        cached = f"color:{theme.muted_text}; font-weight:600;"
+    _LABEL_STYLE_CACHE[cache_key] = cached
+    return cached
+
 
 class SpinModeToggle(QtWidgets.QFrame):
     valueChanged = QtCore.Signal(int)
@@ -14,6 +68,7 @@ class SpinModeToggle(QtWidgets.QFrame):
         self._left_text = ""
         self._right_text = ""
         self._theme = theme_util.get_theme("light")
+        self._applied_theme_key: str | None = None
         self._thumb_anim: QtCore.QPropertyAnimation | None = None
 
         self.setCursor(QtCore.Qt.PointingHandCursor)
@@ -57,20 +112,13 @@ class SpinModeToggle(QtWidgets.QFrame):
         self._update_label_styles()
 
     def apply_theme(self, theme: theme_util.Theme) -> None:
+        if self._applied_theme_key == theme.key:
+            return
         self._theme = theme
-        self.setStyleSheet(
-            "#spinModeToggle { "
-            f"background-color: {theme.frame_bg}; "
-            f"border: 1px solid {theme.border}; "
-            "border-radius: 12px; "
-            "}"
-            "#spinModeToggle:disabled { "
-            f"background-color: {theme.disabled_bg}; "
-            f"border: 1px solid {theme.border}; "
-            "}"
-        )
+        self.setStyleSheet(_frame_style(theme))
         self._update_thumb_style()
         self._update_label_styles()
+        self._applied_theme_key = theme.key
 
     def mousePressEvent(self, ev: QtGui.QMouseEvent) -> None:
         if ev.button() == QtCore.Qt.LeftButton:
@@ -121,32 +169,21 @@ class SpinModeToggle(QtWidgets.QFrame):
         if not self._theme:
             return
         if not self.isEnabled():
-            disabled = self._theme.disabled_text
-            style = f"color:{disabled}; font-weight:600;"
+            style = _label_style(self._theme, "disabled")
             self._left_label.setStyleSheet(style)
             self._right_label.setStyleSheet(style)
             return
-        active = self._theme.button_text
-        inactive = self._theme.muted_text
         if self._value == 0:
-            self._left_label.setStyleSheet(f"color:{active}; font-weight:600;")
-            self._right_label.setStyleSheet(f"color:{inactive}; font-weight:600;")
+            self._left_label.setStyleSheet(_label_style(self._theme, "active"))
+            self._right_label.setStyleSheet(_label_style(self._theme, "inactive"))
         else:
-            self._left_label.setStyleSheet(f"color:{inactive}; font-weight:600;")
-            self._right_label.setStyleSheet(f"color:{active}; font-weight:600;")
+            self._left_label.setStyleSheet(_label_style(self._theme, "inactive"))
+            self._right_label.setStyleSheet(_label_style(self._theme, "active"))
 
     def _update_thumb_style(self) -> None:
         if not self._theme:
             return
-        if not self.isEnabled():
-            bg = self._theme.disabled_bg
-            border = self._theme.border
-        else:
-            bg = self._theme.primary
-            border = self._theme.primary_hover
-        self._thumb.setStyleSheet(
-            f"background-color: {bg}; border: 1px solid {border}; border-radius: 10px;"
-        )
+        self._thumb.setStyleSheet(_thumb_style(self._theme, self.isEnabled()))
 
     def _thumb_rect(self, value: int) -> QtCore.QRect:
         margin = 4

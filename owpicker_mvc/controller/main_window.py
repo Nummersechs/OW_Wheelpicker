@@ -11,7 +11,6 @@ import i18n
 from . import (
     hover_tooltip_ops,
     mode_manager,
-    ocr_capture_ops,
     result_state_ops,
     runtime_tracing,
     shutdown_manager,
@@ -29,7 +28,6 @@ from view.overlay import ResultOverlay
 from view.wheel_view import WheelView
 from view.spin_mode_toggle import SpinModeToggle
 from view.profile_dropdown import PlayerProfileDropdown
-from controller.map_ui import MapUI
 from controller.map_mode import MapModeController
 from controller.open_queue import OpenQueueController
 from controller.player_list_panel import PlayerListPanelController
@@ -143,6 +141,11 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._hover_pump_until: float | None = None
         self._hover_pump_timer: QtCore.QTimer | None = None
         self._hover_watchdog_timer: QtCore.QTimer | None = None
+        self._deferred_hover_rearm_reason: str | None = None
+        self._deferred_hover_rearm_force = False
+        self._deferred_hover_rearm_timer: QtCore.QTimer | None = None
+        self._deferred_tooltip_refresh_reason: str | None = None
+        self._deferred_tooltip_refresh_timer: QtCore.QTimer | None = None
         self._startup_block_input = False
         self._startup_warmup_running = False
         self._startup_warmup_done = False
@@ -561,6 +564,8 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._trace_event("ensure_map_ui:start", map_initialized=getattr(self, "_map_initialized", False))
         if getattr(self, "_map_initialized", False):
             return
+        from controller.map_ui import MapUI
+
         self._map_init_in_progress = True
         try:
             self._map_lists_ready = False
@@ -746,6 +751,63 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         if getattr(self, "_startup_finalize_done", False):
             return
         self._finalize_startup()
+
+    def _ensure_deferred_hover_rearm_timer(self) -> QtCore.QTimer:
+        timer = getattr(self, "_deferred_hover_rearm_timer", None)
+        if timer is not None:
+            return timer
+        timer = QtCore.QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(self._run_deferred_hover_rearm)
+        if hasattr(self, "_timers"):
+            self._timers.register(timer)
+        self._deferred_hover_rearm_timer = timer
+        return timer
+
+    def _run_deferred_hover_rearm(self) -> None:
+        reason = self._deferred_hover_rearm_reason or "deferred_hover_rearm"
+        force = bool(self._deferred_hover_rearm_force)
+        self._deferred_hover_rearm_reason = None
+        self._deferred_hover_rearm_force = False
+        self._rearm_hover_tracking(reason=reason, force=force)
+
+    def _schedule_hover_rearm(self, reason: str, delay_ms: int = 0, *, force: bool = False) -> None:
+        if max(0, int(delay_ms)) <= 0:
+            self._rearm_hover_tracking(reason=reason, force=force)
+            return
+        timer = self._ensure_deferred_hover_rearm_timer()
+        self._deferred_hover_rearm_reason = str(reason or "deferred_hover_rearm")
+        self._deferred_hover_rearm_force = bool(force) or bool(self._deferred_hover_rearm_force)
+        timer.start(max(0, int(delay_ms)))
+
+    def _ensure_deferred_tooltip_refresh_timer(self) -> QtCore.QTimer:
+        timer = getattr(self, "_deferred_tooltip_refresh_timer", None)
+        if timer is not None:
+            return timer
+        timer = QtCore.QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(self._run_deferred_tooltip_refresh)
+        if hasattr(self, "_timers"):
+            self._timers.register(timer)
+        self._deferred_tooltip_refresh_timer = timer
+        return timer
+
+    def _run_deferred_tooltip_refresh(self) -> None:
+        reason = self._deferred_tooltip_refresh_reason or "deferred_refresh"
+        self._deferred_tooltip_refresh_reason = None
+        if self._cfg("DISABLE_TOOLTIPS", False):
+            return
+        self._refresh_tooltip_caches_async(reason=reason)
+
+    def _schedule_tooltip_refresh(self, reason: str, delay_ms: int = 0) -> None:
+        if self._cfg("DISABLE_TOOLTIPS", False):
+            return
+        if max(0, int(delay_ms)) <= 0:
+            self._refresh_tooltip_caches_async(reason=reason)
+            return
+        timer = self._ensure_deferred_tooltip_refresh_timer()
+        self._deferred_tooltip_refresh_reason = str(reason or "deferred_refresh")
+        timer.start(max(0, int(delay_ms)))
 
     def _install_window_handle_filter(self) -> None:
         if self._focus_trace_window_handle_installed:
@@ -1062,15 +1124,12 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             self._hero_ban_override_role = None
             self._update_hero_ban_wheel()
         # Ensure hover tracking re-arms after the choice overlay disappears.
-        self._rearm_hover_tracking(reason="overlay_closed", force=True)
-        QtCore.QTimer.singleShot(200, lambda: self._rearm_hover_tracking(reason="overlay_closed:late"))
+        self._schedule_hover_rearm("overlay_closed", force=True)
+        self._schedule_hover_rearm("overlay_closed:late", delay_ms=200)
         # Tooltip/Truncation nach finalem Layout aktualisieren
         if not self._cfg("DISABLE_TOOLTIPS", False):
             self._set_tooltips_ready(False)
-            QtCore.QTimer.singleShot(
-                120,
-                lambda: self._refresh_tooltip_caches_async(reason="overlay_closed"),
-            )
+            self._schedule_tooltip_refresh("overlay_closed", delay_ms=120)
 
     def _on_overlay_disable_results(self):
         last_view = getattr(self.overlay, "_last_view", {}) or {}
@@ -1147,30 +1206,47 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._apply_theme_heavy(theme, step_ms=15)
 
     def _apply_theme_heavy(self, theme: theme_util.Theme, step_ms: int = 15):
-        # Größere Widget-Mengen in kleinen Paketen aktualisieren
+        # Größere Widget-Mengen in einem Block aktualisieren, um Timer-Overhead zu sparen.
+        del step_ms  # kept in signature for compatibility with existing callers
+
         targets = []
-        for _role, w in self._role_wheels():
-            if w and hasattr(w, "apply_theme"):
-                targets.append(w)
-        if hasattr(self, "map_ui"):
-            self.map_ui.apply_theme(theme)
-        # Map-spezifische Widgets IMMER stylen, damit ein späterer Moduswechsel nicht den alten Theme-Stand zeigt
-        if hasattr(self, "map_main") and hasattr(self.map_main, "apply_theme"):
-            targets.append(self.map_main)
-        if hasattr(self, "map_lists"):
-            for wheel in self.map_lists.values():
-                if hasattr(wheel, "apply_theme"):
-                    targets.append(wheel)
+        for _role, wheel in self._role_wheels():
+            if wheel and hasattr(wheel, "apply_theme"):
+                targets.append(wheel)
 
-        step_ms = max(0, int(step_ms))
-        for idx, w in enumerate(targets):
-            QtCore.QTimer.singleShot(idx * step_ms, lambda _w=w: _w.apply_theme(theme))
+        freeze_targets: list[QtWidgets.QWidget] = []
+        for candidate in (
+            self.centralWidget(),
+            getattr(self, "role_container", None),
+            getattr(self, "map_container", None),
+        ):
+            if isinstance(candidate, QtWidgets.QWidget):
+                freeze_targets.append(candidate)
+        dedup: list[QtWidgets.QWidget] = []
+        seen_ids: set[int] = set()
+        for widget in freeze_targets:
+            wid = id(widget)
+            if wid in seen_ids:
+                continue
+            seen_ids.add(wid)
+            dedup.append(widget)
 
-        total_delay = len(targets) * step_ms
-        QtCore.QTimer.singleShot(total_delay, self._update_mode_button_styles)
-        # Theme-Button wieder freigeben, falls er kurz deaktiviert wurde
+        for widget in dedup:
+            widget.setUpdatesEnabled(False)
+        try:
+            for wheel in targets:
+                wheel.apply_theme(theme)
+            if hasattr(self, "map_ui"):
+                self.map_ui.apply_theme(theme)
+            self._update_mode_button_styles()
+        finally:
+            for widget in dedup:
+                widget.setUpdatesEnabled(True)
+                widget.update()
+
+        # Theme-Button wieder freigeben, falls er kurz deaktiviert wurde.
         if hasattr(self, "btn_theme"):
-            QtCore.QTimer.singleShot(total_delay + 40, lambda: self.btn_theme.setEnabled(True))
+            self.btn_theme.setEnabled(True)
 
     def _update_mode_button_styles(self, *_args):
         """
@@ -1330,6 +1406,8 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self.btn_cancel_spin.setEnabled(self.pending > 0)
 
     def _on_role_ocr_import_clicked(self, role_key: str) -> None:
+        from . import ocr_capture_ops
+
         ocr_capture_ops.on_role_ocr_import_clicked(self, role_key)
 
     def _on_open_q_ocr_clicked(self) -> None:
@@ -1767,8 +1845,8 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
                 )
             self._schedule_post_choice_init(delay_ms)
         # Ensure hover tracking is active right after mode choice (no focus changes).
-        QtCore.QTimer.singleShot(0, lambda: self._rearm_hover_tracking(reason="mode_choice"))
-        QtCore.QTimer.singleShot(250, lambda: self._rearm_hover_tracking(reason="mode_choice:late"))
+        self._schedule_hover_rearm("mode_choice")
+        self._schedule_hover_rearm("mode_choice:late", delay_ms=250)
         self._hover_seen = False
         # Force a short hover pump so hover becomes responsive even if the cursor didn't move.
         self._start_hover_pump(reason="mode_choice", duration_ms=2000, force=True)
@@ -1912,7 +1990,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._hover_seen = False
         self._hover_forward_last = None
         self._rearm_hover_tracking(reason="stack_switching:done")
-        QtCore.QTimer.singleShot(250, lambda: self._rearm_hover_tracking(reason="stack_switching:late"))
+        self._schedule_hover_rearm("stack_switching:late", delay_ms=250)
 
     def _sync_mode_stack(self) -> None:
         if not hasattr(self, "mode_stack"):

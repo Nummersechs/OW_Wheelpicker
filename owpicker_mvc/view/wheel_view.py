@@ -9,6 +9,103 @@ from model.wheel_state import WheelState
 import i18n
 from utils import qt_runtime, theme as theme_util, ui_helpers
 
+_WHEEL_INDICATOR_STYLE_CACHE: dict[str, str] = {}
+_WHEEL_RESULT_STYLE_CACHE: dict[str, str] = {}
+_RESET_TOOL_STYLE_CACHE: dict[str, str] = {}
+
+
+def _wheel_indicator_style(theme: theme_util.Theme) -> str:
+    cached = _WHEEL_INDICATOR_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    cached = f"""
+            QCheckBox::indicator,
+            QListView::indicator {{
+                width: 6px;
+                height: 6px;
+                border: 2px solid {theme.text};
+                border-radius: 3px;
+                background: {theme.base};
+            }}
+
+            QCheckBox::indicator:checked,
+            QListView::indicator:checked {{
+                background: {theme.primary};
+            }}
+
+            /* Scrollbar-Farben im aktiven Theme halten */
+            QScrollBar:vertical {{
+                background:{theme.frame_bg};
+                width:12px;
+                margin:2px;
+                border-radius:6px;
+            }}
+            QScrollBar::handle:vertical {{
+                background:{theme.slider_handle};
+                min-height:24px;
+                border-radius:6px;
+            }}
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {{
+                height:0px;
+                background:transparent;
+            }}
+            QScrollBar::sub-page:vertical,
+            QScrollBar::add-page:vertical {{
+                background:{theme.slider_groove};
+                border-radius:6px;
+            }}
+            QScrollBar:horizontal {{
+                background:{theme.frame_bg};
+                height:12px;
+                margin:2px;
+                border-radius:6px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background:{theme.slider_handle};
+                min-width:24px;
+                border-radius:6px;
+            }}
+            QScrollBar::add-line:horizontal,
+            QScrollBar::sub-line:horizontal {{
+                width:0px;
+                background:transparent;
+            }}
+            QScrollBar::sub-page:horizontal,
+            QScrollBar::add-page:horizontal {{
+                background:{theme.slider_groove};
+                border-radius:6px;
+            }}
+            """
+    _WHEEL_INDICATOR_STYLE_CACHE[theme.key] = cached
+    return cached
+
+
+def _wheel_result_style(theme: theme_util.Theme) -> str:
+    cached = _WHEEL_RESULT_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    cached = f"font-size:14px; color:{theme.muted_text}; margin-top:6px;"
+    _WHEEL_RESULT_STYLE_CACHE[theme.key] = cached
+    return cached
+
+
+def _reset_button_style(theme: theme_util.Theme) -> str:
+    cached = _RESET_TOOL_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    tool_style = theme_util.tool_button_stylesheet(theme)
+    cached = (
+        f"{tool_style} "
+        f"QToolButton {{ color:{theme.primary}; background:{theme.base}; "
+        f"border:1px solid {theme.primary}; border-radius:6px; }} "
+        f"QToolButton:disabled {{ color:{theme.disabled_text}; background:{theme.alt_base}; "
+        f"border:1px solid {theme.border}; border-radius:6px; }}"
+    )
+    _RESET_TOOL_STYLE_CACHE[theme.key] = cached
+    return cached
+
+
 class WheelView(WheelViewEntriesMixin, BasePanel):
     spun = QtCore.Signal(str)
     def __init__(self, title: str, defaults: List[str], pair_mode=False, allow_pair_toggle=False, subrole_labels: Optional[List[str]] = None, title_key: Optional[str] = None):
@@ -46,6 +143,7 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
         self._wheel_overlay_margin_top = 8
         self._wheel_overlay_margin_right = 8
         self._last_entries_signature: tuple | None = None
+        self._applied_theme_key_local: str | None = None
         self.view = WheelWidget(self._effective_names_from(defaults))
         self.view.viewport().installEventFilter(self)
         self.view.segmentToggled.connect(self._on_segment_toggled)
@@ -315,79 +413,15 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
 
     def apply_theme(self, theme: theme_util.Theme) -> None:
         """Apply color palette for the active theme to this wheel."""
+        if self._applied_theme_key_local == theme.key:
+            return
         super().apply_theme(theme)
-        self.result.setStyleSheet(f"font-size:14px; color:{theme.muted_text}; margin-top:6px;")
+        self.result.setStyleSheet(_wheel_result_style(theme))
         # Indicator styling stays aligned with the active theme colors.
-        self.setStyleSheet(
-            f"""
-            QCheckBox::indicator,
-            QListView::indicator {{
-                width: 6px;
-                height: 6px;
-                border: 2px solid {theme.text};
-                border-radius: 3px;
-                background: {theme.base};
-            }}
-
-            QCheckBox::indicator:checked,
-            QListView::indicator:checked {{
-                background: {theme.primary};
-            }}
-
-            /* Scrollbar-Farben im aktiven Theme halten */
-            QScrollBar:vertical {{
-                background:{theme.frame_bg};
-                width:12px;
-                margin:2px;
-                border-radius:6px;
-            }}
-            QScrollBar::handle:vertical {{
-                background:{theme.slider_handle};
-                min-height:24px;
-                border-radius:6px;
-            }}
-            QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical {{
-                height:0px;
-                background:transparent;
-            }}
-            QScrollBar::sub-page:vertical,
-            QScrollBar::add-page:vertical {{
-                background:{theme.slider_groove};
-                border-radius:6px;
-            }}
-            QScrollBar:horizontal {{
-                background:{theme.frame_bg};
-                height:12px;
-                margin:2px;
-                border-radius:6px;
-            }}
-            QScrollBar::handle:horizontal {{
-                background:{theme.slider_handle};
-                min-width:24px;
-                border-radius:6px;
-            }}
-            QScrollBar::add-line:horizontal,
-            QScrollBar::sub-line:horizontal {{
-                width:0px;
-                background:transparent;
-            }}
-            QScrollBar::sub-page:horizontal,
-            QScrollBar::add-page:horizontal {{
-                background:{theme.slider_groove};
-                border-radius:6px;
-            }}
-            """
-        )
+        self.setStyleSheet(_wheel_indicator_style(theme))
         if hasattr(self, "btn_reset_segments"):
-            tool_style = theme_util.tool_button_stylesheet(theme)
-            self.btn_reset_segments.setStyleSheet(
-                f"{tool_style} "
-                f"QToolButton {{ color:{theme.primary}; background:{theme.base}; "
-                f"border:1px solid {theme.primary}; border-radius:6px; }} "
-                f"QToolButton:disabled {{ color:{theme.disabled_text}; background:{theme.alt_base}; "
-                f"border:1px solid {theme.border}; border-radius:6px; }}"
-            )
+            self.btn_reset_segments.setStyleSheet(_reset_button_style(theme))
+        self._applied_theme_key_local = theme.key
 
     def set_result_value(self, value: str):
         self._result_state = "value"
