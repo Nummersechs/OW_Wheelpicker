@@ -82,6 +82,8 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self.state_sync = StateSyncController(self, self._state_file)
         self._mode_choice_locked = False
         self._closing = False
+        self._startup_finalize_done = False
+        self._startup_finalize_scheduled = False
         self._choice_shown_at: float | None = None
         self._post_choice_delay_ms = 350
         self._post_choice_step_ms = 90
@@ -214,7 +216,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._install_event_filters()
         self._show_mode_choice()
         self._connect_state_signals()
-        self._finalize_startup()
+        self._schedule_finalize_startup()
         self._apply_focus_policy_defaults()
         self._schedule_clear_focus()
         try:
@@ -724,9 +726,26 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:
         super().showEvent(event)
+        # Ensure heavy startup finalize runs only after the first paint request.
+        self._schedule_finalize_startup()
         if not getattr(self, "_focus_trace_enabled", False):
             return
         self._install_window_handle_filter()
+
+    def _schedule_finalize_startup(self) -> None:
+        if getattr(self, "_startup_finalize_done", False):
+            return
+        if getattr(self, "_startup_finalize_scheduled", False):
+            return
+        self._startup_finalize_scheduled = True
+        delay_ms = max(0, int(self._cfg("STARTUP_FINALIZE_DELAY_MS", 60)))
+        QtCore.QTimer.singleShot(delay_ms, self._run_finalize_startup)
+
+    def _run_finalize_startup(self) -> None:
+        self._startup_finalize_scheduled = False
+        if getattr(self, "_startup_finalize_done", False):
+            return
+        self._finalize_startup()
 
     def _install_window_handle_filter(self) -> None:
         if self._focus_trace_window_handle_installed:
@@ -811,7 +830,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         if getattr(self, "_startup_warmup_finalize_scheduled", False):
             return
         self._startup_warmup_finalize_scheduled = True
-        extra_ms = 2000
+        extra_ms = max(0, int(self._cfg("STARTUP_WARMUP_COOLDOWN_MS", 500)))
         self._trace_event("startup_warmup:cooldown", delay_ms=extra_ms)
         QtCore.QTimer.singleShot(extra_ms, self._finalize_startup_warmup)
 
@@ -931,7 +950,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             self._start_hover_pump(reason=reason, duration_ms=1200, force=True)
 
     def _restart_startup_drain_timer(self) -> None:
-        drain_ms = 350
+        drain_ms = max(0, int(self._cfg("STARTUP_INPUT_DRAIN_MS", 180)))
         if self._startup_drain_timer is None:
             self._startup_drain_timer = QtCore.QTimer(self)
             self._startup_drain_timer.setSingleShot(True)
@@ -1020,6 +1039,8 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
                 w.btn_include_in_all.setEnabled(True)
 
     def _finalize_startup(self) -> None:
+        if getattr(self, "_startup_finalize_done", False):
+            return
         # jetzt darf gespeichert werden
         self._restoring_state = False
 
@@ -1032,6 +1053,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._apply_language(defer_heavy=True)
         # Tooltips sofort erlauben (werden später noch einmal frisch berechnet)
         self._set_tooltips_ready(True)
+        self._startup_finalize_done = True
 
     def _on_overlay_closed(self):
         self._set_controls_enabled(True)

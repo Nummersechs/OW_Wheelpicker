@@ -34,12 +34,32 @@ _FOCUS_ACTIVATION_EVENT_TYPES = (
     int(QtCore.QEvent.ApplicationActivate),
     int(QtCore.QEvent.ActivationChange),
 )
+_MOUSE_MOVE_EVENT_TYPE = int(QtCore.QEvent.MouseMove)
+_MOUSE_BUTTON_PRESS_EVENT_TYPE = int(QtCore.QEvent.MouseButtonPress)
+_FAST_FILTER_EVENT_TYPES = (
+    set(_STARTUP_BLOCKED_INPUT_EVENT_TYPES)
+    | set(_CHOICE_POINTER_DROP_EVENT_TYPES)
+    | set(_FOCUS_ACTIVATION_EVENT_TYPES)
+    | {_MOUSE_BUTTON_PRESS_EVENT_TYPE}
+)
 
 
 class MainWindowInputMixin:
     def eventFilter(self, obj, event):
-        etype = event.type()
-        etype_int = int(etype)
+        etype_int = int(event.type())
+        hover_forward_enabled = getattr(self, "_hover_forward_mousemove_enabled", None)
+        if hover_forward_enabled is None:
+            hover_forward_enabled = bool(self._cfg("HOVER_FORWARD_MOUSEMOVE", False))
+            self._hover_forward_mousemove_enabled = hover_forward_enabled
+        # Fast-path: ignore the vast majority of unrelated app-level events.
+        if (
+            not getattr(self, "_focus_trace_enabled", False)
+            and etype_int not in _FAST_FILTER_EVENT_TYPES
+            and not (hover_forward_enabled and etype_int == _MOUSE_MOVE_EVENT_TYPE)
+            and etype_int not in _MOUSE_CLICK_EVENT_TYPES
+        ):
+            return super().eventFilter(obj, event)
+
         if self._should_drop_post_choice_clickthrough_event(etype_int, obj):
             return True
         if self._should_drop_disabled_choice_pointer_event(etype_int):
@@ -48,18 +68,18 @@ class MainWindowInputMixin:
             return True
         if getattr(self, "_startup_block_input", False):
             if etype_int in _STARTUP_BLOCKED_INPUT_EVENT_TYPES:
-                self._record_blocked_input_event(int(etype))
+                self._record_blocked_input_event(etype_int)
                 return True
         if getattr(self, "_startup_drain_active", False):
             if etype_int in _STARTUP_BLOCKED_INPUT_EVENT_TYPES:
-                self._record_drained_input_event(int(etype))
+                self._record_drained_input_event(etype_int)
                 self._restart_startup_drain_timer()
                 return True
         if getattr(self, "_focus_trace_enabled", False):
             self._trace_focus_event(obj, event)
         if etype_int in _FOCUS_ACTIVATION_EVENT_TYPES:
             if self.isActiveWindow():
-                reason = self._event_type_name(int(etype))
+                reason = self._event_type_name(etype_int)
                 if getattr(self, "_startup_block_input", False) or getattr(self, "_startup_drain_active", False):
                     self._record_hover_prime_deferred(reason=reason)
                 else:
@@ -68,7 +88,7 @@ class MainWindowInputMixin:
                     self._hover_seen = False
                     self._hover_forward_last = None
                     self._start_hover_pump(reason=reason, duration_ms=900, force=True)
-        if etype == QtCore.QEvent.MouseMove and self._cfg("HOVER_FORWARD_MOUSEMOVE", False):
+        if hover_forward_enabled and etype_int == _MOUSE_MOVE_EVENT_TYPE:
             try:
                 if isinstance(event, QtGui.QMouseEvent):
                     self._forward_hover_from_app_mousemove(event)
@@ -88,7 +108,7 @@ class MainWindowInputMixin:
             return super().eventFilter(obj, event)
         if self._overlay_choice_active():
             return super().eventFilter(obj, event)
-        if etype_int == int(QtCore.QEvent.MouseButtonPress):
+        if etype_int == _MOUSE_BUTTON_PRESS_EVENT_TYPE:
             if hasattr(self, "player_list_panel"):
                 self.player_list_panel.maybe_close_on_click(obj, event)
         return super().eventFilter(obj, event)
@@ -157,7 +177,11 @@ class MainWindowInputMixin:
         return self._post_choice_input_guard_active()
 
     def _should_drop_disabled_choice_pointer_event(self, etype: int) -> bool:
-        if not bool(self._cfg("STARTUP_DROP_CHOICE_POINTER_EVENTS", True)):
+        drop_pointer_events = getattr(self, "_startup_drop_choice_pointer_events", None)
+        if drop_pointer_events is None:
+            drop_pointer_events = bool(self._cfg("STARTUP_DROP_CHOICE_POINTER_EVENTS", True))
+            self._startup_drop_choice_pointer_events = drop_pointer_events
+        if not drop_pointer_events:
             return False
         if etype not in _CHOICE_POINTER_DROP_EVENT_TYPES:
             return False

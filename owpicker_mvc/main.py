@@ -24,14 +24,37 @@ def main():
     # Quiet-Modus so früh wie möglich aktivieren (vor Qt-Imports)
     _apply_quiet_mode()
 
-    from PySide6 import QtWidgets  # nach Quiet-Setup laden
+    from PySide6 import QtCore, QtGui, QtWidgets  # nach Quiet-Setup laden
     from controller.main_window import MainWindow
     from utils.qt_runtime import apply_preferred_app_font
 
     app = QtWidgets.QApplication([])
     apply_preferred_app_font(app)
+
+    splash = None
+    try:
+        pixmap = QtGui.QPixmap(520, 180)
+        pixmap.fill(QtGui.QColor("#1f232a"))
+        painter = QtGui.QPainter(pixmap)
+        painter.setPen(QtGui.QColor("#ffffff"))
+        font = QtGui.QFont(app.font())
+        font.setPointSize(max(10, int(font.pointSize()) + 2))
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(pixmap.rect(), QtCore.Qt.AlignCenter, "Overwatch Wheel Picker\nStarting...")
+        painter.end()
+        splash = QtWidgets.QSplashScreen(pixmap)
+        splash.setWindowFlag(QtCore.Qt.WindowStaysOnTopHint, True)
+        splash.show()
+        app.processEvents()
+    except Exception:
+        splash = None
+
     win = MainWindow()
     win.show()
+    if splash is not None:
+        splash.finish(win)
+        splash.deleteLater()
     app.exec()
 
 if __name__ == "__main__":

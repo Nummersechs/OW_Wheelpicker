@@ -144,6 +144,7 @@ class PlayerProfileDropdown(QtWidgets.QWidget):
         self._current_profile_index = -1
         self._expanded = False
         self._app = QtWidgets.QApplication.instance()
+        self._app_filter_installed = False
         self._embedded_popup = qt_runtime.is_headless_qpa()
 
         root = QtWidgets.QVBoxLayout(self)
@@ -188,8 +189,24 @@ class PlayerProfileDropdown(QtWidgets.QWidget):
         self.list_widget.reorderFinished.connect(self._emit_order_changed)
         self.popup.hidden.connect(lambda: self._set_expanded(False, update_popup=False))
         self.name_edit.returnPressed.connect(lambda: self._set_expanded(False))
-        if self._app is not None:
-            self._app.installEventFilter(self)
+
+    def _set_app_filter_enabled(self, enabled: bool) -> None:
+        app = self._app
+        if app is None:
+            return
+        if enabled:
+            if self._app_filter_installed:
+                return
+            app.installEventFilter(self)
+            self._app_filter_installed = True
+            return
+        if not self._app_filter_installed:
+            return
+        try:
+            app.removeEventFilter(self)
+        except Exception:
+            pass
+        self._app_filter_installed = False
 
     def _clear_name_edit_focus(self) -> None:
         if self.name_edit.hasFocus():
@@ -252,6 +269,7 @@ class PlayerProfileDropdown(QtWidgets.QWidget):
     def _set_expanded(self, expanded: bool, *, update_popup: bool = True) -> None:
         self._expanded = bool(expanded)
         self.btn_toggle.setText("▴" if self._expanded else "▾")
+        self._set_app_filter_enabled(self._expanded)
         if not update_popup:
             return
         if self._expanded:
@@ -289,11 +307,7 @@ class PlayerProfileDropdown(QtWidgets.QWidget):
         self._clear_name_edit_focus()
 
     def closeEvent(self, event):
-        if self._app is not None:
-            try:
-                self._app.removeEventFilter(self)
-            except Exception:
-                pass
+        self._set_app_filter_enabled(False)
         super().closeEvent(event)
 
     def eventFilter(self, obj, event):
