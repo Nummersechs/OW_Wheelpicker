@@ -14,11 +14,13 @@ class ScreenRegionSelectorDialog(QtWidgets.QDialog):
         screenshot: QtGui.QPixmap,
         *,
         hint_text: str = "",
+        auto_accept_on_release: bool = False,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._screenshot = screenshot
         self._hint_text = hint_text
+        self._auto_accept_on_release = bool(auto_accept_on_release)
         self._drag_origin: QtCore.QPoint | None = None
         self._selection = QtCore.QRect()
 
@@ -76,6 +78,11 @@ class ScreenRegionSelectorDialog(QtWidgets.QDialog):
         self._selection = QtCore.QRect(self._drag_origin, event.position().toPoint())
         self._drag_origin = None
         self.update()
+        if self._auto_accept_on_release:
+            sel = self.selection_rect()
+            if sel.width() > 5 and sel.height() > 5:
+                # Defer accept to avoid re-entrancy while release event is processing.
+                QtCore.QTimer.singleShot(0, self.accept)
 
     def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:
         if event.button() != QtCore.Qt.LeftButton:
@@ -99,6 +106,7 @@ class ScreenRegionSelectorDialog(QtWidgets.QDialog):
 def select_region_from_primary_screen(
     *,
     hint_text: str = "",
+    auto_accept_on_release: bool = False,
     parent: QtWidgets.QWidget | None = None,
 ) -> tuple[QtGui.QPixmap | None, str | None]:
     screen = QtGui.QGuiApplication.primaryScreen()
@@ -109,7 +117,12 @@ def select_region_from_primary_screen(
     if screenshot.isNull():
         return None, "screenshot-failed"
 
-    dialog = ScreenRegionSelectorDialog(screenshot, hint_text=hint_text, parent=parent)
+    dialog = ScreenRegionSelectorDialog(
+        screenshot,
+        hint_text=hint_text,
+        auto_accept_on_release=auto_accept_on_release,
+        parent=parent,
+    )
     dialog.setGeometry(screen.geometry())
     result = dialog.exec()
     if result != QtWidgets.QDialog.Accepted:

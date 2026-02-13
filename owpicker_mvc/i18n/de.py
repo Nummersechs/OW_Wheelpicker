@@ -37,7 +37,7 @@ TRANSLATIONS_DE = {
     "ocr.capture_prepare_hint": "Nach OK wird die App ausgeblendet und der macOS-Aufnahmemodus startet. Bereich in Discord auswählen und bestätigen.",
     "ocr.capture_cancelled": "Aufnahme wurde abgebrochen.",
     "ocr.capture_selection_too_small": "Der gewählte Bereich ist zu klein. Bitte einen größeren Bereich ziehen.",
-    "ocr.select_hint": "Mit der Maus einen Bereich ziehen, dann Enter drücken (Esc zum Abbrechen).",
+    "ocr.select_hint": "Mit der Maus einen Bereich ziehen und loslassen (Enter optional, Esc zum Abbrechen).",
     "ocr.error_title": "OCR-Import fehlgeschlagen",
     "ocr.error_no_screen": "Kein Bildschirm für die Aufnahme gefunden.",
     "ocr.error_selection_failed": "Der ausgewählte Bildschirmbereich konnte nicht erfasst werden.",

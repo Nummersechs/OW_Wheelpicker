@@ -72,6 +72,7 @@ pyinstaller --noconfirm --clean owpicker_mvc/OverwatchWheels.spec
 
 At runtime `OCR_TESSERACT_CMD = "auto"` prefers bundled Tesseract in the EXE unpack directory and only falls back to PATH.
 During OCR region selection, the main window is hidden by default (`OCR_HIDE_MAIN_WINDOW_FOR_CAPTURE = True`).
+In the Qt capture selector (used on Windows), region selection now confirms on mouse release by default (`OCR_QT_SELECTOR_AUTO_ACCEPT_ON_RELEASE = True`), so pressing Enter is optional.
 
 ## Structure (short)
 

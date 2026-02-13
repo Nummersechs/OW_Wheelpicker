@@ -112,6 +112,45 @@ class TestOCRCaptureOps(unittest.TestCase):
         raise_mock.assert_not_called()
         activate_mock.assert_not_called()
 
+    def test_qt_selector_auto_accept_enabled_by_default_on_windows(self):
+        mw = _DummyMainWindow(
+            {
+                "OCR_USE_NATIVE_MAC_CAPTURE": False,
+                "OCR_HIDE_MAIN_WINDOW_FOR_CAPTURE": False,
+                "OCR_CAPTURE_PREPARE_DELAY_MS": 0,
+                "OCR_CAPTURE_PREPARE_DELAY_MS_WINDOWS": 0,
+            }
+        )
+        with (
+            patch("controller.ocr_capture_ops.sys.platform", "win32"),
+            patch("controller.ocr_capture_ops.select_region_from_primary_screen", return_value=("pix", None)) as select_mock,
+            patch("controller.ocr_capture_ops.QtWidgets.QApplication.processEvents"),
+        ):
+            result = capture_region_for_ocr(mw)
+
+        self.assertEqual(result, ("pix", None))
+        self.assertTrue(select_mock.call_args.kwargs.get("auto_accept_on_release"))
+
+    def test_qt_selector_auto_accept_can_be_disabled(self):
+        mw = _DummyMainWindow(
+            {
+                "OCR_USE_NATIVE_MAC_CAPTURE": False,
+                "OCR_HIDE_MAIN_WINDOW_FOR_CAPTURE": False,
+                "OCR_QT_SELECTOR_AUTO_ACCEPT_ON_RELEASE": False,
+                "OCR_CAPTURE_PREPARE_DELAY_MS": 0,
+                "OCR_CAPTURE_PREPARE_DELAY_MS_WINDOWS": 0,
+            }
+        )
+        with (
+            patch("controller.ocr_capture_ops.sys.platform", "win32"),
+            patch("controller.ocr_capture_ops.select_region_from_primary_screen", return_value=("pix", None)) as select_mock,
+            patch("controller.ocr_capture_ops.QtWidgets.QApplication.processEvents"),
+        ):
+            result = capture_region_for_ocr(mw)
+
+        self.assertEqual(result, ("pix", None))
+        self.assertFalse(select_mock.call_args.kwargs.get("auto_accept_on_release"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -76,9 +76,13 @@ OCR_TESSERACT_LANG = "deu+eng"
 OCR_TESSERACT_PSM = 6
 OCR_TESSERACT_FALLBACK_PSM = 11
 OCR_TESSERACT_TIMEOUT_S = 8.0
+# Windows override for OCR timeout (seconds). Lower = more responsive.
+OCR_TESSERACT_TIMEOUT_S_WINDOWS = 6.0
 OCR_FAST_MODE = True
 # 0 = all generated variants, >0 = cap variant count per OCR run
 OCR_MAX_VARIANTS = 2
+# Windows override: prefer one quick variant first for faster OCR response.
+OCR_MAX_VARIANTS_WINDOWS = 1
 # In fast mode, stop after the first variant that yields text
 OCR_STOP_AFTER_FIRST_VARIANT_SUCCESS = True
 OCR_NAME_MIN_CHARS = 2
@@ -99,6 +103,10 @@ OCR_USE_NATIVE_MAC_CAPTURE = True
 # Hide the main window during region selection (recommended on Windows).
 OCR_HIDE_MAIN_WINDOW_FOR_CAPTURE = True
 OCR_CAPTURE_PREPARE_DELAY_MS = 120
+# Optional Windows-specific delay before capture selector opens.
+OCR_CAPTURE_PREPARE_DELAY_MS_WINDOWS = 70
+# UX: in Qt selector, confirm on mouse release instead of requiring Enter.
+OCR_QT_SELECTOR_AUTO_ACCEPT_ON_RELEASE = True
 OCR_CAPTURE_TIMEOUT_S = 45.0
 
 # ---------- Sprache ----------

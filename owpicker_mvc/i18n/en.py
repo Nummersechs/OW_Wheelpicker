@@ -37,7 +37,7 @@ TRANSLATIONS_EN = {
     "ocr.capture_prepare_hint": "After clicking OK, your app will hide and macOS capture mode starts. Select the Discord area and confirm.",
     "ocr.capture_cancelled": "Capture was cancelled.",
     "ocr.capture_selection_too_small": "The selected area is too small. Please drag a larger region.",
-    "ocr.select_hint": "Drag to select a screen region, then press Enter (Esc to cancel).",
+    "ocr.select_hint": "Drag to select a screen region and release the mouse (Enter optional, Esc to cancel).",
     "ocr.error_title": "OCR import failed",
     "ocr.error_no_screen": "No screen was found for capturing.",
     "ocr.error_selection_failed": "Failed to capture the selected screen region.",

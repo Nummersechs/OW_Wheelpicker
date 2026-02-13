@@ -38,19 +38,32 @@ def _restore_override_cursor() -> None:
 
 def _capture_region_with_qt_selector(mw) -> tuple[QtGui.QPixmap | None, str | None]:
     hide_for_capture = bool(mw._cfg("OCR_HIDE_MAIN_WINDOW_FOR_CAPTURE", True))
+    if sys.platform == "win32":
+        default_prepare_delay_ms = 70
+    else:
+        default_prepare_delay_ms = 120
+    prepare_delay_ms = int(
+        mw._cfg(
+            "OCR_CAPTURE_PREPARE_DELAY_MS",
+            mw._cfg("OCR_CAPTURE_PREPARE_DELAY_MS_WINDOWS", default_prepare_delay_ms),
+        )
+    )
+    auto_accept_on_release = bool(
+        mw._cfg("OCR_QT_SELECTOR_AUTO_ACCEPT_ON_RELEASE", sys.platform == "win32")
+    )
     was_visible = mw.isVisible()
     was_minimized = mw.isMinimized()
 
     if hide_for_capture and was_visible:
         mw.hide()
         QtWidgets.QApplication.processEvents()
-        delay_ms = max(0, int(mw._cfg("OCR_CAPTURE_PREPARE_DELAY_MS", 120)))
-        if delay_ms > 0:
-            time.sleep(delay_ms / 1000.0)
+        if prepare_delay_ms > 0:
+            time.sleep(max(0, prepare_delay_ms) / 1000.0)
 
     try:
         return select_region_from_primary_screen(
             hint_text=i18n.t("ocr.select_hint"),
+            auto_accept_on_release=auto_accept_on_release,
             parent=None if (hide_for_capture and was_visible) else mw,
         )
     finally:
@@ -240,19 +253,27 @@ def extract_names_from_ocr_pixmap(
 
 def _ocr_runtime_cfg_snapshot(mw) -> dict:
     fast_mode = bool(mw._cfg("OCR_FAST_MODE", True))
-    max_variants = int(mw._cfg("OCR_MAX_VARIANTS", 2 if fast_mode else 0))
+    default_max_variants = 2 if fast_mode else 0
+    if sys.platform == "win32" and fast_mode:
+        default_max_variants = 1
+    max_variants = int(mw._cfg("OCR_MAX_VARIANTS", default_max_variants))
+    if sys.platform == "win32":
+        max_variants = int(mw._cfg("OCR_MAX_VARIANTS_WINDOWS", max_variants))
     psm_primary = int(mw._cfg("OCR_TESSERACT_PSM", 6))
     psm_fallback = int(mw._cfg("OCR_TESSERACT_FALLBACK_PSM", 11))
     psm_values = [psm_primary]
     if (not fast_mode) and psm_fallback not in psm_values:
         psm_values.append(psm_fallback)
+    timeout_s = float(mw._cfg("OCR_TESSERACT_TIMEOUT_S", 8.0))
+    if sys.platform == "win32":
+        timeout_s = float(mw._cfg("OCR_TESSERACT_TIMEOUT_S_WINDOWS", timeout_s))
     return {
         "fast_mode": fast_mode,
         "max_variants": max_variants,
         "stop_after_variant_success": bool(mw._cfg("OCR_STOP_AFTER_FIRST_VARIANT_SUCCESS", True)),
         "psm_values": tuple(psm_values),
         "lang": str(mw._cfg("OCR_TESSERACT_LANG", "deu+eng")).strip() or None,
-        "timeout_s": float(mw._cfg("OCR_TESSERACT_TIMEOUT_S", 8.0)),
+        "timeout_s": timeout_s,
         "name_min_chars": int(mw._cfg("OCR_NAME_MIN_CHARS", 2)),
         "name_max_chars": int(mw._cfg("OCR_NAME_MAX_CHARS", 24)),
         "name_max_words": int(mw._cfg("OCR_NAME_MAX_WORDS", 2)),
