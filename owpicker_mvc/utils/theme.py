@@ -96,6 +96,13 @@ THEMES: dict[str, Theme] = {
     ),
 }
 
+_FUSION_STYLE = "Fusion"
+_THEME_KEY_PROP = "_ow_theme_key"
+_FUSION_INIT_PROP = "_ow_fusion_initialized"
+_PALETTE_CACHE: dict[str, QtGui.QPalette] = {}
+_GLOBAL_STYLESHEET_CACHE: dict[str, str] = {}
+_TOOL_BUTTON_STYLESHEET_CACHE: dict[str, str] = {}
+
 
 def get_theme(key: str) -> Theme:
     """Return a valid theme (defaults to light if unknown)."""
@@ -258,11 +265,34 @@ def global_stylesheet(theme: Theme) -> str:
 
 def tool_button_stylesheet(theme: Theme) -> str:
     """Hover/press styling for tool buttons that keep a transparent base."""
-    return (
+    cached = _TOOL_BUTTON_STYLESHEET_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    style = (
         "QToolButton { font-size:18px; padding:2px; background:transparent; border:none; border-radius:6px; }"
         f"QToolButton:hover {{ background:{theme.tool_hover}; }}"
         f"QToolButton:pressed {{ background:{theme.tool_pressed}; }}"
     )
+    _TOOL_BUTTON_STYLESHEET_CACHE[theme.key] = style
+    return style
+
+
+def _cached_palette(theme: Theme) -> QtGui.QPalette:
+    cached = _PALETTE_CACHE.get(theme.key)
+    if cached is None:
+        cached = build_palette(theme)
+        _PALETTE_CACHE[theme.key] = cached
+    # Return a copy so callers never mutate cache contents.
+    return QtGui.QPalette(cached)
+
+
+def _cached_global_stylesheet(theme: Theme) -> str:
+    cached = _GLOBAL_STYLESHEET_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    cached = global_stylesheet(theme)
+    _GLOBAL_STYLESHEET_CACHE[theme.key] = cached
+    return cached
 
 
 def apply_app_theme(theme: Theme) -> None:
@@ -270,6 +300,27 @@ def apply_app_theme(theme: Theme) -> None:
     app = QtWidgets.QApplication.instance()
     if not app:
         return
-    app.setStyle("Fusion")
-    app.setPalette(build_palette(theme))
-    app.setStyleSheet(global_stylesheet(theme))
+    current_key = app.property(_THEME_KEY_PROP)
+    if isinstance(current_key, str) and current_key == theme.key:
+        return
+
+    if not bool(app.property(_FUSION_INIT_PROP)):
+        app.setStyle(_FUSION_STYLE)
+        app.setProperty(_FUSION_INIT_PROP, True)
+
+    palette = _cached_palette(theme)
+    stylesheet = _cached_global_stylesheet(theme)
+
+    # Freeze repaints while palette and stylesheet are swapped.
+    windows = [w for w in app.topLevelWidgets() if isinstance(w, QtWidgets.QWidget) and w.isVisible()]
+    for w in windows:
+        w.setUpdatesEnabled(False)
+    try:
+        app.setPalette(palette)
+        if app.styleSheet() != stylesheet:
+            app.setStyleSheet(stylesheet)
+        app.setProperty(_THEME_KEY_PROP, theme.key)
+    finally:
+        for w in windows:
+            w.setUpdatesEnabled(True)
+            w.update()
