@@ -49,8 +49,9 @@ If you want OCR to work in the Windows EXE without requiring users to install Te
 4. Choose distribution mode:
    - `OW_DIST_MODE=onedir` (default on Windows): faster app startup, folder output.
    - `OW_DIST_MODE=onefile`: single EXE, slower startup (self-extract at launch).
-5. For smaller release builds, use `OW_BUILD_PROFILE=release` (strip defaults to on) or explicitly set `OW_STRIP=1`.
-6. Verify build output contains lines like:
+5. `OW_INCLUDE_REQUESTS` is optional and defaults to `0` (smaller/faster build). Set it to `1` only if you need online sync.
+6. For smaller release builds, use `OW_BUILD_PROFILE=release` (strip defaults to on) or explicitly set `OW_STRIP=1`.
+7. Verify build output contains lines like:
    - `[spec] OCR bundle files: ...`
    - `[spec] OCR languages: deu.traineddata, eng.traineddata`
    - `[spec] Build profile=... | dist_mode=... | strip=...`
@@ -60,7 +61,7 @@ Example (Windows CMD):
 ```cmd
 set OW_BUILD_PROFILE=release
 set OW_PRUNE_QT=1
-set OW_INCLUDE_REQUESTS=1
+set OW_INCLUDE_REQUESTS=0
 set OW_INCLUDE_OCR_BUNDLE=1
 set OW_OCR_BUNDLE_MODE=minimal
 set OW_OCR_LANGS=deu+eng

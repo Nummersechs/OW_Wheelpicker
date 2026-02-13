@@ -148,6 +148,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._deferred_tooltip_refresh_timer: QtCore.QTimer | None = None
         self._app_event_filter_installed = False
         self._applied_theme_key: str | None = None
+        self._mode_button_checked_cache: dict[int, bool] = {}
         self._startup_block_input = False
         self._startup_warmup_running = False
         self._startup_warmup_done = False
@@ -205,6 +206,8 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._focus_policy = FocusPolicyManager(self)
         self._pending_delete_names_panel = None
         self._pending_ocr_import: PendingOCRImport | None = None
+        self._ocr_async_job = None
+        self._ocr_tesseract_cmd_cache: dict[str, str | None] = {}
         self._role_ocr_buttons: dict[str, QtWidgets.QPushButton] = {}
         central, root = self._build_root()
         self._build_header(root, saved)
@@ -902,11 +905,11 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
                 pass
             return
         tasks: list[tuple[str, callable]] = []
-        if self._cfg("SOUND_WARMUP_ON_START", True):
+        if self._cfg("SOUND_WARMUP_ON_START", False):
             tasks.append(("sound_warmup", self._startup_task_sound))
-        if self._cfg("TOOLTIP_CACHE_ON_START", True) and not self._cfg("DISABLE_TOOLTIPS", False):
+        if self._cfg("TOOLTIP_CACHE_ON_START", False) and not self._cfg("DISABLE_TOOLTIPS", False):
             tasks.append(("tooltip_cache", self._startup_task_tooltips))
-        if self._cfg("MAP_PREBUILD_ON_START", True):
+        if self._cfg("MAP_PREBUILD_ON_START", False):
             tasks.append(("map_prebuild", self._startup_task_map_prebuild))
         self._startup_task_queue = tasks
         self._startup_warmup_running = True
@@ -969,7 +972,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._sync_mode_stack()
         self._trace_event("startup_warmup:done")
         self._rearm_hover_tracking(reason="startup_warmup:done")
-        if not self._cfg("DISABLE_TOOLTIPS", False) and not self._cfg("TOOLTIP_CACHE_ON_START", True):
+        if not self._cfg("DISABLE_TOOLTIPS", False) and not self._cfg("TOOLTIP_CACHE_ON_START", False):
             self._refresh_tooltip_caches_async(reason="startup_warmup_done")
 
     def _record_blocked_input_event(self, etype: int) -> None:
@@ -1099,7 +1102,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._trace_event("posted_events_flushed", reason=reason, scope="targets", targets=count)
 
     def _startup_task_sound(self) -> None:
-        if not self._cfg("SOUND_WARMUP_ON_START", True):
+        if not self._cfg("SOUND_WARMUP_ON_START", False):
             self._startup_task_done("sound_warmup")
             return
         try:
@@ -1115,7 +1118,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         if self._cfg("DISABLE_TOOLTIPS", False):
             self._startup_task_done("tooltip_cache")
             return
-        if not self._cfg("TOOLTIP_CACHE_ON_START", True):
+        if not self._cfg("TOOLTIP_CACHE_ON_START", False):
             self._startup_task_done("tooltip_cache")
             return
         self._refresh_tooltip_caches_async(
@@ -1124,7 +1127,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         )
 
     def _startup_task_map_prebuild(self) -> None:
-        if not self._cfg("MAP_PREBUILD_ON_START", True):
+        if not self._cfg("MAP_PREBUILD_ON_START", False):
             self._startup_task_done("map_prebuild")
             return
         if getattr(self, "_map_initialized", False) and getattr(self, "_map_lists_ready", False):
@@ -1312,7 +1315,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
                 wheel.apply_theme(theme)
             if hasattr(self, "map_ui"):
                 self.map_ui.apply_theme(theme)
-            self._update_mode_button_styles()
+            self._update_mode_button_styles(force=True)
         finally:
             for widget in dedup:
                 widget.setUpdatesEnabled(True)
@@ -1322,17 +1325,26 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         if hasattr(self, "btn_theme"):
             self.btn_theme.setEnabled(True)
 
-    def _update_mode_button_styles(self, *_args):
+    def _update_mode_button_styles(self, *_args, force: bool = False):
         """
-        Erzwingt ein Neupolishen der Mode-Buttons, damit die padding-Änderung
-        bei checked/unchecked sofort gegriffen wird.
+        Polisht nur Buttons, deren checked-Zustand sich geändert hat, um
+        unnötige Reflows bei Theme-/UI-Updates zu vermeiden.
         """
         if not getattr(self, "_mode_buttons", None):
             return
+        checked_cache = getattr(self, "_mode_button_checked_cache", {})
         for btn in self._mode_buttons:
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
+            checked = bool(btn.isChecked())
+            cache_key = id(btn)
+            if not force and checked_cache.get(cache_key) == checked:
+                continue
+            style = btn.style()
+            if style is not None:
+                style.unpolish(btn)
+                style.polish(btn)
             btn.updateGeometry()
+            checked_cache[cache_key] = checked
+        self._mode_button_checked_cache = checked_cache
 
     def _capture_role_base_widths(self):
         """Merkt sich die aktuelle Breite jeder Rollen-Karte als Referenz."""
@@ -1743,7 +1755,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         mode_manager.on_mode_button_clicked(self, target)
         self._sync_mode_stack()
         self._trace_event("mode_switch:roles_done", target=target)
-        if not self._cfg("DISABLE_TOOLTIPS", False) and not self._cfg("TOOLTIP_CACHE_ON_START", True):
+        if not self._cfg("DISABLE_TOOLTIPS", False) and not self._cfg("TOOLTIP_CACHE_ON_START", False):
             self._refresh_tooltip_caches_async()
 
     def _update_title(self):
@@ -1995,9 +2007,9 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             theme = theme_util.get_theme(getattr(self, "theme", "light"))
             self._apply_theme_heavy(theme, step_ms=int(self._post_choice_step_ms))
             self._theme_heavy_pending = False
-        if self._cfg("SOUND_WARMUP_ON_START", True):
+        if self._cfg("SOUND_WARMUP_ON_START", False):
             self.sound.warmup_async(self, step_ms=int(self._post_choice_warmup_step_ms))
-        if self._cfg("TOOLTIP_CACHE_ON_START", True) and not self._cfg("DISABLE_TOOLTIPS", False):
+        if self._cfg("TOOLTIP_CACHE_ON_START", False) and not self._cfg("DISABLE_TOOLTIPS", False):
             self._refresh_tooltip_caches_async(delay_step_ms=int(self._post_choice_step_ms))
         self._schedule_map_prebuild()
         self._post_choice_init_done = True
@@ -2008,7 +2020,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
     def _schedule_map_prebuild(self, force: bool = False) -> None:
         if getattr(self, "_closing", False):
             return
-        if not self._cfg("MAP_PREBUILD_ON_START", True) and not force:
+        if not self._cfg("MAP_PREBUILD_ON_START", False) and not force:
             return
         if getattr(self, "_map_initialized", False) or getattr(self, "_map_prebuild_in_progress", False):
             return
@@ -2102,6 +2114,21 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         shutdown_manager.run_shutdown_step(self, step, callback)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        job = getattr(self, "_ocr_async_job", None)
+        if isinstance(job, dict):
+            for path in list(job.get("paths") or []):
+                try:
+                    Path(path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+            thread = job.get("thread")
+            try:
+                if thread is not None and thread.isRunning():
+                    thread.quit()
+                    thread.wait(300)
+            except Exception:
+                pass
+            self._ocr_async_job = None
         self._set_app_event_filter_enabled(False)
         shutdown_manager.handle_close_event(self, event)
 

@@ -50,10 +50,16 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         self.setAcceptHoverEvents(True)
         self._last_hover_idx: int | None = None
         self._label_truncated: list[bool] = []
+        self._names_revision = 1
+        self._tooltip_runtime_cache: dict[tuple[int, int, int, int, bool], bool] = {}
         self._hover_trace_budget = int(getattr(config, "HOVER_TRACE_BUDGET_PER_VIEW", 0))
         # Own hover overlay inside the scene (more reliable than native tooltips)
         self._hover_item: QtWidgets.QGraphicsTextItem | None = None
         self._hover_bg: QtWidgets.QGraphicsRectItem | None = None
+
+    def _invalidate_runtime_caches(self) -> None:
+        self._runtime_truncation_checked = set()
+        self._tooltip_runtime_cache.clear()
 
 
     def set_radius(self, radius: int):
@@ -64,6 +70,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         self.radius = int(radius)
         self._cached = None
         self._hover_cache_warmed = False
+        self._invalidate_runtime_caches()
         self._cache_key = (tuple(self.names), self.radius, tuple(sorted(self.disabled_indices)))
         self.update()
 
@@ -76,7 +83,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         if not force and self._cached is not None and key == self._cache_key:
             return
         self._cache_key = key
-        self._runtime_truncation_checked = set()
+        self._invalidate_runtime_caches()
 
         # Pixmap aufsetzen
         s = int(2 * self.radius) + 4
@@ -172,6 +179,8 @@ class WheelDisc(QtWidgets.QGraphicsObject):
 
         # Radius etwas Richtung Rand, aber noch im Segment
         radius_txt = r * 0.65  # kannst du auf 0.6–0.72 anpassen
+        fm_base = QtGui.QFontMetrics(base_font)
+        line_h_base = fm_base.height()
 
         for i, raw in enumerate(self.names):
             theta_deg = (i + 0.5) * angle_step     # Mitte des Segments
@@ -199,9 +208,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
             use_initials_only = max_w < 25.0
 
             # Höhe für max. 3 Zeilen (dynamisch aus der aktuellen Schrift abgeleitet)
-            fm_base = QtGui.QFontMetrics(base_font)
-            line_h = fm_base.height()
-            rect_h = float(line_h * 3.2)  # 3 Zeilen + etwas Luft
+            rect_h = float(line_h_base * 3.2)  # 3 Zeilen + etwas Luft
             # rect: Mittelpunkt = (0,0) nach Transformation
             rect = QtCore.QRectF(-max_w / 2.0, -rect_h / 2.0, max_w, rect_h)
 
@@ -458,6 +465,16 @@ class WheelDisc(QtWidgets.QGraphicsObject):
             return False
         if angle_step <= 0 or self.radius <= 0:
             return False
+        cache_key = (
+            int(idx),
+            int(round(float(angle_step) * 1000.0)),
+            int(self.radius),
+            int(self._names_revision),
+            bool(self.show_labels),
+        )
+        cached = self._tooltip_runtime_cache.get(cache_key)
+        if cached is not None:
+            return cached
         raw = self.names[idx]
         base_font = _label_base_font_for_radius(self.radius)
 
@@ -474,6 +491,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         arc_len = 2.0 * math.pi * r_txt * (angle_step / 360.0)
         max_w = min(130.0, arc_len * 0.8)
         if max_w < 12.0:
+            self._tooltip_runtime_cache[cache_key] = True
             return True  # extrem schmal → Tooltip
         use_initials_only = max_w < 25.0
         fm = QtGui.QFontMetrics(base_font)
@@ -482,6 +500,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
 
         text = fmt(raw)
         if use_initials_only:
+            self._tooltip_runtime_cache[cache_key] = True
             return True  # wir würden ohnehin kürzen
 
         br = fm.boundingRect(
@@ -489,7 +508,9 @@ class WheelDisc(QtWidgets.QGraphicsObject):
             QtCore.Qt.AlignCenter | QtCore.Qt.TextWordWrap,
             text,
         )
-        return br.width() > max_w * 0.98 or br.height() > rect_h
+        result = br.width() > max_w * 0.98 or br.height() > rect_h
+        self._tooltip_runtime_cache[cache_key] = bool(result)
+        return bool(result)
 
     def _ensure_hover_overlay(self):
         """Creates text + background items inside the scene for reliable hover display."""
@@ -579,18 +600,22 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         # Cache verwerfen, damit neu gezeichnet wird
         self._cached = None
         self._hover_cache_warmed = False
+        self._invalidate_runtime_caches()
         self.update()
     def set_disabled_indices(self, indices: set[int]):
         self.disabled_indices = {i for i in indices if 0 <= i < len(self.names)}
         self._cached = None
         self._hover_cache_warmed = False
+        self._invalidate_runtime_caches()
         self._cache_key = (tuple(self.names), self.radius, tuple(sorted(self.disabled_indices)))
         self.update()
 
     def set_names(self, names: List[str]):
         self.names = [n.strip() for n in names if n.strip()]
+        self._names_revision += 1
         self.disabled_indices.clear()
         self._label_truncated = []
         self._cached = None
         self._hover_cache_warmed = False
+        self._invalidate_runtime_caches()
         self.update()

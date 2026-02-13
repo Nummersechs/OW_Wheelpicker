@@ -37,9 +37,11 @@ if DIST_MODE not in {"onefile", "onedir"}:
         f"(got: {DIST_MODE!r})"
     )
 STRIP_BINARIES = _env_flag("OW_STRIP", RELEASE_BUILD or MIN_SIZE_BUILD)
-ENABLE_UPX = _env_flag("OW_UPX", True)
+# UPX helps size but slows startup due decompression; prefer fast startup for onedir builds.
+ENABLE_UPX = _env_flag("OW_UPX", DIST_MODE == "onefile")
 INCLUDE_QT_MULTIMEDIA = not MIN_SIZE_BUILD
-INCLUDE_REQUESTS = _env_flag("OW_INCLUDE_REQUESTS", True)
+# Requests is optional (online sync only). Disable by default to keep runtime lean.
+INCLUDE_REQUESTS = _env_flag("OW_INCLUDE_REQUESTS", False)
 PRUNE_QT_RUNTIME = _env_flag("OW_PRUNE_QT", True)
 INCLUDE_OCR_BUNDLE = _env_flag("OW_INCLUDE_OCR_BUNDLE", True)
 OCR_BUNDLE_MODE = (os.environ.get("OW_OCR_BUNDLE_MODE") or "minimal").strip().lower()

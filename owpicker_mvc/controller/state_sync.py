@@ -29,7 +29,8 @@ class StateSyncController(QtCore.QObject):
         self._pending_state: Dict[str, Any] | None = None
         self._pending_state_dirty = False
         self._pending_save_sync = False
-        self._save_debounce_ms = max(0, int(self._cfg("STATE_SAVE_DEBOUNCE_MS", 160)))
+        self._save_debounce_ms = max(0, int(self._cfg("STATE_SAVE_DEBOUNCE_MS", 220)))
+        self._sync_debounce_ms = max(0, int(self._cfg("NETWORK_SYNC_DEBOUNCE_MS", 220)))
         workers = max(1, int(self._cfg("NETWORK_SYNC_WORKERS", 2)))
         self._executor_workers = workers
         self._executor: ThreadPoolExecutor | None = None
@@ -261,7 +262,7 @@ class StateSyncController(QtCore.QObject):
             return
         self._pending_sync_dirty = True
         # kurze Verzoegerung, um schnelle State-Aenderungen zu buendeln
-        self._sync_timer.start(200)
+        self._sync_timer.start(self._sync_debounce_ms)
 
     def _flush_role_sync(self) -> None:
         """Sendet den letzten vorbereiteten Sync-Payload (debounced)."""
