@@ -180,8 +180,9 @@ class ResultOverlay(QtWidgets.QWidget):
         view = getattr(self, "_last_view", {}) or {}
         view_type = view.get("type")
         if view_type == "ocr_name_picker":
-            w = max(520, int(self.width() * 0.45))
-            h = max(320, int(self.height() * 0.45))
+            # OCR picker needs more horizontal room for per-name role/subrole checkboxes.
+            w = max(760, int(self.width() * 0.72))
+            h = max(380, int(self.height() * 0.58))
         else:
             w = max(520, int(self.width() * 0.45))
             h = max(280, int(self.height() * 0.30))

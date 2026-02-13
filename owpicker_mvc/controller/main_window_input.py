@@ -124,6 +124,8 @@ class MainWindowInputMixin:
             return False
         if time.monotonic() >= until:
             self._post_choice_input_guard_until = None
+            if hasattr(self, "_refresh_app_event_filter_state"):
+                self._refresh_app_event_filter_state()
             return False
         return True
 
@@ -135,9 +137,13 @@ class MainWindowInputMixin:
         )
         if ms <= 0:
             self._post_choice_input_guard_until = None
+            if hasattr(self, "_refresh_app_event_filter_state"):
+                self._refresh_app_event_filter_state()
             return
         self._post_choice_input_guard_until = time.monotonic() + (ms / 1000.0)
         self._trace_event("mode_choice_input_guard", active=True, duration_ms=ms, reason=reason)
+        if hasattr(self, "_refresh_app_event_filter_state"):
+            self._refresh_app_event_filter_state()
 
     def _is_wheel_view_event_target(self, obj) -> bool:
         if obj is None:

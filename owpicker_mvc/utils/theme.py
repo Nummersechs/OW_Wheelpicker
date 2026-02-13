@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from PySide6 import QtGui, QtWidgets
+import config
 
 
 @dataclass(frozen=True)
@@ -99,9 +100,10 @@ THEMES: dict[str, Theme] = {
 _FUSION_STYLE = "Fusion"
 _THEME_KEY_PROP = "_ow_theme_key"
 _FUSION_INIT_PROP = "_ow_fusion_initialized"
+_GLOBAL_STYLESHEET_APPLIED_PROP = "_ow_global_stylesheet_applied"
 _PALETTE_CACHE: dict[str, QtGui.QPalette] = {}
-_GLOBAL_STYLESHEET_CACHE: dict[str, str] = {}
 _TOOL_BUTTON_STYLESHEET_CACHE: dict[str, str] = {}
+_GLOBAL_STYLESHEET_CACHE: str | None = None
 
 
 def get_theme(key: str) -> Theme:
@@ -125,142 +127,138 @@ def build_palette(theme: Theme) -> QtGui.QPalette:
     return pal
 
 
-def global_stylesheet(theme: Theme) -> str:
-    """Shared stylesheet for the application based on the active theme."""
-    return f"""
-        QLabel {{ color:{theme.text}; }}
-        QPlainTextEdit {{
-            background:{theme.base}; color:{theme.text};
-            border:1px solid {theme.border}; border-radius:10px; padding:6px;
+def global_stylesheet(_theme: Theme) -> str:
+    """
+    Shared app stylesheet.
+
+    Intentionally static: colors come from QPalette so a theme switch only
+    needs palette updates and avoids expensive global stylesheet re-parsing.
+    """
+    del _theme
+    global _GLOBAL_STYLESHEET_CACHE
+    if _GLOBAL_STYLESHEET_CACHE is not None:
+        return _GLOBAL_STYLESHEET_CACHE
+    _GLOBAL_STYLESHEET_CACHE = """
+        QLabel { color: palette(window-text); }
+        QPlainTextEdit {
+            background: palette(base); color: palette(text);
+            border:1px solid palette(mid); border-radius:10px; padding:6px;
             font-size:13px;
-        }}
-        QSlider::groove:horizontal {{
-            height:6px; background:{theme.slider_groove}; border-radius:3px;
-        }}
-        QSlider::handle:horizontal {{
-            width:14px; background:{theme.slider_handle}; border-radius:7px; margin:-5px 0;
-        }}
-        QGraphicsView {{
-            background:transparent;
-        }}
-        /* Scrollbars besser sichtbar in beiden Themes */
-        QScrollBar:vertical {{
-            background:{theme.alt_base};
+        }
+        QSlider::groove:horizontal {
+            height:6px; background: palette(alternate-base); border-radius:3px;
+        }
+        QSlider::handle:horizontal {
+            width:14px; background: palette(highlight); border-radius:7px; margin:-5px 0;
+        }
+        QGraphicsView {
+            background: transparent;
+        }
+        QScrollBar:vertical {
+            background: palette(alternate-base);
             width:12px;
             margin:2px;
             border-radius:6px;
-        }}
-        QScrollBar::handle:vertical {{
-            background:{theme.slider_handle};
+        }
+        QScrollBar::handle:vertical {
+            background: palette(highlight);
             min-height:24px;
             border-radius:6px;
-        }}
+        }
         QScrollBar::add-line:vertical,
-        QScrollBar::sub-line:vertical {{
+        QScrollBar::sub-line:vertical {
             height:0px;
             background:transparent;
-        }}
+        }
         QScrollBar::sub-page:vertical,
-        QScrollBar::add-page:vertical {{
-            background:{theme.slider_groove};
+        QScrollBar::add-page:vertical {
+            background: palette(midlight);
             border-radius:6px;
-        }}
-        QScrollBar:horizontal {{
-            background:{theme.alt_base};
+        }
+        QScrollBar:horizontal {
+            background: palette(alternate-base);
             height:12px;
             margin:2px;
             border-radius:6px;
-        }}
-        QScrollBar::handle:horizontal {{
-            background:{theme.slider_handle};
+        }
+        QScrollBar::handle:horizontal {
+            background: palette(highlight);
             min-width:24px;
             border-radius:6px;
-        }}
+        }
         QScrollBar::add-line:horizontal,
-        QScrollBar::sub-line:horizontal {{
+        QScrollBar::sub-line:horizontal {
             width:0px;
             background:transparent;
-        }}
+        }
         QScrollBar::sub-page:horizontal,
-        QScrollBar::add-page:horizontal {{
-            background:{theme.slider_groove};
+        QScrollBar::add-page:horizontal {
+            background: palette(midlight);
             border-radius:6px;
-        }}
-        QPushButton {{
-            color:{theme.button_text};
-            background:{theme.primary};
+        }
+        QPushButton {
+            color: palette(button-text);
+            background: palette(highlight);
             border-radius:12px;
             font-weight:600;
             padding:8px 18px;
-        }}
-        QPushButton[modeButton="true"] {{
+        }
+        QPushButton[modeButton="true"] {
             padding:6px 14px;
             font-size:13px;
             min-width:120px;
-        }}
-        QPushButton[modeButton="true"]:checked {{
+        }
+        QPushButton[modeButton="true"]:checked {
             padding:10px 18px;
             font-size:14px;
-        }}
-        QPushButton:hover {{ background:{theme.primary_hover}; }}
-        QPushButton:pressed {{ background:{theme.primary_pressed}; }}
-
-        QPushButton:checked {{
-            background:{theme.checked};
-            border:2px solid {theme.checked_border};
-        }}
-        QPushButton:checked:hover {{
-            background:{theme.checked_hover};
-        }}
-        QPushButton:checked:pressed {{
-            background:{theme.checked_pressed};
-        }}
-
-        QPushButton:disabled {{
-            background:{theme.disabled_bg};
-            color:{theme.disabled_text};
+        }
+        QPushButton:hover { background: palette(light); }
+        QPushButton:pressed { background: palette(dark); }
+        QPushButton:checked {
+            border:2px solid palette(shadow);
+        }
+        QPushButton:disabled {
+            background: palette(button);
+            color: palette(mid);
             border-radius:12px;
-            border:1px solid {theme.border};
-        }}
-        /* Map-spezifische Container, damit sie immer korrekt einfärben */
-        QFrame#mapSidebar {{
-            background: {theme.frame_bg};
-            border:1px solid {theme.frame_border};
+            border:1px solid palette(midlight);
+        }
+        QFrame#mapSidebar {
+            background: palette(alternate-base);
+            border:1px solid palette(midlight);
             border-radius:8px;
-            color:{theme.text};
-        }}
-        QWidget#mapGridContainer {{
-            background: {theme.base};
+            color: palette(window-text);
+        }
+        QWidget#mapGridContainer {
+            background: palette(base);
             border: none;
-            color:{theme.text};
-        }}
-        QWidget#mapListsWrapper {{
-            background: {theme.base};
+            color: palette(window-text);
+        }
+        QWidget#mapListsWrapper {
+            background: palette(base);
             border: none;
-            color:{theme.text};
-        }}
-        QScrollArea#mapListScroll QWidget {{
-            background: {theme.base};
-            color:{theme.text};
-        }}
-
-        QCheckBox {{
-            color:{theme.text};
+            color: palette(window-text);
+        }
+        QScrollArea#mapListScroll QWidget {
+            background: palette(base);
+            color: palette(window-text);
+        }
+        QCheckBox {
+            color: palette(window-text);
             font-size:13px;
-        }}
-
-        QCheckBox::indicator {{
-            width: 8px;
-            height: 8px;
-            border: 2px solid {theme.text};
-            border-radius: 3px;
-            background: {theme.base};
-        }}
-
-        QCheckBox::indicator:checked {{
-            background: {theme.primary};
-        }}
+        }
+        QCheckBox::indicator {
+            width:8px;
+            height:8px;
+            border:2px solid palette(window-text);
+            border-radius:3px;
+            background: palette(base);
+        }
+        QCheckBox::indicator:checked {
+            background: palette(highlight);
+        }
     """
+    return _GLOBAL_STYLESHEET_CACHE
 
 
 def tool_button_stylesheet(theme: Theme) -> str:
@@ -286,30 +284,25 @@ def _cached_palette(theme: Theme) -> QtGui.QPalette:
     return QtGui.QPalette(cached)
 
 
-def _cached_global_stylesheet(theme: Theme) -> str:
-    cached = _GLOBAL_STYLESHEET_CACHE.get(theme.key)
-    if cached is not None:
-        return cached
-    cached = global_stylesheet(theme)
-    _GLOBAL_STYLESHEET_CACHE[theme.key] = cached
-    return cached
-
-
 def apply_app_theme(theme: Theme) -> None:
     """Apply palette and global stylesheet to the QApplication."""
     app = QtWidgets.QApplication.instance()
     if not app:
         return
     current_key = app.property(_THEME_KEY_PROP)
-    if isinstance(current_key, str) and current_key == theme.key:
+    stylesheet_applied = bool(app.property(_GLOBAL_STYLESHEET_APPLIED_PROP))
+    if isinstance(current_key, str) and current_key == theme.key and stylesheet_applied:
         return
 
-    if not bool(app.property(_FUSION_INIT_PROP)):
-        app.setStyle(_FUSION_STYLE)
-        app.setProperty(_FUSION_INIT_PROP, True)
+    force_fusion = bool(getattr(config, "FORCE_FUSION_STYLE", False))
+    if force_fusion and not bool(app.property(_FUSION_INIT_PROP)):
+        try:
+            app.setStyle(_FUSION_STYLE)
+            app.setProperty(_FUSION_INIT_PROP, True)
+        except Exception:
+            pass
 
     palette = _cached_palette(theme)
-    stylesheet = _cached_global_stylesheet(theme)
 
     # Freeze repaints while palette and stylesheet are swapped.
     windows = [w for w in app.topLevelWidgets() if isinstance(w, QtWidgets.QWidget) and w.isVisible()]
@@ -317,8 +310,9 @@ def apply_app_theme(theme: Theme) -> None:
         w.setUpdatesEnabled(False)
     try:
         app.setPalette(palette)
-        if app.styleSheet() != stylesheet:
-            app.setStyleSheet(stylesheet)
+        if not stylesheet_applied:
+            app.setStyleSheet(global_stylesheet(theme))
+            app.setProperty(_GLOBAL_STYLESHEET_APPLIED_PROP, True)
         app.setProperty(_THEME_KEY_PROP, theme.key)
     finally:
         for w in windows:

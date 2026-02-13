@@ -9,6 +9,9 @@ from utils import ui_helpers
 DELETE_MARK_COLUMN_WIDTH = 20
 DELETE_MARK_BUTTON_WIDTH = 28
 DELETE_MARK_ROW_RIGHT_MARGIN = 0
+NAME_LIST_ROW_HEIGHT = 20
+NAME_EDIT_HEIGHT = 18
+SUBROLE_CHECK_SPACING = 10
 _DELETE_MARKED_STYLE_CACHE: dict[str, str] = {}
 
 
@@ -40,7 +43,8 @@ class _NoPaintDelegate(QtWidgets.QStyledItemDelegate):
         return
 
     def sizeHint(self, option, index):
-        return super().sizeHint(option, index)
+        del index
+        return QtCore.QSize(max(1, int(option.rect.width())), NAME_LIST_ROW_HEIGHT)
 
 
 class NameLineEdit(QtWidgets.QLineEdit):
@@ -94,12 +98,15 @@ class NamesList(QtWidgets.QListWidget):
         self.setFocusPolicy(QtCore.Qt.NoFocus)
         self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.setSpacing(0)
+        self.setUniformItemSizes(True)
         self.setItemDelegate(_NoPaintDelegate(self))
 
         self.setStyleSheet(
             "QListView::item:selected { background: transparent; color: inherit; }"
             "QListView::item:selected:active { background: transparent; color: inherit; }"
             "QListView::item:focus { outline: none; }"
+            "QListView::item { margin:0px; padding:0px; border:0px; }"
         )
 
         self.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
@@ -175,6 +182,7 @@ class NamesList(QtWidgets.QListWidget):
     def _new_item(self, text: str = "", subroles: Optional[List[str]] = None, active: Optional[bool] = None) -> QtWidgets.QListWidgetItem:
         item = QtWidgets.QListWidgetItem(text)
         item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsEditable)
+        item.setSizeHint(QtCore.QSize(0, NAME_LIST_ROW_HEIGHT))
         if active is not None:
             item.setCheckState(QtCore.Qt.Checked if active else QtCore.Qt.Unchecked)
         elif text.strip():
@@ -341,10 +349,12 @@ class NameRowWidget(QtWidgets.QWidget):
         self.item = item
         layout = QtWidgets.QHBoxLayout(self)
         right_margin = DELETE_MARK_ROW_RIGHT_MARGIN if subrole_labels else 4
-        layout.setContentsMargins(4, 0, right_margin, 0)
-        layout.setSpacing(6)
+        layout.setContentsMargins(2, 0, right_margin, 0)
+        layout.setSpacing(1)
 
         self.chk_active = QtWidgets.QCheckBox()
+        self.chk_active.setFixedWidth(18)
+        self.chk_active.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
         state = item.checkState()
         if state == QtCore.Qt.PartiallyChecked:
             self.chk_active.setTristate(True)
@@ -356,7 +366,9 @@ class NameRowWidget(QtWidgets.QWidget):
 
         self.edit = NameLineEdit()
         self.edit.setText(item.text())
+        # Keep editable field flexible so subrole checkboxes remain readable.
         self.edit.setMinimumWidth(220)
+        self.edit.setFixedHeight(NAME_EDIT_HEIGHT)
         self.edit.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
         self.edit.setFocusPolicy(QtCore.Qt.ClickFocus)
         self.edit.textChanged.connect(self._on_text_changed)
@@ -364,18 +376,25 @@ class NameRowWidget(QtWidgets.QWidget):
         self.edit.moveUpRequested.connect(self._focus_prev)
         self.edit.moveDownRequested.connect(self._focus_next)
         self.edit.newRowRequested.connect(self._insert_new_row)
-        layout.addWidget(self.edit, 2)
-        # Platz schaffen, damit Subrollen nach rechts rücken
-        layout.addStretch(1)
+        layout.addWidget(self.edit, 1)
 
         self.subrole_checks: list[QtWidgets.QCheckBox] = []
-        for lbl in subrole_labels:
-            cb = QtWidgets.QCheckBox(lbl)
-            cb.setChecked(lbl in self._current_subroles())
-            cb.toggled.connect(self._on_subrole_changed)
-            cb.setToolTip(i18n.t("names.subrole_tooltip", label=lbl))
-            self.subrole_checks.append(cb)
-            layout.addWidget(cb, 0, QtCore.Qt.AlignVCenter)
+        self._subrole_group: QtWidgets.QWidget | None = None
+        if subrole_labels:
+            self._subrole_group = QtWidgets.QWidget(self)
+            subrole_layout = QtWidgets.QHBoxLayout(self._subrole_group)
+            subrole_layout.setContentsMargins(8, 0, 0, 0)
+            subrole_layout.setSpacing(SUBROLE_CHECK_SPACING)
+            for lbl in subrole_labels:
+                cb = QtWidgets.QCheckBox(lbl)
+                cb.setChecked(lbl in self._current_subroles())
+                cb.toggled.connect(self._on_subrole_changed)
+                cb.setToolTip(i18n.t("names.subrole_tooltip", label=lbl))
+                cb.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+                cb.setMinimumWidth(cb.sizeHint().width())
+                self.subrole_checks.append(cb)
+                subrole_layout.addWidget(cb, 0, QtCore.Qt.AlignVCenter)
+            layout.addWidget(self._subrole_group, 0, QtCore.Qt.AlignVCenter)
 
         self.chk_mark_for_delete: QtWidgets.QCheckBox | None = None
         if subrole_labels and self.list_widget.enable_mark_for_delete:
@@ -393,10 +412,7 @@ class NameRowWidget(QtWidgets.QWidget):
                 0,
                 QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
             )
-            layout.addStretch(1)
             layout.addWidget(delete_cell, 0, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        else:
-            layout.addStretch(1)
         # Kein automatischer Fokus auf neue/leer Zeilen
 
     def focus_name(self, force: bool = False):
@@ -548,7 +564,7 @@ class NamesListPanel(QtWidgets.QWidget):
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(1)
 
         layout.addWidget(self.names)
 

@@ -146,6 +146,8 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._deferred_hover_rearm_timer: QtCore.QTimer | None = None
         self._deferred_tooltip_refresh_reason: str | None = None
         self._deferred_tooltip_refresh_timer: QtCore.QTimer | None = None
+        self._app_event_filter_installed = False
+        self._applied_theme_key: str | None = None
         self._startup_block_input = False
         self._startup_warmup_running = False
         self._startup_warmup_done = False
@@ -712,7 +714,6 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self.installEventFilter(self)
         app = QtWidgets.QApplication.instance()
         if app:
-            app.installEventFilter(self)
             if getattr(self, "_focus_trace_enabled", False):
                 try:
                     app.focusChanged.connect(self._trace_focus_signal)
@@ -728,6 +729,51 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
                     pass
                 if self._focus_trace_snapshot_interval_ms > 0 and self._focus_trace_snapshot_remaining > 0:
                     QtCore.QTimer.singleShot(0, self._start_focus_snapshots)
+        self._refresh_app_event_filter_state()
+
+    def _set_app_event_filter_enabled(self, enabled: bool) -> None:
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return
+        target = bool(enabled)
+        current = bool(getattr(self, "_app_event_filter_installed", False))
+        if target == current:
+            return
+        if target:
+            app.installEventFilter(self)
+            self._app_event_filter_installed = True
+            return
+        try:
+            app.removeEventFilter(self)
+        except Exception:
+            pass
+        self._app_event_filter_installed = False
+
+    def _needs_app_event_filter(self) -> bool:
+        if getattr(self, "_focus_trace_enabled", False):
+            return True
+        if bool(self._cfg("HOVER_FORWARD_MOUSEMOVE", False)):
+            return True
+        if getattr(self, "_startup_block_input", False) or getattr(self, "_startup_drain_active", False):
+            return True
+        if self._overlay_choice_active():
+            return True
+        if self._post_choice_input_guard_active():
+            return True
+        panel = getattr(self, "player_list_panel", None)
+        if panel is not None and hasattr(panel, "is_visible"):
+            try:
+                if panel.is_visible():
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def _refresh_app_event_filter_state(self) -> None:
+        if getattr(self, "_closing", False):
+            self._set_app_event_filter_enabled(False)
+            return
+        self._set_app_event_filter_enabled(self._needs_app_event_filter())
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:
         super().showEvent(event)
@@ -845,6 +891,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._choice_shown_at = time.monotonic()
         self._trace_event("show_mode_choice")
         self._start_startup_warmup()
+        self._refresh_app_event_filter_state()
 
     def _start_startup_warmup(self) -> None:
         if getattr(self, "_startup_warmup_done", False) or getattr(self, "_startup_warmup_running", False):
@@ -864,6 +911,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._startup_task_queue = tasks
         self._startup_warmup_running = True
         self._startup_block_input = True
+        self._refresh_app_event_filter_state()
         self._trace_event("startup_warmup:start", tasks=[name for name, _ in tasks])
         if not tasks:
             self._finish_startup_warmup()
@@ -904,6 +952,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._flush_posted_events("startup_warmup_done")
         self._startup_block_input = False
         self._startup_drain_active = True
+        self._refresh_app_event_filter_state()
         self._restart_startup_drain_timer()
         self._startup_task_queue = []
         self._startup_current_task = None
@@ -991,6 +1040,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
 
     def _end_startup_input_drain(self) -> None:
         self._startup_drain_active = False
+        self._refresh_app_event_filter_state()
         self._flush_posted_events("startup_drain_done")
         self._flush_drained_input_stats("startup_drain_done")
         self._trace_event("startup_input_drain:done")
@@ -1130,6 +1180,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         if not self._cfg("DISABLE_TOOLTIPS", False):
             self._set_tooltips_ready(False)
             self._schedule_tooltip_refresh("overlay_closed", delay_ms=120)
+        self._refresh_app_event_filter_state()
 
     def _on_overlay_disable_results(self):
         last_view = getattr(self.overlay, "_last_view", {}) or {}
@@ -1168,21 +1219,43 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
     def _apply_theme(self, defer_heavy: bool = False):
         """Apply the selected light/dark theme without freezing the UI."""
         theme = theme_util.get_theme(getattr(self, "theme", "light"))
+        if self._applied_theme_key == theme.key:
+            self._theme_heavy_pending = bool(defer_heavy)
+            if not defer_heavy and hasattr(self, "btn_theme"):
+                self.btn_theme.setEnabled(True)
+            return
         theme_util.apply_app_theme(theme)  # einmal zentral, danach in Scheiben
         tool_style = theme_util.tool_button_stylesheet(theme)
 
         # Schnelle/kleine Updates sofort
         if hasattr(self, "btn_language"):
-            self.btn_language.setStyleSheet(tool_style)
+            style_helpers.set_stylesheet_if_needed(self.btn_language, f"tool:{theme.key}", tool_style)
         if hasattr(self, "btn_theme"):
-            self.btn_theme.setStyleSheet(tool_style)
+            style_helpers.set_stylesheet_if_needed(self.btn_theme, f"tool:{theme.key}", tool_style)
         self._update_theme_button_label()
+        if hasattr(self, "title"):
+            style_helpers.set_stylesheet_if_needed(
+                self.title,
+                f"title_label:{theme.key}",
+                f"font-size:22px; font-weight:700; color:{theme.text}; margin:8px 0 2px 0;",
+            )
         if hasattr(self, "lbl_player_profile"):
-            self.lbl_player_profile.setStyleSheet(f"color:{theme.muted_text}; font-size:13px; font-weight:600;")
+            style_helpers.set_stylesheet_if_needed(
+                self.lbl_player_profile,
+                f"profile_label:{theme.key}",
+                f"color:{theme.muted_text}; font-size:13px; font-weight:600;",
+            )
         if hasattr(self, "player_profile_dropdown"):
             self.player_profile_dropdown.apply_theme(theme)
         if hasattr(self, "summary"):
-            self.summary.setStyleSheet(f"font-size:15px; color:{theme.muted_text}; margin:10px 0 6px 0;")
+            style_helpers.set_stylesheet_if_needed(
+                self.summary,
+                f"summary_label:{theme.key}",
+                f"font-size:15px; color:{theme.muted_text}; margin:10px 0 6px 0;",
+            )
+        if getattr(self, "_mode_buttons", None):
+            for btn in self._mode_buttons:
+                style_helpers.style_mode_button(btn, theme)
         if hasattr(self, "btn_spin_all"):
             style_helpers.style_primary_button(self.btn_spin_all, theme)
         if hasattr(self, "spin_mode_toggle"):
@@ -1201,6 +1274,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             self.overlay.apply_theme(theme, tool_style)
 
         self._theme_heavy_pending = bool(defer_heavy)
+        self._applied_theme_key = theme.key
         if defer_heavy:
             return
         self._apply_theme_heavy(theme, step_ms=15)
@@ -1393,6 +1467,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         if self.hero_ban_active and en:
             self._set_hero_ban_visuals(True)
         self._update_role_ocr_buttons_enabled()
+        self._refresh_app_event_filter_state()
         # Kein automatischer Hover-Refresh beim Aktivieren
     def _stop_all_wheels(self):
         for _role, w in self._role_wheels():
@@ -1807,6 +1882,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._flush_blocked_input_stats("mode_choice")
         self._flush_hover_prime_deferred_trace()
         self._arm_post_choice_input_guard(reason="mode_choice")
+        self._refresh_app_event_filter_state()
         self._hover_prime_pending = False
         self._hover_prime_reason = None
         self.online_mode = online
@@ -1857,6 +1933,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             config.debug_print("Offline-Modus aktiv.")
         # Sync ggf. neu einplanen oder abbrechen
         self.state_sync.sync_all_roles()
+        self._refresh_app_event_filter_state()
 
     def _set_heavy_ui_updates_enabled(self, enabled: bool) -> None:
         """Defer expensive wheel painting while the mode-choice overlay is visible."""
@@ -1926,6 +2003,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._post_choice_init_done = True
         self._sync_mode_stack()
         self._trace_event("run_post_choice_init:done")
+        self._refresh_app_event_filter_state()
 
     def _schedule_map_prebuild(self, force: bool = False) -> None:
         if getattr(self, "_closing", False):
@@ -2024,6 +2102,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         shutdown_manager.run_shutdown_step(self, step, callback)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        self._set_app_event_filter_enabled(False)
         shutdown_manager.handle_close_event(self, event)
 
     def _trace_event(self, name: str, **extra) -> None:

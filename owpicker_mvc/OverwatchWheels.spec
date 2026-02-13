@@ -29,6 +29,13 @@ def _env_flag(name: str, default: bool) -> bool:
 BUILD_PROFILE = (os.environ.get("OW_BUILD_PROFILE") or "full").strip().lower()
 MIN_SIZE_BUILD = BUILD_PROFILE in {"minsize", "min", "lite"}
 RELEASE_BUILD = BUILD_PROFILE in {"release", "prod", "shipping"}
+DIST_MODE_DEFAULT = "onedir" if os.name == "nt" else "onefile"
+DIST_MODE = (os.environ.get("OW_DIST_MODE") or DIST_MODE_DEFAULT).strip().lower()
+if DIST_MODE not in {"onefile", "onedir"}:
+    raise SystemExit(
+        "OW_DIST_MODE must be one of: onefile, onedir "
+        f"(got: {DIST_MODE!r})"
+    )
 STRIP_BINARIES = _env_flag("OW_STRIP", RELEASE_BUILD or MIN_SIZE_BUILD)
 ENABLE_UPX = _env_flag("OW_UPX", True)
 INCLUDE_QT_MULTIMEDIA = not MIN_SIZE_BUILD
@@ -337,7 +344,7 @@ else:
 
 print(
     "[spec] Build profile="
-    f"{BUILD_PROFILE} | strip={STRIP_BINARIES} | upx={ENABLE_UPX} | "
+    f"{BUILD_PROFILE} | dist_mode={DIST_MODE} | strip={STRIP_BINARIES} | upx={ENABLE_UPX} | "
     f"qt_multimedia={INCLUDE_QT_MULTIMEDIA} | requests={INCLUDE_REQUESTS}"
 )
 
@@ -481,15 +488,37 @@ if PRUNE_QT_RUNTIME:
     a.binaries[:] = [entry for entry in a.binaries if _keep_toc_entry(entry)]
     a.datas[:] = [entry for entry in a.datas if _keep_toc_entry(entry)]
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    name=app_name,
-    debug=False,
-    strip=STRIP_BINARIES,
-    upx=ENABLE_UPX,
-    console=False,
-)
+if DIST_MODE == "onedir":
+    exe = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name=app_name,
+        debug=False,
+        strip=STRIP_BINARIES,
+        upx=ENABLE_UPX,
+        console=False,
+    )
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        strip=STRIP_BINARIES,
+        upx=ENABLE_UPX,
+        name=app_name,
+    )
+else:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        name=app_name,
+        debug=False,
+        strip=STRIP_BINARIES,
+        upx=ENABLE_UPX,
+        console=False,
+    )

@@ -25,13 +25,17 @@ FOCUS_TRACE_SNAPSHOT_COUNT = 20
 HOVER_TRACE_MAX_EVENTS = 200
 HOVER_TRACE_BUDGET_PER_VIEW = 20
 HOVER_POKE_ON_REARM = True
-HOVER_FORWARD_MOUSEMOVE = True
+# Nur aktivieren, wenn Hover auf einem Zielsystem sonst nicht zuverlässig ist.
+# Globales MouseMove-Forwarding erhöht Event-Last deutlich.
+HOVER_FORWARD_MOUSEMOVE = False
 HOVER_FORWARD_INTERVAL_MS = 50
 STARTUP_DROP_CHOICE_POINTER_EVENTS = True
 MODE_CHOICE_INPUT_GUARD_MS = 260
 STARTUP_FINALIZE_DELAY_MS = 60
 STARTUP_WARMUP_COOLDOWN_MS = 500
 STARTUP_INPUT_DRAIN_MS = 180
+# Für schnelleren Start standardmäßig Platform-Style nutzen.
+FORCE_FUSION_STYLE = False
 HOVER_PUMP_ON_START = False
 # 0 = kein Timeout (läuft bis echte Hover-Events erkannt werden)
 HOVER_PUMP_DURATION_MS = 0

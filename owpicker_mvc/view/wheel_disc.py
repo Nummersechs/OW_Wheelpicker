@@ -10,6 +10,28 @@ def make_colors(n: int) -> List[QtGui.QColor]:
     ]
 
 
+def _app_default_font() -> QtGui.QFont:
+    app = QtWidgets.QApplication.instance()
+    if app is not None:
+        try:
+            return QtGui.QFont(app.font())
+        except Exception:
+            pass
+    return QtGui.QFont()
+
+
+def _label_base_font_for_radius(radius: int) -> QtGui.QFont:
+    base_font = _app_default_font()
+    base_size = float(getattr(config, "LABEL_FONT_SIZE", 10))
+    # Scale relative to configured wheel radius while keeping sane limits.
+    scale = float(radius) / float(getattr(config, "WHEEL_RADIUS", radius or 1))
+    eff_scale = max(0.5, min(1.3, scale))
+    scaled_size = max(6.0, min(64.0, base_size * eff_scale))
+    base_font.setPointSizeF(scaled_size)
+    base_font.setBold(bool(getattr(config, "LABEL_FONT_BOLD", True)))
+    return base_font
+
+
 class WheelDisc(QtWidgets.QGraphicsObject):
     segmentToggled = QtCore.Signal(int, bool, str)
     def __init__(self, names: List[str], radius: int = None, parent=None):
@@ -115,16 +137,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
             self._cached = pm
             self._hover_cache_warmed = True
             return
-        base_font = QtGui.QFont()
-        base_size = float(getattr(config, 'LABEL_FONT_SIZE', 10))
-        # Skalierung der Schrift relativ zum Basisradius
-        # Für kleine Räder darf die Schrift bis auf 50% schrumpfen,
-        # für große Räder wächst sie maximal auf 130% der Basisgröße.
-        scale = float(self.radius) / float(getattr(config, 'WHEEL_RADIUS', self.radius or 1))
-        eff_scale = max(0.5, min(1.3, scale))
-        scaled_size = max(6.0, min(64.0, base_size * eff_scale))
-        base_font.setPointSizeF(scaled_size)
-        base_font.setBold(bool(getattr(config, 'LABEL_FONT_BOLD', True)))
+        base_font = _label_base_font_for_radius(self.radius)
         p.setFont(base_font)
 
         def fmt(raw: str) -> str:
@@ -446,13 +459,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         if angle_step <= 0 or self.radius <= 0:
             return False
         raw = self.names[idx]
-        base_font = QtGui.QFont()
-        base_size = float(getattr(config, "LABEL_FONT_SIZE", 10))
-        scale = float(self.radius) / float(getattr(config, "WHEEL_RADIUS", self.radius or 1))
-        eff_scale = max(0.5, min(1.3, scale))
-        scaled_size = max(6.0, min(64.0, base_size * eff_scale))
-        base_font.setPointSizeF(scaled_size)
-        base_font.setBold(bool(getattr(config, "LABEL_FONT_BOLD", True)))
+        base_font = _label_base_font_for_radius(self.radius)
 
         def fmt(name: str) -> str:
             if " + " in name:

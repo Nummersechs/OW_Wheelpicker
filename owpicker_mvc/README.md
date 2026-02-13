@@ -46,11 +46,14 @@ If you want OCR to work in the Windows EXE without requiring users to install Te
    - `OW_OCR_BUNDLE_MODE=minimal` (default): bundle only `tesseract(.exe)`, required runtime libraries, and requested language packs.
    - `OW_OCR_BUNDLE_MODE=full`: bundle the full OCR folder as-is.
 3. For minimal mode, set language packs explicitly, e.g. `OW_OCR_LANGS=deu+eng` (optional `OW_OCR_INCLUDE_OSD=1`).
-4. For smaller release builds, use `OW_BUILD_PROFILE=release` (strip defaults to on) or explicitly set `OW_STRIP=1`.
-5. Verify build output contains lines like:
+4. Choose distribution mode:
+   - `OW_DIST_MODE=onedir` (default on Windows): faster app startup, folder output.
+   - `OW_DIST_MODE=onefile`: single EXE, slower startup (self-extract at launch).
+5. For smaller release builds, use `OW_BUILD_PROFILE=release` (strip defaults to on) or explicitly set `OW_STRIP=1`.
+6. Verify build output contains lines like:
    - `[spec] OCR bundle files: ...`
    - `[spec] OCR languages: deu.traineddata, eng.traineddata`
-   - `[spec] Build profile=... | strip=...`
+   - `[spec] Build profile=... | dist_mode=... | strip=...`
 
 Example (Windows CMD):
 
@@ -62,6 +65,7 @@ set OW_INCLUDE_OCR_BUNDLE=1
 set OW_OCR_BUNDLE_MODE=minimal
 set OW_OCR_LANGS=deu+eng
 set OW_OCR_INCLUDE_OSD=1
+set OW_DIST_MODE=onedir
 pyinstaller --noconfirm --clean owpicker_mvc/OverwatchWheels.spec
 ```
 

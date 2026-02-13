@@ -263,23 +263,6 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
         self.btn_include_in_all.setToolTip(i18n.t("wheel.include_tooltip"))
         self._apply_fixed_widths()
         
-        # Checkbox-Styling konsistent halten
-        self.setStyleSheet("""
-            QCheckBox::indicator,
-            QListView::indicator {
-                width: 6px;
-                height: 6px;
-                border: 2px solid black;
-                border-radius: 3px;
-                background: white;
-            }
-
-            QCheckBox::indicator:checked,
-            QListView::indicator:checked {
-                background: black;
-            }
-        """)
-
         # Startwert für Namensanzahl merken und UI initial justieren
         self._last_name_count = len(self._base_names())
         self._update_name_dependent_ui()

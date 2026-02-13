@@ -45,16 +45,26 @@ class PlayerListPanelController(QtCore.QObject):
         self._ensure_panel()
         if self._panel and self._panel.isVisible():
             self._panel.hide()
+            if hasattr(self._mw, "_refresh_app_event_filter_state"):
+                self._mw._refresh_app_event_filter_state()
             return
         self.refresh_panel()
         self.position_panel()
         if self._panel:
             self._panel.show()
             qt_runtime.safe_raise(self._panel)
+        if hasattr(self._mw, "_refresh_app_event_filter_state"):
+            self._mw._refresh_app_event_filter_state()
 
     def hide_panel(self) -> None:
         if self._panel:
             self._panel.hide()
+        if hasattr(self._mw, "_refresh_app_event_filter_state"):
+            self._mw._refresh_app_event_filter_state()
+
+    def is_visible(self) -> bool:
+        panel = self._panel
+        return bool(panel is not None and panel.isVisible())
 
     def shutdown(self) -> None:
         """Stop timers and hide the panel to release resources."""
@@ -113,7 +123,7 @@ class PlayerListPanelController(QtCore.QObject):
             btn_rect = QtCore.QRect(self._button.mapToGlobal(QtCore.QPoint(0, 0)), self._button.size())
             if btn_rect.contains(pos):
                 return
-        panel.hide()
+        self.hide_panel()
 
     def apply_theme(self) -> None:
         panel = self._panel
@@ -223,7 +233,7 @@ class PlayerListPanelController(QtCore.QObject):
         btn_close.setText("X")
         btn_close.setCursor(QtCore.Qt.PointingHandCursor)
         btn_close.setAutoRaise(True)
-        btn_close.clicked.connect(panel.hide)
+        btn_close.clicked.connect(self.hide_panel)
         header.addWidget(btn_close)
         layout.addLayout(header)
 
