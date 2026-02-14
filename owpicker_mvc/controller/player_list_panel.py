@@ -147,6 +147,8 @@ class PlayerListPanelController(QtCore.QObject):
         i18n.set_language(lang)
         if self._title:
             self._title.setText(i18n.t("players.list_title"))
+        if self._close:
+            self._close.setToolTip(i18n.t("players.list_close_tooltip"))
         if self._names_panel:
             self._names_panel.set_language(lang)
 
@@ -231,6 +233,7 @@ class PlayerListPanelController(QtCore.QObject):
         header.addStretch(1)
         btn_close = QtWidgets.QToolButton()
         btn_close.setText("X")
+        btn_close.setToolTip(i18n.t("players.list_close_tooltip"))
         btn_close.setCursor(QtCore.Qt.PointingHandCursor)
         btn_close.setAutoRaise(True)
         btn_close.clicked.connect(self.hide_panel)

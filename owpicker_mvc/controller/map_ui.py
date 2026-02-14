@@ -92,6 +92,7 @@ class MapUI(QtCore.QObject):
         sb_layout.addLayout(self._map_type_list_layout)
         self.btn_edit_map_types = QtWidgets.QPushButton(i18n.t("map.edit_types"))
         ui_helpers.set_fixed_width_from_translations([self.btn_edit_map_types], ["map.edit_types"], padding=48)
+        self.btn_edit_map_types.setToolTip(i18n.t("map.edit_types_tooltip"))
         self.btn_edit_map_types.clicked.connect(lambda: self._show_map_type_editor(container))
         self.btn_edit_map_types.setFocusPolicy(QtCore.Qt.ClickFocus)
         sb_layout.addWidget(self.btn_edit_map_types, 0, QtCore.Qt.AlignLeft)
@@ -293,6 +294,8 @@ class MapUI(QtCore.QObject):
             btn_grid.setHorizontalSpacing(16)
             self._map_type_btn_add = QtWidgets.QPushButton(i18n.t("map.editor.add"))
             self._map_type_btn_del = QtWidgets.QPushButton(i18n.t("map.editor.delete"))
+            self._map_type_btn_add.setToolTip(i18n.t("map.editor.add_tooltip"))
+            self._map_type_btn_del.setToolTip(i18n.t("map.editor.delete_tooltip"))
             self._map_type_btn_add.clicked.connect(self._add_map_type_row)
             self._map_type_btn_del.clicked.connect(self._del_map_type_row)
             ui_helpers.set_fixed_width_from_translations(
@@ -310,6 +313,8 @@ class MapUI(QtCore.QObject):
             confirm_row.setContentsMargins(16, 6, 16, 6)
             self._map_type_btn_ok = QtWidgets.QPushButton(i18n.t("map.editor.apply"))
             self._map_type_btn_cancel = QtWidgets.QPushButton(i18n.t("map.editor.cancel"))
+            self._map_type_btn_ok.setToolTip(i18n.t("map.editor.apply_tooltip"))
+            self._map_type_btn_cancel.setToolTip(i18n.t("map.editor.cancel_tooltip"))
             self._map_type_btn_ok.clicked.connect(self._confirm_map_types)
             self._map_type_btn_cancel.clicked.connect(lambda: self._map_type_editor.hide())
             ui_helpers.set_fixed_width_from_translations(
@@ -436,6 +441,7 @@ class MapUI(QtCore.QObject):
         self.lbl_map_types.setText(i18n.t("map.types"))
         if hasattr(self, "btn_edit_map_types"):
             self.btn_edit_map_types.setText(i18n.t("map.edit_types"))
+            self.btn_edit_map_types.setToolTip(i18n.t("map.edit_types_tooltip"))
         for w in self.map_lists.values():
             w.set_language(lang)
             w.set_spin_button_text(i18n.t("wheel.spin_single_map"))
@@ -446,12 +452,16 @@ class MapUI(QtCore.QObject):
             self._map_type_editor_title.setText(i18n.t("map.editor.title"))
         if hasattr(self, "_map_type_btn_add"):
             self._map_type_btn_add.setText(i18n.t("map.editor.add"))
+            self._map_type_btn_add.setToolTip(i18n.t("map.editor.add_tooltip"))
         if hasattr(self, "_map_type_btn_del"):
             self._map_type_btn_del.setText(i18n.t("map.editor.delete"))
+            self._map_type_btn_del.setToolTip(i18n.t("map.editor.delete_tooltip"))
         if hasattr(self, "_map_type_btn_ok"):
             self._map_type_btn_ok.setText(i18n.t("map.editor.apply"))
+            self._map_type_btn_ok.setToolTip(i18n.t("map.editor.apply_tooltip"))
         if hasattr(self, "_map_type_btn_cancel"):
             self._map_type_btn_cancel.setText(i18n.t("map.editor.cancel"))
+            self._map_type_btn_cancel.setToolTip(i18n.t("map.editor.cancel_tooltip"))
 
     def _apply_theme_to_map_controls(self, theme: theme_util.Theme):
         style_helpers.set_stylesheet_if_needed(

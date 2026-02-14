@@ -484,14 +484,23 @@ class ResultOverlay(QtWidgets.QWidget):
 
     def _apply_button_labels(self):
         self.btn_close.setText(i18n.t("overlay.button_ok"))
+        self.btn_close.setToolTip(i18n.t("overlay.button_ok_tooltip"))
         self.btn_disable.setText(i18n.t("overlay.button_disable_results"))
+        self.btn_disable.setToolTip(i18n.t("overlay.button_disable_results_tooltip"))
         self.btn_online.setText(i18n.t("overlay.button_online"))
+        self.btn_online.setToolTip(i18n.t("overlay.button_online_tooltip"))
         self.btn_offline.setText(i18n.t("overlay.button_offline"))
+        self.btn_offline.setToolTip(i18n.t("overlay.button_offline_tooltip"))
         self.btn_delete_cancel.setText(i18n.t("names.delete_confirm_cancel"))
+        self.btn_delete_cancel.setToolTip(i18n.t("names.delete_confirm_cancel_tooltip"))
         self.btn_delete_confirm.setText(i18n.t("names.delete_confirm_delete"))
+        self.btn_delete_confirm.setToolTip(i18n.t("names.delete_confirm_delete_tooltip"))
         self.btn_ocr_cancel.setText(i18n.t("ocr.pick_cancel"))
+        self.btn_ocr_cancel.setToolTip(i18n.t("ocr.pick_cancel_tooltip"))
         self.btn_ocr_replace.setText(i18n.t("ocr.pick_replace"))
+        self.btn_ocr_replace.setToolTip(i18n.t("ocr.pick_replace_tooltip"))
         self.btn_ocr_confirm.setText(i18n.t("ocr.pick_confirm"))
+        self.btn_ocr_confirm.setToolTip(i18n.t("ocr.pick_confirm_tooltip"))
 
     def _set_min_widths(self):
         """Fix widths so language switch doesn't move layout."""

@@ -57,12 +57,14 @@ class BasePanel(QtWidgets.QWidget):
 
         self.btn_local_spin = QtWidgets.QPushButton(spin_label)
         self.btn_local_spin.setFixedHeight(36)
+        self.btn_local_spin.setToolTip(i18n.t("wheel.spin_button_tooltip"))
         self.btn_local_spin.clicked.connect(self.request_spin.emit)
 
         self.btn_include_in_all = QtWidgets.QPushButton()
         self.btn_include_in_all.setCheckable(True)
         self.btn_include_in_all.setChecked(True)
         self.btn_include_in_all.setFixedHeight(36)
+        self.btn_include_in_all.setToolTip(i18n.t("wheel.include_tooltip"))
         self.btn_include_in_all.toggled.connect(self._on_include_in_all_toggled)
         self._on_include_in_all_toggled(self.btn_include_in_all.isChecked())
 
@@ -132,6 +134,7 @@ class BasePanel(QtWidgets.QWidget):
         if text is None:
             return
         self.btn_local_spin.setText(text)
+        self.btn_local_spin.setToolTip(i18n.t("wheel.spin_button_tooltip"))
         self._apply_fixed_widths()
 
     def set_language(self, lang: str) -> None:
@@ -141,6 +144,8 @@ class BasePanel(QtWidgets.QWidget):
             self.names_hint.setText(i18n.t(self._names_hint_key))
         if hasattr(self, "names_panel"):
             self.names_panel.set_language(lang)
+        self.btn_local_spin.setToolTip(i18n.t("wheel.spin_button_tooltip"))
+        self.btn_include_in_all.setToolTip(i18n.t("wheel.include_tooltip"))
         self.btn_include_in_all.setText(self._include_label())
         self._apply_fixed_widths()
 
