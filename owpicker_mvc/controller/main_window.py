@@ -662,12 +662,27 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self.spin_mode_toggle = SpinModeToggle()
         self.spin_mode_toggle.setToolTip(i18n.t("controls.spin_mode_tooltip"))
         self.spin_mode_toggle.valueChanged.connect(self._update_spin_all_enabled)
+        self.lbl_open_count = QtWidgets.QLabel(i18n.t("controls.open_count_label"))
+        self.lbl_open_count.setToolTip(i18n.t("controls.open_count_tooltip"))
+        self.open_count_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.open_count_slider.setRange(1, 6)
+        self.open_count_slider.setValue(3)
+        self.open_count_slider.setFixedWidth(96)
+        self.open_count_slider.setToolTip(i18n.t("controls.open_count_tooltip"))
+        self.open_count_slider.valueChanged.connect(self._on_open_count_changed)
+        self.lbl_open_count_value = QtWidgets.QLabel("3")
+        self.lbl_open_count_value.setMinimumWidth(18)
+        self.lbl_open_count_value.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        self.lbl_open_count_value.setToolTip(i18n.t("controls.open_count_tooltip"))
         controls.addStretch(1)
         self.lbl_anim_duration = QtWidgets.QLabel(i18n.t("controls.anim_duration"))
         controls.addWidget(self.lbl_anim_duration)
         self.duration.setFixedHeight(30)
         controls.addWidget(self.duration)
         controls.addWidget(self.spin_mode_toggle)
+        controls.addWidget(self.lbl_open_count)
+        controls.addWidget(self.open_count_slider)
+        controls.addWidget(self.lbl_open_count_value)
         controls.addWidget(self.btn_spin_all)
         self.btn_cancel_spin = QtWidgets.QPushButton(i18n.t("controls.cancel_spin"))
         ui_helpers.set_fixed_width_from_translations([self.btn_cancel_spin], ["controls.cancel_spin"], padding=40)
@@ -678,6 +693,9 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self.btn_cancel_spin.clicked.connect(self._cancel_spin)
         controls.addWidget(self.btn_cancel_spin)
         controls.addStretch(1)
+        self.lbl_open_count.setVisible(False)
+        self.open_count_slider.setVisible(False)
+        self.lbl_open_count_value.setVisible(False)
 
     def _build_summary(self, root: QtWidgets.QVBoxLayout) -> None:
         self.summary = QtWidgets.QLabel("")
@@ -690,10 +708,29 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._result_sent_this_spin = False
         self._last_results_snapshot: dict | None = None
         self.open_queue = OpenQueueController(self)
+        if hasattr(self, "open_count_slider"):
+            self.open_queue.set_player_count(int(self.open_count_slider.value()))
         for _role, w in self._role_wheels():
             w.spun.connect(self._wheel_finished)
         if hasattr(self, "map_main"):
             self.map_main.spun.connect(self._wheel_finished)
+
+    def _on_open_count_changed(self, value: int) -> None:
+        shown = max(1, int(value))
+        if hasattr(self, "open_queue"):
+            max_allowed = max(1, int(self.open_queue.max_slots_capacity()))
+            self.open_queue.set_player_count(shown, max_allowed=max_allowed)
+            shown = self.open_queue.player_count(max_allowed=max_allowed)
+            if hasattr(self, "open_count_slider") and int(self.open_count_slider.value()) != int(shown):
+                blocker = QtCore.QSignalBlocker(self.open_count_slider)
+                self.open_count_slider.setValue(int(shown))
+                del blocker
+            if self.open_queue.is_mode_active():
+                self.open_queue.apply_slider_combination()
+        if hasattr(self, "lbl_open_count_value"):
+            self.lbl_open_count_value.setText(str(shown))
+        if hasattr(self, "open_queue"):
+            self._update_spin_all_enabled()
 
     def _build_overlay(self, central: QtWidgets.QWidget) -> None:
         self.overlay = ResultOverlay(parent=central)
@@ -1263,6 +1300,24 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
                 f"mode_label:{theme.key}",
                 f"color:{theme.text}; font-size:13px; font-weight:600;",
             )
+        if hasattr(self, "lbl_anim_duration"):
+            style_helpers.set_stylesheet_if_needed(
+                self.lbl_anim_duration,
+                f"anim_duration_label:{theme.key}",
+                f"color:{theme.text}; font-size:13px; font-weight:600;",
+            )
+        if hasattr(self, "lbl_open_count"):
+            style_helpers.set_stylesheet_if_needed(
+                self.lbl_open_count,
+                f"open_count_label:{theme.key}",
+                f"color:{theme.text}; font-size:13px; font-weight:600;",
+            )
+        if hasattr(self, "lbl_open_count_value"):
+            style_helpers.set_stylesheet_if_needed(
+                self.lbl_open_count_value,
+                f"open_count_value_label:{theme.key}",
+                f"color:{theme.text}; font-size:13px; font-weight:600;",
+            )
         if hasattr(self, "player_profile_dropdown"):
             self.player_profile_dropdown.apply_theme(theme)
         if hasattr(self, "summary"):
@@ -1277,6 +1332,12 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             # Ensure initial checked mode button gets the correct visual state
             # immediately, even before deferred heavy-theme updates run.
             self._update_mode_button_styles(force=True)
+        if hasattr(self, "volume_slider"):
+            style_helpers.style_horizontal_slider(self.volume_slider, theme)
+        if hasattr(self, "duration"):
+            style_helpers.style_horizontal_slider(self.duration, theme)
+        if hasattr(self, "open_count_slider"):
+            style_helpers.style_horizontal_slider(self.open_count_slider, theme)
         if hasattr(self, "btn_spin_all"):
             style_helpers.style_primary_button(self.btn_spin_all, theme)
         if hasattr(self, "spin_mode_toggle"):
@@ -1406,9 +1467,11 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             has_candidates = bool(self.map_ui.combined_names() if hasattr(self, "map_ui") else [])
             self.btn_spin_all.setEnabled(any_selected and has_candidates and self.pending == 0)
         elif self.open_queue.is_mode_active():
-            slots = self.open_queue.slots()
+            self.open_queue.apply_slider_combination()
+            slot_plan = self.open_queue.slot_plan()
+            slots = sum(slots for _role, _wheel, slots in slot_plan)
             open_names = self.open_queue.names()
-            has_candidates = slots > 0 and len(open_names) >= slots
+            has_candidates = bool(slot_plan) and slots > 0 and len(open_names) >= slots
             self.btn_spin_all.setEnabled(has_candidates and self.pending == 0)
         else:
             # Nur aktiv, wenn allgemein erlaubt UND mindestens ein Rad ausgewählt
@@ -1425,14 +1488,36 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             return
         allowed = self.open_queue.spin_mode_allowed()
         self.spin_mode_toggle.setVisible(allowed)
+        show_open_controls = bool(allowed and self.open_queue.is_mode_active())
+        if hasattr(self, "lbl_open_count"):
+            self.lbl_open_count.setVisible(show_open_controls)
+        if hasattr(self, "open_count_slider"):
+            self.open_count_slider.setVisible(show_open_controls)
+        if hasattr(self, "lbl_open_count_value"):
+            self.lbl_open_count_value.setVisible(show_open_controls)
         if not allowed:
             self.spin_mode_toggle.setEnabled(False)
+            if hasattr(self, "open_count_slider"):
+                self.open_count_slider.setEnabled(False)
             return
-        self.spin_mode_toggle.setEnabled(self.pending == 0)
-        slots = self.open_queue.slots()
+        enabled = self.pending == 0
+        self.spin_mode_toggle.setEnabled(enabled)
+        max_allowed = max(1, int(self.open_queue.max_slots_capacity()))
+        requested = self.open_queue.player_count(max_allowed=max_allowed)
+        self.open_queue.set_player_count(requested, max_allowed=max_allowed)
+        if hasattr(self, "open_count_slider"):
+            if int(self.open_count_slider.maximum()) != int(max_allowed):
+                self.open_count_slider.setMaximum(int(max_allowed))
+            if int(self.open_count_slider.value()) != int(requested):
+                blocker = QtCore.QSignalBlocker(self.open_count_slider)
+                self.open_count_slider.setValue(int(requested))
+                del blocker
+            self.open_count_slider.setEnabled(bool(enabled and show_open_controls))
+        if hasattr(self, "lbl_open_count_value"):
+            self.lbl_open_count_value.setText(str(requested))
         self.spin_mode_toggle.set_texts(
             i18n.t("controls.spin_mode_role"),
-            i18n.t("controls.spin_mode_open", count=slots),
+            i18n.t("controls.spin_mode_open", count=requested),
         )
 
     def _mode_key(self) -> str:
@@ -1858,6 +1943,13 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self.btn_cancel_spin.setToolTip(i18n.t("controls.cancel_spin_tooltip"))
         self.lbl_anim_duration.setText(i18n.t("controls.anim_duration"))
         self.duration.setToolTip(i18n.t("controls.anim_duration_tooltip"))
+        if hasattr(self, "lbl_open_count"):
+            self.lbl_open_count.setText(i18n.t("controls.open_count_label"))
+            self.lbl_open_count.setToolTip(i18n.t("controls.open_count_tooltip"))
+        if hasattr(self, "open_count_slider"):
+            self.open_count_slider.setToolTip(i18n.t("controls.open_count_tooltip"))
+        if hasattr(self, "lbl_open_count_value"):
+            self.lbl_open_count_value.setToolTip(i18n.t("controls.open_count_tooltip"))
         if hasattr(self, "btn_all_players"):
             self.btn_all_players.setText(i18n.t("players.list_button"))
             self.btn_all_players.setToolTip(i18n.t("players.list_button_tooltip"))

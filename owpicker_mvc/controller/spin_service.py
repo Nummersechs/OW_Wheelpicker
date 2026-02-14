@@ -119,6 +119,39 @@ def _build_candidates_for_wheel(
     return _labels_to_candidates(labels)
 
 
+def _build_candidates_for_wheel_with_mode(
+    wheel,
+    entries: list[dict],
+    *,
+    pair_mode: bool,
+    use_subroles: bool,
+    include_disabled: bool,
+    drop_disabled_labels: bool,
+) -> list[tuple[str, list[str]]]:
+    state = getattr(wheel, "_wheel_state", None)
+    if state is None:
+        return _build_candidates_for_wheel(
+            wheel,
+            entries,
+            include_disabled=include_disabled,
+            drop_disabled_labels=drop_disabled_labels,
+        )
+    prev_pair_mode = bool(getattr(state, "pair_mode", False))
+    prev_use_subroles = bool(getattr(state, "use_subrole_filter", False))
+    try:
+        state.pair_mode = bool(pair_mode)
+        state.use_subrole_filter = bool(use_subroles)
+        return _build_candidates_for_wheel(
+            wheel,
+            entries,
+            include_disabled=include_disabled,
+            drop_disabled_labels=drop_disabled_labels,
+        )
+    finally:
+        state.pair_mode = prev_pair_mode
+        state.use_subrole_filter = prev_use_subroles
+
+
 def _plan_assignments(mw, all_candidates_per_role: list[list[tuple[str, list[str]]]]) -> list[str | None] | None:
     if all(not cands for cands in all_candidates_per_role):
         _show_roles_prompt(mw)
@@ -189,37 +222,56 @@ def spin_open_queue(mw):
         return
     mw._result_sent_this_spin = False
 
-    active = _active_role_wheels(mw)
-    if not active:
+    all_role_wheels = role_wheels(mw)
+    if not all_role_wheels:
+        return
+
+    mw.open_queue.apply_slider_combination()
+    slot_plan = mw.open_queue.slot_plan()
+    if not slot_plan:
+        _show_not_enough(mw)
+        return
+    used_plan = [(role, wheel, slots) for role, wheel, slots in slot_plan if slots > 0]
+    total_slots = sum(slots for _role, _wheel, slots in used_plan)
+    if not used_plan or total_slots <= 0:
+        _show_not_enough(mw)
         return
 
     combined_names: list[str] = []
     seen: set[str] = set()
-    for _role, wheel in active:
+    for _role, wheel, _slots in used_plan:
         for entry in wheel._active_entries():
             name = entry.get("name", "").strip()
             if name and name not in seen:
                 seen.add(name)
                 combined_names.append(name)
 
-    total_slots = sum(2 if wheel.pair_mode else 1 for _role, wheel in active)
     if not combined_names or total_slots <= 0 or len(combined_names) < total_slots:
         _show_not_enough(mw)
         return
 
     all_candidates_per_role = []
     entries_by_wheel: dict = {}
+    mode_overrides_by_wheel: dict = {}
     missing_roles = False
-    for _role, wheel in active:
+    for _role, wheel, slots in used_plan:
         subroles: list[str] = []
         if getattr(wheel, "use_subrole_filter", False) and len(getattr(wheel, "subrole_labels", [])) >= 2:
             subroles = list(wheel.subrole_labels[:2])
         entries = [{"name": n, "subroles": list(subroles), "active": True} for n in combined_names]
         entries_by_wheel[wheel] = entries
+        pair_mode = slots >= 2
+        use_subroles = bool(pair_mode and getattr(wheel, "use_subrole_filter", False))
+        mode_overrides_by_wheel[wheel] = {
+            "pair_mode": pair_mode,
+            "use_subroles": use_subroles,
+        }
 
-        candidates = _build_candidates_for_wheel(
+        candidates = _build_candidates_for_wheel_with_mode(
             wheel,
             entries,
+            pair_mode=pair_mode,
+            use_subroles=use_subroles,
             include_disabled=True,
             drop_disabled_labels=True,
         )
@@ -239,9 +291,16 @@ def spin_open_queue(mw):
     if assigned_for_role is None:
         return
 
-    _begin_spin_run(mw, active)
-    mw.open_queue.begin_spin_override(entries_by_wheel)
-    _run_assigned_spin(mw, active, assigned_for_role)
+    _begin_spin_run(mw, all_role_wheels)
+    mw.open_queue.begin_spin_override(
+        entries_by_wheel,
+        mode_overrides=mode_overrides_by_wheel,
+    )
+    _run_assigned_spin(
+        mw,
+        [(role, wheel) for role, wheel, _slots in used_plan],
+        assigned_for_role,
+    )
 
     if mw.pending == 0:
         mw.sound.stop_spin()

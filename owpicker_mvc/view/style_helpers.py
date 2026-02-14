@@ -11,6 +11,7 @@ _SUCCESS_BUTTON_STYLE_CACHE: dict[str, str] = {}
 _WARNING_BUTTON_STYLE_CACHE: dict[str, str] = {}
 _NAMES_LIST_STYLE_CACHE: dict[str, str] = {}
 _MODE_BUTTON_STYLE_CACHE: dict[str, str] = {}
+_HORIZONTAL_SLIDER_STYLE_CACHE: dict[str, str] = {}
 
 
 def set_stylesheet_if_needed(widget: QtWidgets.QWidget, style_key: str, style: str) -> None:
@@ -173,6 +174,35 @@ def _mode_button_style(theme: theme_util.Theme) -> str:
     return cached
 
 
+def _horizontal_slider_style(theme: theme_util.Theme) -> str:
+    cached = _HORIZONTAL_SLIDER_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    if theme.key == "light":
+        # Only darken the rail (groove) for better visibility in light mode.
+        groove_bg = "#c4cad5"
+        groove_border = "#9ea6b4"
+    else:
+        groove_bg = theme.slider_groove
+        groove_border = theme.border
+    cached = (
+        "QSlider::groove:horizontal {"
+        f" height:8px; border:1px solid {groove_border}; border-radius:4px; background:{groove_bg};"
+        "}"
+        "QSlider::handle:horizontal {"
+        f" width:14px; margin:-5px 0; border:1px solid {theme.primary_hover}; border-radius:7px; background:{theme.slider_handle};"
+        "}"
+        "QSlider::handle:horizontal:hover {"
+        f" background:{theme.primary_hover};"
+        "}"
+        "QSlider::handle:horizontal:pressed {"
+        f" background:{theme.primary_pressed};"
+        "}"
+    )
+    _HORIZONTAL_SLIDER_STYLE_CACHE[theme.key] = cached
+    return cached
+
+
 def style_primary_button(btn: QtWidgets.QPushButton, theme: theme_util.Theme) -> None:
     if not btn:
         return
@@ -213,3 +243,9 @@ def style_mode_button(btn: QtWidgets.QPushButton, theme: theme_util.Theme) -> No
     if not btn:
         return
     set_stylesheet_if_needed(btn, f"mode:{theme.key}", _mode_button_style(theme))
+
+
+def style_horizontal_slider(slider: QtWidgets.QSlider, theme: theme_util.Theme) -> None:
+    if not slider:
+        return
+    set_stylesheet_if_needed(slider, f"slider_h:{theme.key}", _horizontal_slider_style(theme))
