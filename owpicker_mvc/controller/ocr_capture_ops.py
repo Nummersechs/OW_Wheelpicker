@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 import sys
 import tempfile
@@ -11,13 +10,24 @@ from PySide6 import QtCore, QtGui, QtWidgets
 import i18n
 from utils import qt_runtime
 
+try:
+    from controller import ocr_import as _ocr_import
+except Exception:
+    from . import ocr_import as _ocr_import
+
+try:
+    from view import screen_region_selector as _screen_selector
+except Exception:
+    # Backward-compatibility for legacy typo-based import path.
+    from view import screen_redion_selector as _screen_selector
+
 
 def _ocr_import_module():
-    return importlib.import_module(".ocr_import", package=__package__)
+    return _ocr_import
 
 
 def _screen_selector_module():
-    return importlib.import_module("view.screen_region_selector")
+    return _screen_selector
 
 
 def select_region_from_primary_screen(*args, **kwargs):
@@ -419,6 +429,21 @@ class _OCRExtractWorker(QtCore.QObject):
         self.finished.emit(names, raw_text, error)
 
 
+class _OCRResultRelay(QtCore.QObject):
+    """Relay worker results into the GUI thread."""
+
+    result = QtCore.Signal(list, str, object)
+    error = QtCore.Signal(str)
+
+    @QtCore.Slot(list, str, object)
+    def forward_result(self, names: list[str], raw_text: str, ocr_error: object) -> None:
+        self.result.emit(names, raw_text, ocr_error)
+
+    @QtCore.Slot(str)
+    def forward_error(self, reason: str) -> None:
+        self.error.emit(reason)
+
+
 def _resolve_tesseract_cmd_cached(mw, configured_cmd: str) -> str | None:
     cache = getattr(mw, "_ocr_tesseract_cmd_cache", None)
     if not isinstance(cache, dict):
@@ -526,9 +551,11 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
         thread = QtCore.QThread(mw)
         worker = _OCRExtractWorker(temp_paths, resolved_tesseract_cmd, runtime_cfg)
         worker.moveToThread(thread)
+        relay = _OCRResultRelay(mw)
         job = {
             "thread": thread,
             "worker": worker,
+            "relay": relay,
             "paths": list(temp_paths),
             "role": role,
         }
@@ -542,17 +569,8 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
             _cleanup_temp_paths(list(job.get("paths") or []))
             _restore_override_cursor()
             try:
-                if thread.isRunning():
+                if thread.isRunning() and QtCore.QThread.currentThread() is not thread:
                     thread.quit()
-                    thread.wait(1000)
-            except Exception:
-                pass
-            try:
-                worker.deleteLater()
-            except Exception:
-                pass
-            try:
-                thread.deleteLater()
             except Exception:
                 pass
             mw._update_role_ocr_buttons_enabled()
@@ -612,9 +630,15 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
                 i18n.t("ocr.error_run_failed", reason=str(reason or "worker-error")),
             )
 
-        worker.finished.connect(_handle_result)
-        worker.failed.connect(_handle_worker_error)
+        # Always deliver worker results back to the GUI thread.
+        worker.finished.connect(relay.forward_result, QtCore.Qt.QueuedConnection)
+        worker.failed.connect(relay.forward_error, QtCore.Qt.QueuedConnection)
+        relay.result.connect(_handle_result)
+        relay.error.connect(_handle_worker_error)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
         thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         thread.start()

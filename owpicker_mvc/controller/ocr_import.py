@@ -335,10 +335,31 @@ def run_tesseract(
     ])
     env = os.environ.copy()
     try:
-        cmd_dir = str(Path(cmd_path).resolve().parent)
+        cmd_path_obj = Path(cmd_path).resolve()
+        cmd_dir = cmd_path_obj.parent
+        path_candidates: list[str] = [str(cmd_dir)]
+        # Some OCR bundles place dependent DLLs in parent/lib-like folders.
+        # Prepending these improves CreateProcess robustness on Windows.
+        parent_dir = cmd_dir.parent
+        if parent_dir != cmd_dir:
+            path_candidates.append(str(parent_dir))
+        if tessdata_dir:
+            tess_parent = Path(tessdata_dir).resolve().parent
+            path_candidates.append(str(tess_parent))
         existing_path = env.get("PATH", "")
-        if cmd_dir and cmd_dir not in existing_path.split(os.pathsep):
-            env["PATH"] = cmd_dir + os.pathsep + existing_path if existing_path else cmd_dir
+        existing_parts = [part for part in existing_path.split(os.pathsep) if part]
+        seen_parts = {part.lower() for part in existing_parts}
+        merged_prefix: list[str] = []
+        for candidate in path_candidates:
+            if not candidate:
+                continue
+            key = candidate.lower()
+            if key in seen_parts:
+                continue
+            seen_parts.add(key)
+            merged_prefix.append(candidate)
+        if merged_prefix:
+            env["PATH"] = os.pathsep.join(merged_prefix + existing_parts)
     except Exception:
         pass
     try:

@@ -50,8 +50,20 @@ def rebuild_entries_cache(list_widget) -> dict[str, list]:
 
 
 def apply_subrole_visibility(list_widget, visible: bool) -> None:
+    target_visible = bool(visible)
     for i in range(list_widget.count()):
         widget = list_widget.itemWidget(list_widget.item(i))
         if isinstance(widget, NameRowWidget):
+            group = getattr(widget, "_subrole_group", None)
+            if isinstance(group, QtWidgets.QWidget):
+                group.setVisible(target_visible)
             for cb in widget.subrole_checks:
-                cb.setVisible(bool(visible))
+                cb.setVisible(target_visible)
+            layout = widget.layout()
+            if isinstance(layout, QtWidgets.QLayout):
+                layout.invalidate()
+            widget.updateGeometry()
+    try:
+        list_widget.doItemsLayout()
+    except Exception:
+        pass

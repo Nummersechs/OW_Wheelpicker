@@ -50,7 +50,7 @@ If you want OCR to work in the Windows EXE without requiring users to install Te
    - `OW_DIST_MODE=onedir` (default on Windows): faster app startup, folder output.
    - `OW_DIST_MODE=onefile`: single EXE, slower startup (self-extract at launch).
 5. `OW_INCLUDE_REQUESTS` is optional and defaults to `0` (smaller/faster build). Set it to `1` only if you need online sync.
-6. For smaller release builds, use `OW_BUILD_PROFILE=release` (strip defaults to on) or explicitly set `OW_STRIP=1`.
+6. For smaller release builds, use `OW_BUILD_PROFILE=release`. On Windows, keep `OW_STRIP=0` unless you have a working `strip` tool installed.
 7. Verify build output contains lines like:
    - `[spec] OCR bundle files: ...`
    - `[spec] OCR languages: deu.traineddata, eng.traineddata`

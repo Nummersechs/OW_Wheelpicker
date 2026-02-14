@@ -283,6 +283,21 @@ class ResultOverlay(QtWidgets.QWidget):
         names_list.subrole_labels = normalized
         names_list.has_subroles = bool(normalized)
 
+    def _apply_ocr_picker_compact_layout(self) -> None:
+        names_list = self.ocr_names_panel.names
+        # Keep OCR rows compact: shorter name field + tighter per-row height.
+        row_height = 18
+        edit_height = 16
+        name_max_width = 164 if names_list.has_subroles else 188
+        names_list.set_row_visual_profile(
+            row_height=row_height,
+            name_edit_height=edit_height,
+            name_min_width_with_subroles=min(name_max_width, 164),
+            name_min_width_without_subroles=min(name_max_width, 188),
+            name_max_width=name_max_width,
+            read_only=True,
+        )
+
     @staticmethod
     def _ocr_picker_hint_text(hint_key: str, hint_kwargs: dict | None, count: int) -> str:
         payload = {"count": max(0, int(count))}
@@ -331,6 +346,7 @@ class ResultOverlay(QtWidgets.QWidget):
                 if isinstance(edit, QtWidgets.QLineEdit):
                     edit.setReadOnly(True)
                     edit.setFocusPolicy(QtCore.Qt.NoFocus)
+            self._apply_ocr_picker_compact_layout()
         finally:
             del blockers
         self.ocr_names_panel.refresh_action_state()
@@ -456,6 +472,8 @@ class ResultOverlay(QtWidgets.QWidget):
         if tool_style:
             self.btn_language.setStyleSheet(tool_style)
         self.ocr_names_panel.apply_theme(theme)
+        style_helpers.style_primary_button(self.btn_online, theme)
+        style_helpers.style_primary_button(self.btn_offline, theme)
         style_helpers.style_primary_button(self.btn_delete_cancel, theme)
         style_helpers.style_danger_button(self.btn_delete_confirm, theme)
         style_helpers.style_danger_button(self.btn_ocr_cancel, theme)

@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
+import shutil
 from pathlib import Path
 
 
@@ -36,7 +37,10 @@ if DIST_MODE not in {"onefile", "onedir"}:
         "OW_DIST_MODE must be one of: onefile, onedir "
         f"(got: {DIST_MODE!r})"
     )
-STRIP_BINARIES = _env_flag("OW_STRIP", RELEASE_BUILD or MIN_SIZE_BUILD)
+STRIP_BINARIES = _env_flag("OW_STRIP", (RELEASE_BUILD or MIN_SIZE_BUILD) and os.name != "nt")
+if STRIP_BINARIES and shutil.which("strip") is None:
+    print("[spec] strip requested but no 'strip' tool was found; disabling strip.")
+    STRIP_BINARIES = False
 # UPX helps size but slows startup due decompression; prefer fast startup for onedir builds.
 ENABLE_UPX = _env_flag("OW_UPX", DIST_MODE == "onefile")
 INCLUDE_QT_MULTIMEDIA = not MIN_SIZE_BUILD
@@ -266,10 +270,14 @@ def _collect_minimal_ocr_datas(
 
     _add_file(exe_path, "OCR")
     if os.name == "nt":
-        for dll in sorted(runtime_dir.rglob("*.dll")):
+        # Include all runtime DLLs from the full OCR source tree and flatten
+        # them next to tesseract.exe. On some Windows bundles, dependent DLLs
+        # can live outside the exe folder (e.g. sibling lib dirs) and would
+        # otherwise fail at process start with WinError 2.
+        for dll in sorted(source_dir.rglob("*.dll")):
             if "tessdata" in {part.lower() for part in dll.parts}:
                 continue
-            _add_file(dll, _target_dir_for_relative(runtime_dir, dll, "OCR"))
+            _add_file(dll, "OCR")
     else:
         for pattern in ("*.so", "*.so.*", "*.dylib"):
             for lib in sorted(runtime_dir.rglob(pattern)):
@@ -351,6 +359,9 @@ print(
 )
 
 hiddenimports = [
+    "controller.ocr_import",
+    "view.screen_region_selector",
+    "view.screen_redion_selector",
     *(
         [
             "PySide6.QtMultimedia",

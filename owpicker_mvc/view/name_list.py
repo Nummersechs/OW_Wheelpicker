@@ -12,6 +12,7 @@ DELETE_MARK_ROW_RIGHT_MARGIN = 0
 NAME_LIST_ROW_HEIGHT = 20
 NAME_EDIT_HEIGHT = 18
 SUBROLE_CHECK_SPACING = 8
+NAME_EDIT_MAX_WIDTH_WITH_SUBROLES = 188
 _DELETE_MARKED_STYLE_CACHE: dict[str, str] = {}
 
 
@@ -44,7 +45,14 @@ class _NoPaintDelegate(QtWidgets.QStyledItemDelegate):
 
     def sizeHint(self, option, index):
         del index
-        return QtCore.QSize(max(1, int(option.rect.width())), NAME_LIST_ROW_HEIGHT)
+        height = NAME_LIST_ROW_HEIGHT
+        owner = self.parent()
+        if owner is not None:
+            try:
+                height = max(1, int(getattr(owner, "_row_height", NAME_LIST_ROW_HEIGHT)))
+            except Exception:
+                height = NAME_LIST_ROW_HEIGHT
+        return QtCore.QSize(max(1, int(option.rect.width())), height)
 
 
 class NameLineEdit(QtWidgets.QLineEdit):
@@ -96,6 +104,15 @@ class NamesList(QtWidgets.QListWidget):
         self._auto_focus_requires_active = False
         self._viewport_right_margin = -1
         self._syncing_viewport_margin = False
+        self._row_height = NAME_LIST_ROW_HEIGHT
+        self._name_edit_height = NAME_EDIT_HEIGHT
+        self._name_min_width_with_subroles = 188
+        self._name_min_width_without_subroles = 196
+        # Keep subrole rows compact and stable even after list rebuild/sort.
+        self._name_max_width: int | None = (
+            NAME_EDIT_MAX_WIDTH_WITH_SUBROLES if self.has_subroles else None
+        )
+        self._name_rows_read_only = False
         self.setFocusPolicy(QtCore.Qt.NoFocus)
         self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
@@ -117,7 +134,6 @@ class NamesList(QtWidgets.QListWidget):
         sb = self.verticalScrollBar()
         if sb is not None:
             sb.rangeChanged.connect(self._sync_viewport_right_padding)
-            sb.installEventFilter(self)
         QtCore.QTimer.singleShot(0, self._sync_viewport_right_padding)
 
     def _scrollbar_extent(self, sb: QtWidgets.QScrollBar | None = None) -> int:
@@ -149,19 +165,17 @@ class NamesList(QtWidgets.QListWidget):
         finally:
             self._syncing_viewport_margin = False
 
-    def eventFilter(self, obj: QtCore.QObject, ev: QtCore.QEvent) -> bool:
-        sb = self.verticalScrollBar()
-        if obj is sb and ev.type() in (
-            QtCore.QEvent.Show,
-            QtCore.QEvent.Hide,
-            QtCore.QEvent.Resize,
-            QtCore.QEvent.StyleChange,
-        ):
-            QtCore.QTimer.singleShot(0, self._sync_viewport_right_padding)
-        return super().eventFilter(obj, ev)
-
     def resizeEvent(self, ev: QtGui.QResizeEvent) -> None:
         super().resizeEvent(ev)
+        QtCore.QTimer.singleShot(0, self._sync_viewport_right_padding)
+
+    def showEvent(self, ev: QtGui.QShowEvent) -> None:
+        super().showEvent(ev)
+        try:
+            self.doItemsLayout()
+        except Exception:
+            pass
+        self._sync_viewport_right_padding()
         QtCore.QTimer.singleShot(0, self._sync_viewport_right_padding)
 
     def wheelEvent(self, ev: QtGui.QWheelEvent):
@@ -190,7 +204,7 @@ class NamesList(QtWidgets.QListWidget):
     def _new_item(self, text: str = "", subroles: Optional[List[str]] = None, active: Optional[bool] = None) -> QtWidgets.QListWidgetItem:
         item = QtWidgets.QListWidgetItem(text)
         item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsEditable)
-        item.setSizeHint(QtCore.QSize(0, NAME_LIST_ROW_HEIGHT))
+        item.setSizeHint(QtCore.QSize(0, max(1, int(self._row_height))))
         if active is not None:
             item.setCheckState(QtCore.Qt.Checked if active else QtCore.Qt.Unchecked)
         elif text.strip():
@@ -204,6 +218,68 @@ class NamesList(QtWidgets.QListWidget):
     def _attach_row_widget(self, item: QtWidgets.QListWidgetItem):
         widget = NameRowWidget(self, item, self.subrole_labels)
         self.setItemWidget(item, widget)
+        self._apply_row_visual_profile(item, widget)
+
+    def _apply_row_visual_profile(
+        self,
+        item: QtWidgets.QListWidgetItem,
+        widget: QtWidgets.QWidget | None = None,
+    ) -> None:
+        if item is None:
+            return
+        item.setSizeHint(QtCore.QSize(0, max(1, int(self._row_height))))
+        row_widget = widget if widget is not None else self.itemWidget(item)
+        if not isinstance(row_widget, NameRowWidget):
+            return
+        row_widget.edit.setFixedHeight(max(1, int(self._name_edit_height)))
+        min_width = (
+            int(self._name_min_width_with_subroles)
+            if bool(self.has_subroles)
+            else int(self._name_min_width_without_subroles)
+        )
+        row_widget.edit.setMinimumWidth(max(1, min_width))
+        if isinstance(self._name_max_width, int) and self._name_max_width > 0:
+            row_widget.edit.setMaximumWidth(self._name_max_width)
+        else:
+            row_widget.edit.setMaximumWidth(16777215)
+        if self._name_rows_read_only:
+            row_widget.edit.setReadOnly(True)
+            row_widget.edit.setFocusPolicy(QtCore.Qt.NoFocus)
+        else:
+            row_widget.edit.setReadOnly(False)
+            row_widget.edit.setFocusPolicy(QtCore.Qt.ClickFocus)
+
+    def _apply_visual_profile_to_all_rows(self) -> None:
+        for i in range(self.count()):
+            item = self.item(i)
+            if item is None:
+                continue
+            self._apply_row_visual_profile(item)
+
+    def set_row_visual_profile(
+        self,
+        *,
+        row_height: int | None = None,
+        name_edit_height: int | None = None,
+        name_min_width_with_subroles: int | None = None,
+        name_min_width_without_subroles: int | None = None,
+        name_max_width: int | None = None,
+        read_only: bool | None = None,
+    ) -> None:
+        if row_height is not None:
+            self._row_height = max(1, int(row_height))
+        if name_edit_height is not None:
+            self._name_edit_height = max(1, int(name_edit_height))
+        if name_min_width_with_subroles is not None:
+            self._name_min_width_with_subroles = max(1, int(name_min_width_with_subroles))
+        if name_min_width_without_subroles is not None:
+            self._name_min_width_without_subroles = max(1, int(name_min_width_without_subroles))
+        self._name_max_width = None if name_max_width is None else max(1, int(name_max_width))
+        if read_only is not None:
+            self._name_rows_read_only = bool(read_only)
+        self._apply_visual_profile_to_all_rows()
+        self.doItemsLayout()
+        QtCore.QTimer.singleShot(0, self._sync_viewport_right_padding)
 
     def _detach_row_widget(self, item: QtWidgets.QListWidgetItem) -> None:
         widget = self.itemWidget(item)
@@ -213,24 +289,48 @@ class NamesList(QtWidgets.QListWidget):
         self.removeItemWidget(item)
         widget.deleteLater()
 
-    def add_name(self, text: str = "", subroles: Optional[List[str]] = None, active: Optional[bool] = None):
+    def _create_name_row(
+        self,
+        text: str = "",
+        *,
+        subroles: Optional[List[str]] = None,
+        active: Optional[bool] = None,
+        marked_for_delete: bool = False,
+        row: int | None = None,
+        select_row: bool = True,
+        focus_if_empty: bool = True,
+    ) -> QtWidgets.QListWidgetItem:
         item = self._new_item(text, subroles=subroles, active=active)
-        self.addItem(item)
+        item.setData(self.MARK_FOR_DELETE_ROLE, bool(marked_for_delete))
+        if row is None:
+            self.addItem(item)
+        else:
+            safe_row = max(0, min(int(row), self.count()))
+            self.insertItem(safe_row, item)
         self._attach_row_widget(item)
-        self.setCurrentItem(item)
-        if not text:
+        if select_row:
+            self.setCurrentItem(item)
+        if focus_if_empty and not text:
             widget = self.itemWidget(item)
             if widget and self._allow_auto_focus():
                 widget.focus_name()
+        try:
+            self.doItemsLayout()
+        except Exception:
+            pass
+        self._sync_viewport_right_padding()
+        return item
+
+    def add_name(self, text: str = "", subroles: Optional[List[str]] = None, active: Optional[bool] = None):
+        self._create_name_row(text, subroles=subroles, active=active)
 
     def insert_name_at(self, row: int, text: str = ""):
-        item = self._new_item(text)
-        self.insertItem(row, item)
-        self._attach_row_widget(item)
-        self.setCurrentItem(item)
-        widget = self.itemWidget(item)
-        if widget and self._allow_auto_focus():
-            widget.focus_name()
+        self._create_name_row(
+            text,
+            row=row,
+            select_row=True,
+            focus_if_empty=True,
+        )
 
     def delete_row(self, row: int):
         if self.count() <= 1:
@@ -298,22 +398,36 @@ class NamesList(QtWidgets.QListWidget):
 
     def sort_alphabetically(self):
         """Sortiert die Liste A→Z (Case-insensitive), leere Namen ans Ende."""
-        entries = []
+        entries: list[tuple[str, bool, list[str], bool]] = []
+        subrole_checks_visible: bool | None = None
+        subrole_group_visible: bool | None = None
         for i in range(self.count()):
             item = self.item(i)
+            if item is None:
+                continue
+            widget = self.itemWidget(item)
+            if isinstance(widget, NameRowWidget) and widget.subrole_checks and subrole_checks_visible is None:
+                subrole_checks_visible = bool(widget.subrole_checks[0].isVisible())
+            if isinstance(widget, NameRowWidget) and subrole_group_visible is None:
+                group = getattr(widget, "_subrole_group", None)
+                if isinstance(group, QtWidgets.QWidget):
+                    subrole_group_visible = bool(group.isVisible())
+            text = widget.edit.text() if isinstance(widget, NameRowWidget) else item.text()
             entries.append(
                 (
-                    item.text(),
+                    str(text),
                     item.checkState() == QtCore.Qt.Checked,
-                    item.data(self.SUBROLE_ROLE) or [],
+                    list(item.data(self.SUBROLE_ROLE) or []),
+                    bool(item.data(self.MARK_FOR_DELETE_ROLE)),
                 )
             )
 
-        # Leere nach unten, ansonsten case-insensitive sortieren
-        entries.sort(key=lambda e: (not e[0].strip(), e[0].lower()))
+        entries.sort(key=lambda e: (not e[0].strip(), e[0].strip().casefold()))
 
-        # Bestehende Widgets sauber lösen, dann neu aufbauen
-        blockers = [QtCore.QSignalBlocker(self)]
+        prev_auto_focus_enabled = bool(self._auto_focus_enabled)
+        prev_auto_focus_requires_active = bool(self._auto_focus_requires_active)
+        self._auto_focus_enabled = False
+        blockers = [QtCore.QSignalBlocker(self), QtCore.QSignalBlocker(self.model())]
         try:
             while self.count():
                 old_item = self.item(0)
@@ -323,10 +437,42 @@ class NamesList(QtWidgets.QListWidget):
                 removed_item = self.takeItem(0)
                 if removed_item is not None:
                     del removed_item
-            for name, active, subroles in entries:
-                self.add_name(name, subroles=subroles, active=active)
+            for text, active, subroles, marked in entries:
+                # Reuse the same creation path as the initial list build.
+                self.add_name(text, subroles=subroles, active=active)
+                item = self.item(self.count() - 1)
+                if item is None:
+                    continue
+                item.setData(self.MARK_FOR_DELETE_ROLE, bool(marked))
+                row_widget = self.itemWidget(item)
+                if isinstance(row_widget, NameRowWidget):
+                    if row_widget.chk_mark_for_delete is not None:
+                        row_widget.chk_mark_for_delete.setChecked(bool(marked))
+                        # Keep delete marker control visible after rebuild/sort.
+                        row_widget.chk_mark_for_delete.setVisible(True)
+                        delete_cell = row_widget.chk_mark_for_delete.parentWidget()
+                        if isinstance(delete_cell, QtWidgets.QWidget):
+                            delete_cell.setVisible(True)
+                    if subrole_group_visible is not None:
+                        group = getattr(row_widget, "_subrole_group", None)
+                        if isinstance(group, QtWidgets.QWidget):
+                            group.setVisible(bool(subrole_group_visible))
+                    if subrole_checks_visible is not None and row_widget.subrole_checks:
+                        for cb in row_widget.subrole_checks:
+                            cb.setVisible(bool(subrole_checks_visible))
+                    row_layout = row_widget.layout()
+                    if isinstance(row_layout, QtWidgets.QLayout):
+                        row_layout.invalidate()
+                    row_widget.updateGeometry()
         finally:
+            self._auto_focus_enabled = prev_auto_focus_enabled
+            self._auto_focus_requires_active = prev_auto_focus_requires_active
             del blockers
+        try:
+            self.doItemsLayout()
+        except Exception:
+            pass
+        self._sync_viewport_right_padding()
         self.metaChanged.emit()
 
     def _show_context_menu(self, pos: QtCore.QPoint):
@@ -375,9 +521,15 @@ class NameRowWidget(QtWidgets.QWidget):
         self.edit = NameLineEdit()
         self.edit.setText(item.text())
         # Keep field flexible, but avoid forcing row overflow with subrole checkboxes.
-        min_name_width = 188 if subrole_labels else 196
+        if subrole_labels:
+            min_name_width = int(getattr(list_widget, "_name_min_width_with_subroles", 188))
+        else:
+            min_name_width = int(getattr(list_widget, "_name_min_width_without_subroles", 196))
         self.edit.setMinimumWidth(min_name_width)
-        self.edit.setFixedHeight(NAME_EDIT_HEIGHT)
+        max_name_width = getattr(list_widget, "_name_max_width", None)
+        if isinstance(max_name_width, int) and max_name_width > 0:
+            self.edit.setMaximumWidth(max_name_width)
+        self.edit.setFixedHeight(max(1, int(getattr(list_widget, "_name_edit_height", NAME_EDIT_HEIGHT))))
         self.edit.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
         self.edit.setFocusPolicy(QtCore.Qt.ClickFocus)
         self.edit.textChanged.connect(self._on_text_changed)

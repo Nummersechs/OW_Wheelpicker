@@ -169,7 +169,8 @@ def select_region_with_macos_screencapture(
     if output_path.exists():
         pix = QtGui.QPixmap(str(output_path))
         if not pix.isNull():
-            return pix, None
+            # Detach from file-backed data before caller removes the temp file.
+            return pix.copy(), None
         return None, "capture-invalid-image"
 
     if completed.returncode != 0:
@@ -187,4 +188,5 @@ def select_region_with_macos_screencapture(
     pix = QtGui.QPixmap(str(output_path))
     if pix.isNull():
         return None, "capture-invalid-image"
-    return pix, None
+    # Detach from file-backed data before caller removes the temp file.
+    return pix.copy(), None

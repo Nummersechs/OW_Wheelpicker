@@ -183,6 +183,35 @@ class TestNamesListPanel(unittest.TestCase):
         self.assertFalse(panel.btn_delete_marked.isVisible())
         panel.close()
 
+    def test_sort_keeps_name_field_width_stable_for_subrole_rows(self):
+        panel = NamesListPanel(subrole_labels=["Tank", "DPS", "Support", "Main", "Flex"])
+        self._add_names(panel, [f"Player{i:02d}" for i in range(14)])
+        panel.resize(340, 380)
+        panel.show()
+        QtWidgets.QApplication.processEvents()
+
+        first_item_before = panel.names.item(0)
+        first_widget_before = panel.names.itemWidget(first_item_before)
+        self.assertIsInstance(first_widget_before, NameRowWidget)
+        self.assertIsNotNone(first_widget_before.chk_mark_for_delete)
+        self.assertTrue(first_widget_before.chk_mark_for_delete.isVisible())
+        self.assertTrue(first_widget_before.chk_mark_for_delete.parentWidget().isVisible())
+        width_before = first_widget_before.edit.width()
+
+        panel.names.sort_alphabetically()
+        QtWidgets.QApplication.processEvents()
+
+        first_item_after = panel.names.item(0)
+        first_widget_after = panel.names.itemWidget(first_item_after)
+        self.assertIsInstance(first_widget_after, NameRowWidget)
+        self.assertIsNotNone(first_widget_after.chk_mark_for_delete)
+        self.assertTrue(first_widget_after.chk_mark_for_delete.isVisible())
+        self.assertTrue(first_widget_after.chk_mark_for_delete.parentWidget().isVisible())
+        width_after = first_widget_after.edit.width()
+
+        self.assertEqual(width_after, width_before)
+        panel.close()
+
 
 if __name__ == "__main__":
     unittest.main()
