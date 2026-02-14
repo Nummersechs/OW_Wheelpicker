@@ -22,7 +22,7 @@ TRANSLATIONS_EN = {
     "controls.spin_all_tooltip": "Start a global spin with the selected spin mode.",
     "controls.spin_mode_role": "Role",
     "controls.spin_mode_open": "Open {count}",
-    "controls.spin_mode_tooltip": "Spin mode: Role spins selected role wheels; Open spins one combined open-queue wheel.",
+    "controls.spin_mode_tooltip": "Spin mode: Role uses each selected role wheel with its own list. Open still spins the selected role wheels, but from one shared name pool (requires at least the shown Open count of names).",
     "controls.anim_duration": "Animation duration:",
     "controls.anim_duration_tooltip": "Animation duration (ms)",
     "controls.cancel_spin": "✖ Cancel",

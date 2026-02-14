@@ -22,7 +22,7 @@ TRANSLATIONS_DE = {
     "controls.spin_all_tooltip": "Globalen Spin mit dem gewählten Spin-Modus starten.",
     "controls.spin_mode_role": "Role",
     "controls.spin_mode_open": "Open {count}",
-    "controls.spin_mode_tooltip": "Spin-Modus: Role dreht die ausgewählten Rollenräder; Open dreht ein gemeinsames Open-Queue-Rad.",
+    "controls.spin_mode_tooltip": "Spin-Modus: Role nutzt pro Rollenrad dessen eigene Liste. Open dreht weiterhin die ausgewählten Rollenräder, aber mit einem gemeinsamen Namenspool (benötigt mindestens die Open-Anzahl an Namen).",
     "controls.anim_duration": "Animationsdauer:",
     "controls.anim_duration_tooltip": "Dauer der Animation (ms)",
     "controls.cancel_spin": "✖ Abbrechen",
