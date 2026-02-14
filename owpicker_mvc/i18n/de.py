@@ -22,6 +22,7 @@ TRANSLATIONS_DE = {
     "controls.spin_all_tooltip": "Globalen Spin mit dem gewählten Spin-Modus starten.",
     "controls.spin_mode_role": "Role",
     "controls.spin_mode_open": "Open {count}",
+    "controls.spin_mode_tooltip": "Spin-Modus: Role dreht die ausgewählten Rollenräder; Open dreht ein gemeinsames Open-Queue-Rad.",
     "controls.anim_duration": "Animationsdauer:",
     "controls.anim_duration_tooltip": "Dauer der Animation (ms)",
     "controls.cancel_spin": "✖ Abbrechen",
@@ -88,6 +89,7 @@ TRANSLATIONS_DE = {
     "wheel.spin_single_map": "🔁 Diese Map drehen",
     "wheel.spin_button_tooltip": "Dieses Rad drehen.",
     "wheel.show_names": "Namen anzeigen",
+    "wheel.show_names_tooltip": "Namen auf den Segmenten ein- oder ausblenden.",
     "wheel.pairs_toggle": "Paare bilden",
     "wheel.subroles_toggle": "Subrollen",
     "wheel.subroles_hint_generic": "Paare nur mit Subrollen bilden",
@@ -112,6 +114,7 @@ TRANSLATIONS_DE = {
     # Name list
     "names.context_new": "Neuer Name",
     "names.context_delete": "Ausgewählte löschen",
+    "names.active_tooltip": "Diesen Namen im Rad verwenden. Haken entfernen zum Ausschließen.",
     "names.subrole_tooltip": "Subrolle {label}",
     "names.mark_for_delete_tooltip": "Diesen Namen für Sammellöschen markieren",
     "names.delete_marked_tooltip": "Markierte Namen löschen",

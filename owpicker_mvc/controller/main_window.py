@@ -660,6 +660,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self.btn_spin_all.setToolTip(i18n.t("controls.spin_all_tooltip"))
         self.btn_spin_all.clicked.connect(self.spin_all)
         self.spin_mode_toggle = SpinModeToggle()
+        self.spin_mode_toggle.setToolTip(i18n.t("controls.spin_mode_tooltip"))
         self.spin_mode_toggle.valueChanged.connect(self._update_spin_all_enabled)
         controls.addStretch(1)
         self.lbl_anim_duration = QtWidgets.QLabel(i18n.t("controls.anim_duration"))
@@ -1851,6 +1852,8 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self.volume_slider.setToolTip(i18n.t("volume.slider_tooltip"))
         self.btn_spin_all.setText(i18n.t("controls.spin_all"))
         self.btn_spin_all.setToolTip(i18n.t("controls.spin_all_tooltip"))
+        if hasattr(self, "spin_mode_toggle"):
+            self.spin_mode_toggle.setToolTip(i18n.t("controls.spin_mode_tooltip"))
         self.btn_cancel_spin.setText(i18n.t("controls.cancel_spin"))
         self.btn_cancel_spin.setToolTip(i18n.t("controls.cancel_spin_tooltip"))
         self.lbl_anim_duration.setText(i18n.t("controls.anim_duration"))

@@ -4,11 +4,13 @@ from PySide6 import QtCore, QtWidgets
 
 import i18n
 from utils import qt_runtime, theme as theme_util
-from view.name_list import NamesListPanel
+from view.name_list import NameRowWidget, NamesListPanel
 
 
 class PlayerListPanelController(QtCore.QObject):
     """Popup panel to edit the combined player list across roles."""
+    _ROLE_MEMBERSHIP_ROLE = QtCore.Qt.UserRole + 30
+    _ORIGINAL_NAME_ROLE = QtCore.Qt.UserRole + 31
 
     def __init__(self, main_window, button: QtWidgets.QPushButton) -> None:
         super().__init__(main_window)
@@ -36,11 +38,12 @@ class PlayerListPanelController(QtCore.QObject):
             self._button.setEnabled(False)
             self.hide_panel()
             return
-        has_names = bool(self._name_stats())
-        self._button.setEnabled(has_names and self._mw.pending == 0)
+        # Keep this entry point always available in player mode so users can
+        # add new names even when role lists are currently empty.
+        self._button.setEnabled(True)
 
     def toggle_panel(self) -> None:
-        if not self.allowed() or not self._name_stats():
+        if not self.allowed():
             return
         self._ensure_panel()
         if self._panel and self._panel.isVisible():
@@ -152,6 +155,45 @@ class PlayerListPanelController(QtCore.QObject):
         if self._names_panel:
             self._names_panel.set_language(lang)
 
+    def _role_targets(self) -> tuple[tuple[str, object], ...]:
+        return (
+            ("Tank", getattr(self._mw, "tank", None)),
+            ("DPS", getattr(self._mw, "dps", None)),
+            ("Support", getattr(self._mw, "support", None)),
+        )
+
+    def _role_labels(self) -> list[str]:
+        return [label for label, wheel in self._role_targets() if wheel is not None]
+
+    def _roles_from_labels(self, labels) -> set:
+        label_keys = {
+            str(value).strip().casefold()
+            for value in list(labels or [])
+            if str(value).strip()
+        }
+        roles: set = set()
+        if not label_keys:
+            return roles
+        for label, wheel in self._role_targets():
+            if wheel is None:
+                continue
+            if label.casefold() in label_keys:
+                roles.add(wheel)
+        return roles
+
+    def _labels_from_roles(self, roles) -> list[str]:
+        role_set = set(roles or set())
+        labels: list[str] = []
+        for label, wheel in self._role_targets():
+            if wheel is None:
+                continue
+            if wheel in role_set:
+                labels.append(label)
+        return labels
+
+    def _active_for_state(self, state) -> bool:
+        return state != QtCore.Qt.Unchecked
+
     def refresh_panel(self) -> None:
         names = self._names
         if not names:
@@ -164,13 +206,14 @@ class PlayerListPanelController(QtCore.QObject):
         try:
             names.clear()
             if not stats:
-                names.add_name("")
+                names.add_name("", subroles=self._role_labels())
                 self._snapshot = {}
                 return
             for name in sorted(stats.keys(), key=str.casefold):
                 info = stats[name]
                 roles = info.get("roles", set())
                 active_roles = info.get("active_roles", set())
+                role_labels = self._labels_from_roles(roles)
                 total = len(roles)
                 active = len(active_roles)
                 if active <= 0:
@@ -179,7 +222,7 @@ class PlayerListPanelController(QtCore.QObject):
                     state = QtCore.Qt.Checked
                 else:
                     state = QtCore.Qt.PartiallyChecked
-                names.add_name(name, active=(state == QtCore.Qt.Checked))
+                names.add_name(name, subroles=role_labels, active=(state == QtCore.Qt.Checked))
                 item = names.item(names.count() - 1)
                 if item is None:
                     continue
@@ -190,8 +233,8 @@ class PlayerListPanelController(QtCore.QObject):
                     if widget and hasattr(widget, "chk_active"):
                         widget.chk_active.setTristate(True)
                         widget.chk_active.setCheckState(state)
-                item.setData(QtCore.Qt.UserRole + 2, set(roles))
-                item.setData(QtCore.Qt.UserRole + 3, name)
+                item.setData(self._ROLE_MEMBERSHIP_ROLE, set(self._roles_from_labels(role_labels)))
+                item.setData(self._ORIGINAL_NAME_ROLE, name)
         finally:
             del blockers
         self._snapshot = {name: {"roles": set(info["roles"])} for name, info in stats.items()}
@@ -203,10 +246,15 @@ class PlayerListPanelController(QtCore.QObject):
         if not panel or not panel.parentWidget():
             return
         parent = panel.parentWidget()
+        # Keep room for role checkboxes, but avoid an oversized panel.
+        available_w = max(300, int(parent.width()) - 16)
+        target_w = max(460, int(parent.width() * 0.48))
+        panel_w = max(340, min(680, target_w, available_w))
+        available_h = max(260, int(parent.height()) - 16)
+        target_h = max(420, int(parent.height() * 0.70))
+        panel_h = max(330, min(540, target_h, available_h))
+        panel.setFixedSize(panel_w, panel_h)
         tank_geo = self._mw.tank.geometry()
-        max_w = max(300, min(420, tank_geo.width() or 360))
-        panel.setFixedWidth(max_w)
-        panel.setFixedHeight(420)
         x = tank_geo.x()
         y = tank_geo.y() + tank_geo.height() + 8
         x = max(8, min(x, parent.width() - panel.width() - 8))
@@ -220,7 +268,7 @@ class PlayerListPanelController(QtCore.QObject):
         panel = QtWidgets.QFrame(parent)
         panel.setObjectName("playerListPanel")
         panel.setVisible(False)
-        panel.setFixedSize(360, 420)
+        panel.setFixedSize(540, 470)
 
         layout = QtWidgets.QVBoxLayout(panel)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -240,12 +288,24 @@ class PlayerListPanelController(QtCore.QObject):
         header.addWidget(btn_close)
         layout.addLayout(header)
 
-        names_panel = NamesListPanel()
+        names_panel = NamesListPanel(
+            subrole_labels=self._role_labels(),
+            enable_mark_for_delete=True,
+        )
         names = names_panel.names
+        # Wider name column + slightly taller rows so role checkboxes are not cramped.
+        names.set_row_visual_profile(
+            row_height=22,
+            name_edit_height=20,
+            name_min_width_with_subroles=220,
+            name_min_width_without_subroles=220,
+            name_max_width=236,
+        )
         layout.addWidget(names_panel, 1)
 
         names.itemChanged.connect(self._schedule_sync)
         names.model().rowsInserted.connect(self._schedule_sync)
+        names.model().rowsInserted.connect(self._on_rows_inserted)
         names.model().rowsRemoved.connect(self._schedule_sync)
         names.metaChanged.connect(self._schedule_sync)
 
@@ -255,6 +315,45 @@ class PlayerListPanelController(QtCore.QObject):
         self._names_panel = names_panel
         self._names = names
         self.apply_theme()
+
+    def _on_rows_inserted(self, _parent, start: int, end: int) -> None:
+        names = self._names
+        if not names:
+            return
+        default_labels = self._role_labels()
+        if not default_labels:
+            return
+        blockers = [
+            QtCore.QSignalBlocker(names),
+            QtCore.QSignalBlocker(names.model()),
+        ]
+        try:
+            for row in range(max(0, int(start)), max(-1, int(end)) + 1):
+                item = names.item(row)
+                if item is None:
+                    continue
+                selected = [
+                    str(value).strip()
+                    for value in list(item.data(names.SUBROLE_ROLE) or [])
+                    if str(value).strip()
+                ]
+                if selected:
+                    continue
+                item.setData(names.SUBROLE_ROLE, list(default_labels))
+                item.setData(self._ROLE_MEMBERSHIP_ROLE, set(self._roles_from_labels(default_labels)))
+                widget = names.itemWidget(item)
+                if isinstance(widget, NameRowWidget):
+                    for cb in widget.subrole_checks:
+                        should_check = cb.text() in default_labels
+                        if cb.isChecked() == should_check:
+                            continue
+                        prev = cb.blockSignals(True)
+                        cb.setChecked(should_check)
+                        cb.blockSignals(prev)
+        finally:
+            del blockers
+        if self._names_panel:
+            self._names_panel.refresh_action_state()
 
     def _schedule_sync(self, *_args) -> None:
         if self._syncing:
@@ -280,35 +379,31 @@ class PlayerListPanelController(QtCore.QObject):
                 item = names.item(i)
                 if item is None:
                     continue
-                name = item.text().strip()
+                row_widget = names.itemWidget(item)
+                if isinstance(row_widget, NameRowWidget):
+                    name = row_widget.edit.text().strip()
+                    selected_labels = [
+                        str(value).strip()
+                        for value in list(row_widget.selected_subroles())
+                        if str(value).strip()
+                    ]
+                else:
+                    name = item.text().strip()
+                    selected_labels = [
+                        str(value).strip()
+                        for value in list(item.data(names.SUBROLE_ROLE) or [])
+                        if str(value).strip()
+                    ]
                 if not name:
-                    orig = item.data(QtCore.Qt.UserRole + 3)
+                    orig = item.data(self._ORIGINAL_NAME_ROLE)
                     if orig:
                         keep_names.add(orig)
                     continue
-                roles = item.data(QtCore.Qt.UserRole + 2)
-                if not roles:
-                    roles = {self._mw.tank, self._mw.dps, self._mw.support}
-                    item.setData(QtCore.Qt.UserRole + 2, set(roles))
-                if not item.data(QtCore.Qt.UserRole + 3):
-                    item.setData(QtCore.Qt.UserRole + 3, name)
+                roles = self._roles_from_labels(selected_labels)
+                item.setData(names.SUBROLE_ROLE, list(selected_labels))
+                item.setData(self._ROLE_MEMBERSHIP_ROLE, set(roles))
+                item.setData(self._ORIGINAL_NAME_ROLE, name)
                 current[name] = {"roles": set(roles), "state": item.checkState()}
-
-            for i in range(names.count()):
-                item = names.item(i)
-                if item is None:
-                    continue
-                name = item.text().strip()
-                if not name:
-                    continue
-                orig = item.data(QtCore.Qt.UserRole + 3)
-                if orig and orig != name:
-                    roles = item.data(QtCore.Qt.UserRole + 2) or set()
-                    for wheel in roles:
-                        wheel.rename_name(orig, name)
-                    prev_snapshot.pop(orig, None)
-                    prev_snapshot[name] = {"roles": set(roles)}
-                    item.setData(QtCore.Qt.UserRole + 3, name)
 
             prev_names = set(prev_snapshot.keys())
             current_names = set(current.keys())
@@ -322,19 +417,31 @@ class PlayerListPanelController(QtCore.QObject):
 
             added = current_names - prev_names
             for name in added:
+                if name not in current:
+                    continue
                 roles = current[name]["roles"]
                 state = current[name]["state"]
-                active = state == QtCore.Qt.Checked
+                active = self._active_for_state(state)
                 for wheel in roles:
                     wheel.add_name(name, active=active)
 
             for name in current_names & prev_names:
+                if name not in current:
+                    continue
                 entry = current[name]
+                prev_roles = set(prev_snapshot.get(name, {}).get("roles", set()))
+                curr_roles = set(entry.get("roles", set()))
                 state = entry.get("state")
+
+                for wheel in prev_roles - curr_roles:
+                    wheel.remove_names({name})
+                for wheel in curr_roles - prev_roles:
+                    wheel.add_name(name, active=self._active_for_state(state))
+
                 if state == QtCore.Qt.PartiallyChecked:
                     continue
                 active = state == QtCore.Qt.Checked
-                for wheel in entry.get("roles", set()):
+                for wheel in curr_roles & prev_roles:
                     wheel.set_names_active({name}, active)
 
             self._snapshot = {

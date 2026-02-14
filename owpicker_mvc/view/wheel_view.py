@@ -194,6 +194,7 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
 
         # Optional: Checkbox "Namen anzeigen" im Header
         self.chk_show_names = QtWidgets.QCheckBox(i18n.t("wheel.show_names"))
+        self.chk_show_names.setToolTip(i18n.t("wheel.show_names_tooltip"))
         self.chk_show_names.setChecked(True)
         self.chk_show_names.stateChanged.connect(self._on_toggle_show_names)
         header.addWidget(self.chk_show_names, 0, QtCore.Qt.AlignVCenter)
@@ -347,6 +348,7 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
             self.chk_subroles.setToolTip(hint)
         if self.chk_show_names:
             self.chk_show_names.setText(i18n.t("wheel.show_names"))
+            self.chk_show_names.setToolTip(i18n.t("wheel.show_names_tooltip"))
         if hasattr(self, "btn_reset_segments"):
             self.btn_reset_segments.setToolTip(i18n.t("wheel.reset_disabled_tooltip"))
         self.btn_clear_result.setToolTip(i18n.t("wheel.clear_result_tooltip"))

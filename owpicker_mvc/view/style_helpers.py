@@ -114,6 +114,32 @@ def _names_list_style(theme: theme_util.Theme) -> str:
     cached = _NAMES_LIST_STYLE_CACHE.get(theme.key)
     if cached is not None:
         return cached
+    dark_checkbox_overrides = ""
+    if theme.key == "dark":
+        # Improve state visibility in dark mode without affecting light/base.
+        dark_checkbox_overrides = (
+            f"QListWidget QCheckBox {{ color:{theme.text}; }}"
+            "QListWidget QCheckBox::indicator {"
+            " width:10px; height:10px; border-radius:2px;"
+            f" border:1px solid {theme.muted_text};"
+            f" background:{theme.base};"
+            "}"
+            "QListWidget QCheckBox::indicator:unchecked {"
+            f" border:1px solid {theme.muted_text};"
+            f" background:{theme.base};"
+            "}"
+            "QListWidget QCheckBox::indicator:checked {"
+            f" border:1px solid {theme.button_text};"
+            f" background:{theme.primary};"
+            "}"
+            "QListWidget QCheckBox::indicator:indeterminate {"
+            f" border:1px solid {theme.button_text};"
+            f" background:{theme.checked};"
+            "}"
+            "QListWidget QCheckBox::indicator:hover {"
+            f" border:1px solid {theme.text};"
+            "}"
+        )
     cached = (
         "QListWidget {"
         f" background:{theme.base}; color:{theme.text};"
@@ -121,6 +147,7 @@ def _names_list_style(theme: theme_util.Theme) -> str:
         "}"
         f"QListWidget::item {{ color:{theme.text}; }}"
         f"QListWidget::item:selected {{ background:{theme.alt_base}; color:{theme.text}; }}"
+        f"{dark_checkbox_overrides}"
     )
     _NAMES_LIST_STYLE_CACHE[theme.key] = cached
     return cached

@@ -22,6 +22,7 @@ TRANSLATIONS_EN = {
     "controls.spin_all_tooltip": "Start a global spin with the selected spin mode.",
     "controls.spin_mode_role": "Role",
     "controls.spin_mode_open": "Open {count}",
+    "controls.spin_mode_tooltip": "Spin mode: Role spins selected role wheels; Open spins one combined open-queue wheel.",
     "controls.anim_duration": "Animation duration:",
     "controls.anim_duration_tooltip": "Animation duration (ms)",
     "controls.cancel_spin": "✖ Cancel",
@@ -88,6 +89,7 @@ TRANSLATIONS_EN = {
     "wheel.spin_single_map": "🔁 Spin this map",
     "wheel.spin_button_tooltip": "Spin this wheel.",
     "wheel.show_names": "Show names",
+    "wheel.show_names_tooltip": "Show or hide labels on wheel segments.",
     "wheel.pairs_toggle": "Create pairs",
     "wheel.subroles_toggle": "Subroles",
     "wheel.subroles_hint_generic": "Only pair when subroles are set",
@@ -112,6 +114,7 @@ TRANSLATIONS_EN = {
     # Name list
     "names.context_new": "New name",
     "names.context_delete": "Delete selected",
+    "names.active_tooltip": "Use this name in the wheel. Uncheck to exclude it.",
     "names.subrole_tooltip": "Subrole {label}",
     "names.mark_for_delete_tooltip": "Mark this name for bulk delete",
     "names.delete_marked_tooltip": "Delete marked names",

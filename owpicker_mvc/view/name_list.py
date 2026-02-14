@@ -6,7 +6,7 @@ import i18n
 from view import style_helpers
 from utils import ui_helpers
 
-DELETE_MARK_COLUMN_WIDTH = 20
+DELETE_MARK_COLUMN_WIDTH = 18
 DELETE_MARK_BUTTON_WIDTH = 28
 DELETE_MARK_ROW_RIGHT_MARGIN = 0
 NAME_LIST_ROW_HEIGHT = 20
@@ -503,8 +503,9 @@ class NameRowWidget(QtWidgets.QWidget):
         self.item = item
         layout = QtWidgets.QHBoxLayout(self)
         right_margin = DELETE_MARK_ROW_RIGHT_MARGIN if subrole_labels else 4
-        layout.setContentsMargins(2, 0, right_margin, 0)
-        layout.setSpacing(1)
+        # Keep the active checkbox visually clear from the name edit field.
+        layout.setContentsMargins(0, 0, right_margin, 0)
+        layout.setSpacing(3)
 
         self.chk_active = QtWidgets.QCheckBox()
         self.chk_active.setFixedWidth(18)
@@ -516,6 +517,7 @@ class NameRowWidget(QtWidgets.QWidget):
         else:
             self.chk_active.setChecked(state == QtCore.Qt.Checked)
         self.chk_active.toggled.connect(self._on_active_toggled)
+        self.chk_active.setToolTip(i18n.t("names.active_tooltip"))
         layout.addWidget(self.chk_active, 0, QtCore.Qt.AlignVCenter)
 
         self.edit = NameLineEdit()
@@ -573,7 +575,7 @@ class NameRowWidget(QtWidgets.QWidget):
                 0,
                 QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
             )
-            layout.addWidget(delete_cell, 0, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            layout.addWidget(delete_cell, 0, QtCore.Qt.AlignVCenter)
         # Kein automatischer Fokus auf neue/leer Zeilen
 
     def focus_name(self, force: bool = False):
@@ -583,6 +585,7 @@ class NameRowWidget(QtWidgets.QWidget):
         self.edit.setCursorPosition(len(self.edit.text()))
 
     def refresh_texts(self):
+        self.chk_active.setToolTip(i18n.t("names.active_tooltip"))
         for cb in self.subrole_checks:
             cb.setToolTip(i18n.t("names.subrole_tooltip", label=cb.text()))
         if self.chk_mark_for_delete is not None:
