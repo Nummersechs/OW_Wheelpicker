@@ -445,15 +445,15 @@ class MainWindowOCRMixin:
 
         selected_names = [entry.get("name", "") for entry in raw_selected]
         names_in_order = resolve_selected_ocr_candidates(pending.candidates, selected_names)
-        if not names_in_order:
-            return []
 
         entries_by_name_key: dict[str, deque[dict]] = {}
+        entries_in_order: list[dict] = []
         for entry in raw_selected:
             key = normalize_ocr_name_key(entry.get("name", ""))
             if not key:
                 continue
             payload = {
+                "name": str(entry.get("name", "")).strip(),
                 "assignments": list(entry.get("assignments", [])),
                 "subrole_codes": [
                     str(code).strip().casefold()
@@ -470,10 +470,12 @@ class MainWindowOCRMixin:
                     if str(role).strip()
                 },
             }
+            entries_in_order.append(payload)
             queue = entries_by_name_key.setdefault(key, deque())
             queue.append(payload)
 
         resolved_entries: list[dict] = []
+        consumed_payload_ids: set[int] = set()
         for name in names_in_order:
             key = normalize_ocr_name_key(name)
             payload = None
@@ -481,6 +483,7 @@ class MainWindowOCRMixin:
                 queue = entries_by_name_key.get(key)
                 if queue:
                     payload = queue.popleft()
+                    consumed_payload_ids.add(id(payload))
             assignments = list((payload or {}).get("assignments", []))
             subrole_codes = list((payload or {}).get("subrole_codes", []))
             subroles_by_role = dict((payload or {}).get("subroles_by_role", {}))
@@ -493,6 +496,24 @@ class MainWindowOCRMixin:
                     "active": True,
                 }
             )
+
+        # Keep manual OCR edits/new rows: anything not matched against the
+        # original OCR candidates is appended in picker order.
+        for entry in entries_in_order:
+            if id(entry) in consumed_payload_ids:
+                continue
+            resolved_entries.append(
+                {
+                    "name": str(entry.get("name", "")).strip(),
+                    "assignments": list(entry.get("assignments", [])),
+                    "subrole_codes": list(entry.get("subrole_codes", [])),
+                    "subroles_by_role": dict(entry.get("subroles_by_role", {})),
+                    "active": True,
+                }
+            )
+
+        if not resolved_entries:
+            return []
         return resolved_entries
 
     def _role_subroles_from_main_flex_codes(self, role_key: str, codes: list[str] | None) -> list[str]:

@@ -305,7 +305,7 @@ class ResultOverlay(QtWidgets.QWidget):
             name_min_width_with_subroles=min(name_max_width, 164),
             name_min_width_without_subroles=min(name_max_width, 188),
             name_max_width=name_max_width,
-            read_only=True,
+            read_only=False,
         )
 
     @staticmethod
@@ -344,18 +344,9 @@ class ResultOverlay(QtWidgets.QWidget):
         blockers = [QtCore.QSignalBlocker(names_list), QtCore.QSignalBlocker(names_list.model())]
         try:
             names_list.clear()
-            names_list.setContextMenuPolicy(QtCore.Qt.NoContextMenu)
+            names_list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
             for name in display_names:
                 names_list.add_name(name, subroles=[], active=True)
-            for i in range(names_list.count()):
-                item = names_list.item(i)
-                if item is None:
-                    continue
-                widget = names_list.itemWidget(item)
-                edit = getattr(widget, "edit", None)
-                if isinstance(edit, QtWidgets.QLineEdit):
-                    edit.setReadOnly(True)
-                    edit.setFocusPolicy(QtCore.Qt.NoFocus)
             self._apply_ocr_picker_compact_layout()
         finally:
             del blockers
