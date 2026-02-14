@@ -31,7 +31,7 @@ class OpenQueueController:
         return bool(toggle and toggle.value() == 1)
 
     def selected_wheels(self) -> list[WheelView]:
-        return [wheel for _role, wheel, slots in self.slot_plan() if slots > 0]
+        return [wheel for _role, wheel in role_wheels(self._mw) if wheel.is_selected_for_global_spin()]
 
     def names(self) -> list[str]:
         names: list[str] = []
@@ -203,20 +203,48 @@ class OpenQueueController:
     ) -> None:
         self._spin_restore = []
         for wheel, entries in entries_by_wheel.items():
+            wheel_state = getattr(wheel, "_wheel_state", None)
             self._spin_restore.append(
                 {
                     "wheel": wheel,
                     "override_entries": getattr(wheel, "_override_entries", None),
-                    "pair_mode_state": bool(getattr(wheel._wheel_state, "pair_mode", False)),
-                    "use_subroles_state": bool(getattr(wheel._wheel_state, "use_subrole_filter", False)),
+                    "pair_mode_state": bool(
+                        getattr(wheel_state, "pair_mode", getattr(wheel, "pair_mode", False))
+                    ),
+                    "use_subroles_state": bool(
+                        getattr(
+                            wheel_state,
+                            "use_subrole_filter",
+                            getattr(wheel, "use_subrole_filter", False),
+                        )
+                    ),
                     "disabled_indices": set(getattr(wheel, "_disabled_indices", set())),
                 }
             )
             override = (mode_overrides or {}).get(wheel) or {}
-            wheel._wheel_state.pair_mode = bool(override.get("pair_mode", wheel._wheel_state.pair_mode))
-            wheel._wheel_state.use_subrole_filter = bool(
-                override.get("use_subroles", wheel._wheel_state.use_subrole_filter)
+            next_pair_mode = bool(
+                override.get(
+                    "pair_mode",
+                    getattr(wheel_state, "pair_mode", getattr(wheel, "pair_mode", False)),
+                )
             )
+            next_use_subroles = bool(
+                override.get(
+                    "use_subroles",
+                    getattr(
+                        wheel_state,
+                        "use_subrole_filter",
+                        getattr(wheel, "use_subrole_filter", False),
+                    ),
+                )
+            )
+            if wheel_state is not None:
+                wheel_state.pair_mode = next_pair_mode
+                wheel_state.use_subrole_filter = next_use_subroles
+            if hasattr(wheel, "pair_mode"):
+                wheel.pair_mode = next_pair_mode
+            if hasattr(wheel, "use_subrole_filter"):
+                wheel.use_subrole_filter = next_use_subroles
             wheel.set_override_entries(entries)
         self._spin_active = True
 
@@ -228,10 +256,20 @@ class OpenQueueController:
             wheel = entry.get("wheel")
             if not wheel:
                 continue
-            wheel._wheel_state.pair_mode = bool(entry.get("pair_mode_state", wheel._wheel_state.pair_mode))
-            wheel._wheel_state.use_subrole_filter = bool(
-                entry.get("use_subroles_state", wheel._wheel_state.use_subrole_filter)
+            wheel_state = getattr(wheel, "_wheel_state", None)
+            restored_pair_mode = bool(
+                entry.get("pair_mode_state", getattr(wheel, "pair_mode", False))
             )
+            restored_use_subroles = bool(
+                entry.get("use_subroles_state", getattr(wheel, "use_subrole_filter", False))
+            )
+            if wheel_state is not None:
+                wheel_state.pair_mode = restored_pair_mode
+                wheel_state.use_subrole_filter = restored_use_subroles
+            if hasattr(wheel, "pair_mode"):
+                wheel.pair_mode = restored_pair_mode
+            if hasattr(wheel, "use_subrole_filter"):
+                wheel.use_subrole_filter = restored_use_subroles
             wheel.set_override_entries(entry.get("override_entries"))
             wheel._disabled_indices = set(entry.get("disabled_indices", set()))
             wheel._refresh_disabled_indices()

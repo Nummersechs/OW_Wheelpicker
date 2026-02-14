@@ -227,7 +227,6 @@ def extract_names_from_ocr_pixmap(
     *,
     ocr_cmd: str = "",
 ) -> tuple[list[str], str, str | None]:
-    _ = ocr_cmd
     runtime_cfg = _ocr_runtime_cfg_snapshot(mw)
     temp_paths, prep_errors = _prepare_ocr_variant_files(mw, pixmap, runtime_cfg)
     if not temp_paths:
@@ -237,6 +236,7 @@ def extract_names_from_ocr_pixmap(
     try:
         names, merged_text, error_text = _extract_names_from_ocr_files(
             temp_paths,
+            ocr_cmd=ocr_cmd,
             cfg=runtime_cfg,
         )
     finally:
@@ -493,6 +493,7 @@ def _run_ocr_pass(
     pass_label: str,
     cfg: dict,
     max_variants_key: str,
+    ocr_cmd: str = "",
 ) -> tuple[list[str], list[str], list[dict]]:
     ocr_import = _ocr_import_module()
     selected_paths = _select_variant_paths(paths, cfg, max_variants_key=max_variants_key)
@@ -509,23 +510,35 @@ def _run_ocr_pass(
     lang = cfg.get("lang")
     timeout_s = float(cfg.get("timeout_s", 8.0))
     run_ocr_multi = getattr(ocr_import, "run_ocr_multi", None)
-    if not callable(run_ocr_multi):
-        return [], ["easyocr-runner-unavailable"], []
+    run_tesseract_multi = getattr(ocr_import, "run_tesseract_multi", None)
+    if not callable(run_ocr_multi) and not callable(run_tesseract_multi):
+        return [], ["ocr-runner-unavailable"], []
 
     for image_path in selected_paths:
-        run_result = run_ocr_multi(
-            image_path,
-            engine=engine,
-            cmd="",
-            psm_values=psm_values,
-            timeout_s=timeout_s,
-            lang=lang,
-            stop_on_first_success=stop_after_variant_success,
-            easyocr_model_dir=cfg.get("easyocr_model_dir"),
-            easyocr_user_network_dir=cfg.get("easyocr_user_network_dir"),
-            easyocr_gpu=bool(cfg.get("easyocr_gpu", False)),
-            easyocr_download_enabled=bool(cfg.get("easyocr_download_enabled", False)),
-        )
+        if callable(run_ocr_multi):
+            run_result = run_ocr_multi(
+                image_path,
+                engine=engine,
+                cmd=str(ocr_cmd or ""),
+                psm_values=psm_values,
+                timeout_s=timeout_s,
+                lang=lang,
+                stop_on_first_success=stop_after_variant_success,
+                easyocr_model_dir=cfg.get("easyocr_model_dir"),
+                easyocr_user_network_dir=cfg.get("easyocr_user_network_dir"),
+                easyocr_gpu=bool(cfg.get("easyocr_gpu", False)),
+                easyocr_download_enabled=bool(cfg.get("easyocr_download_enabled", False)),
+            )
+        else:
+            # Backward compatibility for legacy test stubs / callers.
+            run_result = run_tesseract_multi(
+                image_path,
+                cmd=str(ocr_cmd or "auto"),
+                psm_values=psm_values,
+                timeout_s=timeout_s,
+                lang=lang,
+                stop_on_first_success=stop_after_variant_success,
+            )
         line_entries: list[dict] = []
         for line_entry in tuple(getattr(run_result, "lines", ()) or ()):
             line_text = str(getattr(line_entry, "text", "") or "").strip()
@@ -1515,6 +1528,7 @@ def _prefer_retry_candidates(primary: list[str], retry: list[str], cfg: dict) ->
 def _extract_names_from_ocr_files(
     paths: list[Path],
     *,
+    ocr_cmd: str = "",
     cfg: dict,
 ) -> tuple[list[str], str, str | None]:
     ocr_import = _ocr_import_module()
@@ -1523,6 +1537,7 @@ def _extract_names_from_ocr_files(
         pass_label="primary",
         cfg=cfg,
         max_variants_key="max_variants",
+        ocr_cmd=ocr_cmd,
     )
     primary_names = _extract_names_from_texts(ocr_import, primary_texts, cfg)
     names = list(primary_names)
@@ -1540,6 +1555,7 @@ def _extract_names_from_ocr_files(
             pass_label="retry",
             cfg=retry_cfg,
             max_variants_key="recall_retry_max_variants",
+            ocr_cmd=ocr_cmd,
         )
         merged_texts.extend(retry_texts)
         errors.extend(retry_errors)
@@ -1626,6 +1642,7 @@ class _OCRExtractWorker(QtCore.QObject):
         try:
             names, raw_text, error = _extract_names_from_ocr_files(
                 self._paths,
+                ocr_cmd="",
                 cfg=self._cfg,
             )
         except Exception as exc:

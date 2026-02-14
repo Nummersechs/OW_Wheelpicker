@@ -3,6 +3,7 @@ All functions expect `mw` to be the MainWindow instance."""
 from __future__ import annotations
 
 import random
+import time
 from logic import spin_planner
 from model.role_keys import role_for_wheel, role_wheels
 import i18n
@@ -17,6 +18,13 @@ def _active_role_wheels(mw) -> list[tuple[str, object]]:
 
 
 def _begin_spin_run(mw, active: list[tuple[str, object]]) -> None:
+    if hasattr(mw, "_trace_event"):
+        try:
+            mw._trace_event("spin_run_begin", roles=[role for role, _wheel in active], pending=mw.pending)
+        except Exception:
+            pass
+    if hasattr(mw, "_disarm_spin_watchdog"):
+        mw._disarm_spin_watchdog()
     mw._snapshot_results()
     for _role, wheel in active:
         wheel.clear_result()
@@ -28,23 +36,53 @@ def _begin_spin_run(mw, active: list[tuple[str, object]]) -> None:
     mw._set_controls_enabled(False)
     mw.overlay.hide()
     mw.sound.play_spin()
+    if hasattr(mw, "_mark_spin_started"):
+        mw._mark_spin_started()
+    else:
+        mw._spin_started_at_monotonic = time.monotonic()
 
 
-def _run_assigned_spin(mw, active: list[tuple[str, object]], assigned_for_role: list[str | None]) -> None:
+def _run_assigned_spin(
+    mw,
+    active: list[tuple[str, object]],
+    assigned_for_role: list[str | None],
+) -> int:
     duration = mw.duration.value()
     multipliers = [0.85, 1.00, 1.35]
     random.shuffle(multipliers)
+    max_started_duration = 0
 
     for (idx, (_role, wheel)), mult in zip(enumerate(active), multipliers):
         target_label = assigned_for_role[idx]
         if target_label is None:
+            if hasattr(mw, "_trace_event"):
+                try:
+                    mw._trace_event("spin_launch_skipped", role=_role, reason="no_target")
+                except Exception:
+                    pass
             continue
+        spin_duration = int(duration * mult)
+        started = False
         if hasattr(wheel, "spin_to_name"):
-            if wheel.spin_to_name(target_label, duration_ms=int(duration * mult)):
-                mw.pending += 1
+            started = bool(wheel.spin_to_name(target_label, duration_ms=spin_duration))
         else:
-            if wheel.spin(duration_ms=int(duration * mult)):
-                mw.pending += 1
+            started = bool(wheel.spin(duration_ms=spin_duration))
+        if started:
+            mw.pending += 1
+            if spin_duration > max_started_duration:
+                max_started_duration = spin_duration
+        if hasattr(mw, "_trace_event"):
+            try:
+                mw._trace_event(
+                    "spin_launch_attempt",
+                    role=_role,
+                    target=target_label,
+                    duration_ms=spin_duration,
+                    started=started,
+                )
+            except Exception:
+                pass
+    return max_started_duration
 
 
 def _show_roles_prompt(mw) -> None:
@@ -164,6 +202,11 @@ def _plan_assignments(mw, all_candidates_per_role: list[list[tuple[str, list[str
 
 
 def spin_all(mw):
+    if hasattr(mw, "_trace_event"):
+        try:
+            mw._trace_event("spin_all_dispatch", pending=mw.pending)
+        except Exception:
+            pass
     if mw.hero_ban_active:
         if mw.pending > 0:
             return
@@ -179,8 +222,9 @@ def spin_all(mw):
     if not active:
         return
 
+    valid_active: list[tuple[str, object]] = []
     all_candidates_per_role = []
-    missing_roles = False
+    missing_wheels: list[object] = []
     for _role, wheel in active:
         base_entries = wheel._active_entries()
         candidates = _build_candidates_for_wheel(
@@ -190,14 +234,15 @@ def spin_all(mw):
             drop_disabled_labels=False,
         )
         if not candidates:
-            if hasattr(wheel, "set_result_too_few"):
-                wheel.set_result_too_few()
-            missing_roles = True
-            all_candidates_per_role.append([])
+            missing_wheels.append(wheel)
             continue
+        valid_active.append((_role, wheel))
         all_candidates_per_role.append(candidates)
 
-    if missing_roles:
+    if not valid_active:
+        for wheel in missing_wheels:
+            if hasattr(wheel, "set_result_too_few"):
+                wheel.set_result_too_few()
         _show_not_enough(mw)
         return
 
@@ -206,16 +251,37 @@ def spin_all(mw):
         return
 
     _begin_spin_run(mw, active)
-    _run_assigned_spin(mw, active, assigned_for_role)
+    for wheel in missing_wheels:
+        if hasattr(wheel, "set_result_too_few"):
+            wheel.set_result_too_few()
+    max_started_duration = _run_assigned_spin(mw, valid_active, assigned_for_role)
 
     if mw.pending == 0:
         mw.sound.stop_spin()
         mw._set_controls_enabled(True)
         _show_roles_prompt(mw)
+    elif hasattr(mw, "_arm_spin_watchdog"):
+        mw._arm_spin_watchdog(max_started_duration)
+    if hasattr(mw, "_trace_event"):
+        try:
+            mw._trace_event(
+                "spin_all_started",
+                pending=mw.pending,
+                started_duration_ms=max_started_duration,
+                active_roles=[role for role, _wheel in valid_active],
+                missing_roles=len(missing_wheels),
+            )
+        except Exception:
+            pass
     mw._update_cancel_enabled()
 
 
 def spin_open_queue(mw):
+    if hasattr(mw, "_trace_event"):
+        try:
+            mw._trace_event("spin_open_dispatch", pending=mw.pending)
+        except Exception:
+            pass
     if mw.hero_ban_active or mw.current_mode == "maps":
         return
     if mw.pending > 0:
@@ -296,7 +362,7 @@ def spin_open_queue(mw):
         entries_by_wheel,
         mode_overrides=mode_overrides_by_wheel,
     )
-    _run_assigned_spin(
+    max_started_duration = _run_assigned_spin(
         mw,
         [(role, wheel) for role, wheel, _slots in used_plan],
         assigned_for_role,
@@ -308,10 +374,28 @@ def spin_open_queue(mw):
         _show_roles_prompt(mw)
         if mw.open_queue.spin_active():
             mw.open_queue.restore_spin_overrides()
+    elif hasattr(mw, "_arm_spin_watchdog"):
+        mw._arm_spin_watchdog(max_started_duration)
+    if hasattr(mw, "_trace_event"):
+        try:
+            mw._trace_event(
+                "spin_open_started",
+                pending=mw.pending,
+                started_duration_ms=max_started_duration,
+                total_slots=total_slots,
+            )
+        except Exception:
+            pass
     mw._update_cancel_enabled()
 
 
 def spin_single(mw, wheel, mult: float = 1.0, hero_ban_override: bool = True):
+    if hasattr(mw, "_trace_event"):
+        try:
+            role = role_for_wheel(mw, wheel)
+            mw._trace_event("spin_single_dispatch", role=role, pending=mw.pending)
+        except Exception:
+            pass
     if mw.pending > 0:
         return
     if mw.hero_ban_active:
@@ -331,15 +415,35 @@ def spin_single(mw, wheel, mult: float = 1.0, hero_ban_override: bool = True):
     mw.pending = 0
     mw.overlay.hide()
     mw.sound.play_spin()
+    if hasattr(mw, "_mark_spin_started"):
+        mw._mark_spin_started()
+    else:
+        mw._spin_started_at_monotonic = time.monotonic()
     duration = int(mw.duration.value() * mult)
     if target_wheel.spin(duration_ms=duration):
         mw.pending = 1
+        if hasattr(mw, "_arm_spin_watchdog"):
+            mw._arm_spin_watchdog(duration)
+        if hasattr(mw, "_trace_event"):
+            try:
+                mw._trace_event("spin_single_started", pending=mw.pending, duration_ms=duration)
+            except Exception:
+                pass
     else:
         mw.sound.stop_spin()
         mw._set_controls_enabled(True)
+        if hasattr(mw, "_clear_spin_started"):
+            mw._clear_spin_started()
+        else:
+            mw._spin_started_at_monotonic = None
         mw.summary.setText(i18n.t("summary.wheel_prompt"))
         mw.overlay.show_message(
             i18n.t("overlay.not_enough_title"),
             [i18n.t("overlay.not_enough_line1"), i18n.t("overlay.not_enough_line2"), ""],
         )
+        if hasattr(mw, "_trace_event"):
+            try:
+                mw._trace_event("spin_single_failed", pending=mw.pending, duration_ms=duration)
+            except Exception:
+                pass
     mw._update_cancel_enabled()

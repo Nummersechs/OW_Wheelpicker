@@ -22,7 +22,7 @@ from .ocr_role_import import PendingOCRImport
 from services import state_store
 from services.app_settings import AppSettings
 from services.sound import SoundManager
-from model.role_keys import role_wheel_map, role_wheels
+from model.role_keys import role_for_wheel, role_wheel_map, role_wheels
 from utils import flag_icons, theme as theme_util, ui_helpers
 from view.overlay import ResultOverlay
 from view.wheel_view import WheelView
@@ -655,6 +655,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self.duration.setValue(config.DEFAULT_DURATION_MS)
         self.duration.setToolTip(i18n.t("controls.anim_duration_tooltip"))
         self.btn_spin_all = QtWidgets.QPushButton(i18n.t("controls.spin_all"))
+        self.btn_spin_all.setObjectName("btn_spin_all")
         ui_helpers.set_fixed_width_from_translations([self.btn_spin_all], ["controls.spin_all"], padding=40)
         self.btn_spin_all.setFixedHeight(44)
         self.btn_spin_all.setToolTip(i18n.t("controls.spin_all_tooltip"))
@@ -685,6 +686,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         controls.addWidget(self.lbl_open_count_value)
         controls.addWidget(self.btn_spin_all)
         self.btn_cancel_spin = QtWidgets.QPushButton(i18n.t("controls.cancel_spin"))
+        self.btn_cancel_spin.setObjectName("btn_cancel_spin")
         ui_helpers.set_fixed_width_from_translations([self.btn_cancel_spin], ["controls.cancel_spin"], padding=40)
         self.btn_cancel_spin.setFixedHeight(44)
         self.btn_cancel_spin.setEnabled(False)
@@ -707,6 +709,10 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self.pending = 0
         self._result_sent_this_spin = False
         self._last_results_snapshot: dict | None = None
+        self._spin_started_at_monotonic: float | None = None
+        self._spin_watchdog_timer = QtCore.QTimer(self)
+        self._spin_watchdog_timer.setSingleShot(True)
+        self._spin_watchdog_timer.timeout.connect(self._on_spin_watchdog_timeout)
         self.open_queue = OpenQueueController(self)
         if hasattr(self, "open_count_slider"):
             self.open_queue.set_player_count(int(self.open_count_slider.value()))
@@ -1217,7 +1223,11 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._startup_finalize_done = True
 
     def _on_overlay_closed(self):
-        self._set_controls_enabled(True)
+        if self.pending <= 0:
+            self._set_controls_enabled(True)
+        else:
+            self._trace_event("overlay_closed_ignored", reason="spin_active", pending=self.pending)
+            self._update_cancel_enabled()
         self.sound.stop_ding()
         if self.hero_ban_active:
             self._hero_ban_override_role = None
@@ -1456,6 +1466,8 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
 
     def _update_spin_all_enabled(self):
         """Aktiviere/Deaktiviere den 'Drehen'-Button je nach Auswahl."""
+        # Keep the button responsive during startup/mode transitions.
+        # The click-path guards in spin_all/_spin_single still prevent unsafe spins.
         open_names: list[str] | None = None
         if getattr(self, "hero_ban_active", False):
             any_selected = any(w.btn_include_in_all.isChecked() for _role, w in self._role_wheels())
@@ -1592,6 +1604,60 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
                 self.map_main.hard_stop()
             except Exception:
                 pass
+
+    def _arm_spin_watchdog(self, expected_duration_ms: int) -> None:
+        try:
+            timeout_ms = max(1200, int(expected_duration_ms) + 1500)
+        except Exception:
+            timeout_ms = 3500
+        if hasattr(self, "_spin_watchdog_timer"):
+            self._spin_watchdog_timer.start(timeout_ms)
+
+    def _disarm_spin_watchdog(self) -> None:
+        if hasattr(self, "_spin_watchdog_timer"):
+            self._spin_watchdog_timer.stop()
+
+    def _on_spin_watchdog_timeout(self) -> None:
+        if hasattr(self, "_trace_event"):
+            self._trace_event("spin_watchdog_timeout", pending=self.pending)
+        if self.pending <= 0:
+            return
+        running = False
+        for _role, wheel in self._role_wheels():
+            try:
+                if wheel.is_anim_running():
+                    running = True
+                    break
+            except Exception:
+                pass
+        if not running and hasattr(self, "map_main"):
+            try:
+                running = bool(self.map_main.is_anim_running())
+            except Exception:
+                running = False
+        if running:
+            if hasattr(self, "_trace_event"):
+                self._trace_event("spin_watchdog_rearmed", pending=self.pending)
+            if hasattr(self, "_spin_watchdog_timer"):
+                self._spin_watchdog_timer.start(750)
+            return
+        if hasattr(self, "_trace_event"):
+            self._trace_event("spin_watchdog_recovery", pending=self.pending)
+        self.pending = 0
+        self._spin_started_at_monotonic = None
+        self.sound.stop_spin()
+        self.sound.stop_ding()
+        if self.open_queue.spin_active():
+            self.open_queue.restore_spin_overrides()
+        self._set_controls_enabled(True)
+        self._update_cancel_enabled()
+
+    def _mark_spin_started(self) -> None:
+        self._spin_started_at_monotonic = time.monotonic()
+
+    def _clear_spin_started(self) -> None:
+        self._spin_started_at_monotonic = None
+
     def _update_cancel_enabled(self):
         self.btn_cancel_spin.setEnabled(self.pending > 0)
 
@@ -1610,6 +1676,21 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
 
     def spin_all(self):
         """Dreht alle selektierten Räder auf faire Weise."""
+        if not getattr(self, "_post_choice_init_done", True):
+            self._ensure_post_choice_ready()
+            if not getattr(self, "_post_choice_init_done", False):
+                self._trace_event("spin_all_preinit_fallback")
+        if getattr(self, "_restoring_state", False):
+            self._trace_event("spin_all_ignored", reason="state_restore_active")
+            return
+        self._trace_event(
+            "spin_all_requested",
+            mode=self.current_mode,
+            pending=getattr(self, "pending", 0),
+            open_mode=bool(self.open_queue.is_mode_active()),
+            post_init=bool(getattr(self, "_post_choice_init_done", True)),
+            restoring=bool(getattr(self, "_restoring_state", False)),
+        )
         if self.current_mode == "maps":
             self.map_mode.spin_all()
         elif self.open_queue.is_mode_active():
@@ -1618,9 +1699,22 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             spin_service.spin_all(self)
 
     def _spin_single(self, wheel: WheelView, mult: float = 1.0, hero_ban_override: bool = True):
-        if self._post_choice_input_guard_active():
-            self._trace_event("spin_single_ignored", reason="mode_choice_input_guard")
+        if not getattr(self, "_post_choice_init_done", True):
+            self._ensure_post_choice_ready()
+            if not getattr(self, "_post_choice_init_done", False):
+                self._trace_event("spin_single_preinit_fallback")
+        if getattr(self, "_restoring_state", False):
+            self._trace_event("spin_single_ignored", reason="state_restore_active")
             return
+        role = role_for_wheel(self, wheel) or "unknown"
+        self._trace_event(
+            "spin_single_requested",
+            role=role,
+            mode=self.current_mode,
+            pending=getattr(self, "pending", 0),
+            post_init=bool(getattr(self, "_post_choice_init_done", True)),
+            restoring=bool(getattr(self, "_restoring_state", False)),
+        )
         if self.current_mode == "maps":
             self.map_mode.spin_single()
         else:
@@ -1630,13 +1724,27 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         # Wenn laut State gar kein Spin aktiv ist, ignorieren wir alte/späte Signale,
         # z.B. von hard_stop() oder abgebrochenen Animationen.
         if self.pending <= 0:
+            self._trace_event("spin_finish_ignored", result_name=_name, reason="pending_zero")
             return
 
+        pending_before = int(self.pending)
         self.pending -= 1
+        self._trace_event(
+            "spin_finish_signal",
+            result_name=_name,
+            pending_before=pending_before,
+            pending_after=self.pending,
+        )
 
         # Nur wenn wir von >0 genau auf 0 fallen, ist "dieser" Spin abgeschlossen
         if self.pending == 0:
+            self._disarm_spin_watchdog()
+            self._clear_spin_started()
             if self._result_sent_this_spin:
+                self.sound.stop_spin()
+                self.sound.stop_ding()
+                self._set_controls_enabled(True)
+                self._update_cancel_enabled()
                 return
             self._result_sent_this_spin = True
             self.sound.stop_spin()
@@ -1672,6 +1780,34 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
     def _cancel_spin(self):
         if self.pending <= 0:
             return
+        guard_ms = int(self._cfg("SPIN_CANCEL_GUARD_MS", 1100))
+        started_at = self._spin_started_at_monotonic
+        if guard_ms > 0 and started_at is not None:
+            elapsed_ms = int((time.monotonic() - started_at) * 1000.0)
+            if elapsed_ms < guard_ms:
+                self._trace_event(
+                    "spin_cancel_ignored",
+                    reason="guard_window",
+                    elapsed_ms=elapsed_ms,
+                    guard_ms=guard_ms,
+                )
+                return
+        try:
+            sender = self.sender()
+            sender_name = type(sender).__name__ if sender is not None else None
+            sender_text = sender.text() if sender is not None and hasattr(sender, "text") else None
+            sender_object = sender.objectName() if sender is not None and hasattr(sender, "objectName") else None
+            self._trace_event(
+                "spin_cancel_requested",
+                pending_before=self.pending,
+                sender=sender_name,
+                sender_text=sender_text,
+                sender_object=sender_object,
+            )
+        except Exception:
+            pass
+        self._disarm_spin_watchdog()
+        self._clear_spin_started()
         self._result_sent_this_spin = True  # unterdrückt finale Anzeige
         self.pending = 0
         self.sound.stop_spin()

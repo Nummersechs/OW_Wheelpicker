@@ -58,8 +58,19 @@ class MapModeController:
 
     def spin_all(self, subset: list[str] | None = None) -> None:
         mw = self._mw
+        if hasattr(mw, "_trace_event"):
+            try:
+                mw._trace_event(
+                    "map_spin_requested",
+                    pending=mw.pending,
+                    subset_count=0 if subset is None else len(subset),
+                )
+            except Exception:
+                pass
         if mw.pending > 0:
             return
+        if hasattr(mw, "_disarm_spin_watchdog"):
+            mw._disarm_spin_watchdog()
         # Neuer Spin → finale Anzeige wieder erlauben
         mw._result_sent_this_spin = False
         combined = mw.map_ui.combined_names() if hasattr(mw, "map_ui") else []
@@ -98,10 +109,22 @@ class MapModeController:
             ok = False
         if ok:
             mw.pending = 1
+            if hasattr(mw, "_arm_spin_watchdog"):
+                mw._arm_spin_watchdog(duration)
+            if hasattr(mw, "_trace_event"):
+                try:
+                    mw._trace_event("map_spin_started", pending=mw.pending, duration_ms=duration)
+                except Exception:
+                    pass
         else:
             mw.sound.stop_spin()
             mw._set_controls_enabled(True)
             mw.summary.setText(i18n.t("map.summary.prompt"))
+            if hasattr(mw, "_trace_event"):
+                try:
+                    mw._trace_event("map_spin_failed", pending=mw.pending, duration_ms=duration)
+                except Exception:
+                    pass
         mw._update_cancel_enabled()
 
     def spin_single(self) -> None:

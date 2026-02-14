@@ -15,9 +15,9 @@ def spin_to_label(
     *,
     duration_ms: int,
     target_label: str | None = None,
-) -> str | None:
+) -> bool:
     if not names or not enabled_indices:
-        return None
+        return False
 
     enabled_set = set(enabled_indices)
     if target_label and target_label in names:
@@ -43,6 +43,23 @@ def spin_to_label(
     owner.anim.setEasingCurve(QtCore.QEasingCurve.OutCubic)
     owner._pending_result = resolved_label
     owner._is_spinning = True
+    def _force_repaint(*_args):
+        try:
+            owner.wheel.update()
+        except Exception:
+            pass
+        try:
+            owner.view.viewport().update()
+        except Exception:
+            pass
+    owner.anim.valueChanged.connect(_force_repaint)
     owner.anim.finished.connect(owner._emit_result)
     owner.anim.start()
-    return resolved_label
+    try:
+        duration = int(owner.anim.duration())
+        if duration > 1 and owner.anim.state() == QtCore.QAbstractAnimation.Running:
+            owner.anim.setCurrentTime(min(16, duration - 1))
+    except Exception:
+        pass
+    _force_repaint()
+    return True

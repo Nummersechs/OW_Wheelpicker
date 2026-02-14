@@ -285,7 +285,7 @@ class TestMainWindowInputFilter(unittest.TestCase):
             )
         )
 
-    def test_spin_single_ignored_during_post_choice_guard(self):
+    def test_spin_single_not_blocked_by_post_choice_guard(self):
         mw = MainWindow.__new__(MainWindow)
         mw.current_mode = "players"
         mw._post_choice_input_guard_until = time.monotonic() + 1.0
@@ -295,10 +295,72 @@ class TestMainWindowInputFilter(unittest.TestCase):
 
         with patch.object(spin_service, "spin_single") as mocked:
             mw._spin_single(dummy_wheel, mult=1.0, hero_ban_override=True)
+            mocked.assert_called_once()
+
+    def test_spin_all_not_blocked_by_post_choice_guard(self):
+        mw = MainWindow.__new__(MainWindow)
+        mw.current_mode = "players"
+        mw._post_choice_input_guard_until = time.monotonic() + 1.0
+        mw._overlay_choice_active = lambda: False
+        mw._post_choice_init_done = True
+        mw._restoring_state = False
+        mw.open_queue = type("OpenQ", (), {"is_mode_active": lambda self: False})()
+        traces: list[tuple[str, dict]] = []
+        mw._trace_event = lambda name, **extra: traces.append((name, extra))
+
+        with patch.object(spin_service, "spin_all") as mocked:
+            mw.spin_all()
+            mocked.assert_called_once()
+
+    def test_spin_all_uses_preinit_fallback_when_post_choice_not_ready(self):
+        mw = MainWindow.__new__(MainWindow)
+        mw.current_mode = "players"
+        mw._post_choice_input_guard_until = 0.0
+        mw._overlay_choice_active = lambda: False
+        mw._post_choice_init_done = False
+        mw._ensure_post_choice_ready = lambda: None
+        mw._restoring_state = False
+        mw.open_queue = type("OpenQ", (), {"is_mode_active": lambda self: False})()
+        traces: list[tuple[str, dict]] = []
+        mw._trace_event = lambda name, **extra: traces.append((name, extra))
+
+        with patch.object(spin_service, "spin_all") as mocked:
+            mw.spin_all()
+            mocked.assert_called_once()
+
+        self.assertTrue(any(name == "spin_all_preinit_fallback" for name, _extra in traces))
+
+    def test_spin_all_ignored_while_restoring_state(self):
+        mw = MainWindow.__new__(MainWindow)
+        mw.current_mode = "players"
+        mw._post_choice_input_guard_until = 0.0
+        mw._overlay_choice_active = lambda: False
+        mw._post_choice_init_done = True
+        mw._restoring_state = True
+        mw.open_queue = type("OpenQ", (), {"is_mode_active": lambda self: False})()
+        traces: list[tuple[str, dict]] = []
+        mw._trace_event = lambda name, **extra: traces.append((name, extra))
+
+        with patch.object(spin_service, "spin_all") as mocked:
+            mw.spin_all()
             mocked.assert_not_called()
 
         self.assertTrue(traces)
-        self.assertEqual(traces[0][0], "spin_single_ignored")
+        self.assertEqual(traces[0][0], "spin_all_ignored")
+
+    def test_cancel_spin_guard_ignores_early_cancel(self):
+        mw = MainWindow.__new__(MainWindow)
+        mw.pending = 2
+        mw._spin_started_at_monotonic = time.monotonic()
+        mw._cfg = lambda key, default=None: 1100 if key == "SPIN_CANCEL_GUARD_MS" else default
+        traces: list[tuple[str, dict]] = []
+        mw._trace_event = lambda name, **extra: traces.append((name, extra))
+        mw.sender = lambda: None
+
+        mw._cancel_spin()
+
+        self.assertEqual(mw.pending, 2)
+        self.assertTrue(any(name == "spin_cancel_ignored" for name, _extra in traces))
 
     def test_mode_button_ignored_during_post_choice_guard(self):
         mw = MainWindow.__new__(MainWindow)

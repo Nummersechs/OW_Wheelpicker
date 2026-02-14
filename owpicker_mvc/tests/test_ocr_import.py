@@ -312,15 +312,15 @@ class TestOCRImport(unittest.TestCase):
         easy_mock.assert_called_once()
         tess_mock.assert_not_called()
 
-    def test_run_ocr_multi_dispatches_to_tesseract_by_default(self):
+    def test_run_ocr_multi_dispatches_to_easyocr_by_default(self):
         with (
-            patch("controller.ocr_import.run_tesseract_multi", return_value=OCRRunResult("Aero")) as tess_mock,
-            patch("controller.ocr_import.run_easyocr") as easy_mock,
+            patch("controller.ocr_import.run_tesseract_multi") as tess_mock,
+            patch("controller.ocr_import.run_easyocr", return_value=OCRRunResult("Aero")) as easy_mock,
         ):
             result = run_ocr_multi(Path("dummy.png"))
         self.assertEqual(result.text, "Aero")
-        tess_mock.assert_called_once()
-        easy_mock.assert_not_called()
+        easy_mock.assert_called_once()
+        tess_mock.assert_not_called()
 
 
 if __name__ == "__main__":

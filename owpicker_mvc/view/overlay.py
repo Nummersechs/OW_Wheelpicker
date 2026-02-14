@@ -231,7 +231,16 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_ocr_confirm.setVisible(bool(ocr_confirm))
         if hasattr(self, "_btn_row"):
             ocr_mode_active = bool(ocr_cancel or ocr_replace or ocr_confirm)
-            self._btn_row.setSpacing(80 if ocr_mode_active else 8)
+            result_actions_active = bool(
+                close and disable
+                and not (online or offline or delete_cancel or delete_confirm or ocr_cancel or ocr_replace or ocr_confirm)
+            )
+            if ocr_mode_active:
+                self._btn_row.setSpacing(80)
+            elif result_actions_active:
+                self._btn_row.setSpacing(14)
+            else:
+                self._btn_row.setSpacing(8)
 
     def show_result(self, tank, dps, sup):
         self._apply_button_labels()
@@ -517,10 +526,16 @@ class ResultOverlay(QtWidgets.QWidget):
                     max_w = max(max_w, fm.horizontalAdvance(str(txt)))
             return max_w + 48
 
-        result_width = max_width(("overlay.button_ok", "overlay.button_disable_results"))
-        for btn in (self.btn_close, self.btn_disable):
-            btn.setMinimumWidth(result_width)
-            btn.setMaximumWidth(result_width)
+        # Keep result actions compact: "OK" should not inherit the long disable-button width.
+        ok_width = max_width(("overlay.button_ok",))
+        ok_width = max(96, min(int(ok_width), 140))
+        self.btn_close.setMinimumWidth(ok_width)
+        self.btn_close.setMaximumWidth(ok_width)
+
+        disable_width = max_width(("overlay.button_disable_results",))
+        disable_width = max(200, min(int(disable_width), 320))
+        self.btn_disable.setMinimumWidth(disable_width)
+        self.btn_disable.setMaximumWidth(disable_width)
 
         choice_width = max_width(("overlay.button_online", "overlay.button_offline"))
         for btn in (
