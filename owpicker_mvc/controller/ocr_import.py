@@ -9,7 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
-from typing import Iterable
+from typing import Any, Iterable
 from logic.name_normalization import normalize_name_alnum_key, normalize_name_tokens
 
 
@@ -17,6 +17,134 @@ from logic.name_normalization import normalize_name_alnum_key, normalize_name_to
 class OCRRunResult:
     text: str
     error: str | None = None
+    lines: tuple["OCRLineResult", ...] = ()
+
+
+@dataclass(frozen=True)
+class OCRLineResult:
+    text: str
+    confidence: float = -1.0
+
+
+_EASYOCR_LANG_ALIAS: dict[str, str] = {
+    "eng": "en",
+    "en": "en",
+    "deu": "de",
+    "ger": "de",
+    "de": "de",
+}
+
+
+def _normalize_ocr_engine_name(value: str | None) -> str:
+    token = str(value or "").strip().lower()
+    if token in {"easy", "easy-ocr", "easy_ocr", "easyocr", "tesseract"}:
+        return "easyocr"
+    return "easyocr"
+
+
+def _parse_ocr_lang_tokens(value: str | None) -> list[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+    normalized = raw.replace("+", ",").replace(";", ",")
+    tokens = [token.strip() for token in normalized.split(",") if token.strip()]
+    seen: set[str] = set()
+    result: list[str] = []
+    for token in tokens:
+        key = token.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(token)
+    return result
+
+
+def _parse_easyocr_langs(lang: str | None) -> tuple[str, ...]:
+    raw_tokens = _parse_ocr_lang_tokens(lang)
+    if not raw_tokens:
+        return ("en",)
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for token in raw_tokens:
+        key = token.lower()
+        mapped = _EASYOCR_LANG_ALIAS.get(key)
+        if mapped is None:
+            if len(key) == 2 and key.isalpha():
+                mapped = key
+            else:
+                continue
+        if mapped in seen:
+            continue
+        seen.add(mapped)
+        normalized.append(mapped)
+    if not normalized:
+        return ("en",)
+    return tuple(normalized)
+
+
+def _resolve_optional_directory(value: str | None) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    candidate = Path(raw).expanduser()
+    probe_paths = [candidate]
+    if not candidate.is_absolute():
+        for root in _runtime_search_roots():
+            probe_paths.append(root / candidate)
+    for probe in probe_paths:
+        if probe.is_dir():
+            try:
+                return str(probe.resolve())
+            except Exception:
+                return str(probe)
+    return str(candidate)
+
+
+def _looks_like_easyocr_model_dir(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    try:
+        return any(
+            entry.is_file() and entry.suffix.lower() in {".pth", ".pt"}
+            for entry in path.iterdir()
+        )
+    except Exception:
+        return False
+
+
+def _discover_easyocr_model_dir() -> str | None:
+    hints = (
+        Path("EasyOCR/model"),
+        Path("easyocr/model"),
+    )
+    candidates: list[Path] = []
+    for root in _runtime_search_roots():
+        for rel in hints:
+            candidates.append(root / rel)
+    candidates.append(Path.home() / ".EasyOCR" / "model")
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            key = str(candidate.resolve()).lower()
+        except Exception:
+            key = str(candidate).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if _looks_like_easyocr_model_dir(candidate):
+            try:
+                return str(candidate.resolve())
+            except Exception:
+                return str(candidate)
+    return None
+
+
+def _import_easyocr_module() -> tuple[Any | None, str | None]:
+    try:
+        import easyocr  # type: ignore
+    except Exception as exc:
+        return None, f"easyocr-import-error:{exc}"
+    return easyocr, None
 
 
 def _runtime_search_roots() -> list[Path]:
@@ -251,6 +379,129 @@ def tesseract_resolution_diagnostics(cmd: str = "auto") -> str:
     return "\n".join(lines)
 
 
+@lru_cache(maxsize=8)
+def _cached_easyocr_reader(
+    langs_key: str,
+    model_dir: str,
+    user_network_dir: str,
+    gpu: bool,
+    download_enabled: bool,
+):
+    easyocr, import_error = _import_easyocr_module()
+    if easyocr is None:
+        raise RuntimeError(import_error or "easyocr-import-error")
+    lang_list = [token for token in str(langs_key).split("|") if token]
+    if not lang_list:
+        lang_list = ["en"]
+    reader_kwargs: dict[str, Any] = {
+        "lang_list": lang_list,
+        "gpu": bool(gpu),
+        "download_enabled": bool(download_enabled),
+    }
+    if model_dir:
+        reader_kwargs["model_storage_directory"] = str(model_dir)
+    if user_network_dir:
+        reader_kwargs["user_network_directory"] = str(user_network_dir)
+    return easyocr.Reader(**reader_kwargs)
+
+
+def _resolve_easyocr_reader(
+    *,
+    lang: str | None,
+    model_dir: str | None,
+    user_network_dir: str | None,
+    gpu: bool,
+    download_enabled: bool,
+) -> tuple[Any | None, str | None]:
+    langs = _parse_easyocr_langs(lang)
+    langs_key = "|".join(langs)
+    resolved_model_dir = _resolve_optional_directory(model_dir)
+    if resolved_model_dir:
+        model_path = Path(str(resolved_model_dir)).expanduser()
+        if (not model_path.is_dir()) and (not bool(download_enabled)):
+            resolved_model_dir = None
+    if not resolved_model_dir:
+        resolved_model_dir = _discover_easyocr_model_dir()
+    resolved_user_network_dir = _resolve_optional_directory(user_network_dir)
+    model_key = str(resolved_model_dir or "")
+    user_network_key = str(resolved_user_network_dir or "")
+    try:
+        reader = _cached_easyocr_reader(
+            langs_key,
+            model_key,
+            user_network_key,
+            bool(gpu),
+            bool(download_enabled),
+        )
+    except Exception as exc:
+        return None, f"easyocr-init-error:{exc}"
+    return reader, None
+
+
+def easyocr_resolution_diagnostics(
+    *,
+    lang: str | None = None,
+    model_dir: str | None = None,
+    user_network_dir: str | None = None,
+    gpu: bool = False,
+    download_enabled: bool = False,
+) -> str:
+    requested_lang = str(lang or "").strip() or "-"
+    parsed_langs = _parse_easyocr_langs(lang)
+    resolved_model_dir = _resolve_optional_directory(model_dir)
+    if resolved_model_dir:
+        model_path = Path(str(resolved_model_dir)).expanduser()
+        if (not model_path.is_dir()) and (not bool(download_enabled)):
+            resolved_model_dir = None
+    auto_model_dir = _discover_easyocr_model_dir() if not resolved_model_dir else None
+    effective_model_dir = resolved_model_dir or auto_model_dir
+    resolved_user_network_dir = _resolve_optional_directory(user_network_dir)
+    easyocr_mod, import_error = _import_easyocr_module()
+    lines = [
+        f"engine=easyocr",
+        f"requested_lang={requested_lang}",
+        f"normalized_langs={'+'.join(parsed_langs)}",
+        f"model_dir={effective_model_dir or '-'}",
+        f"user_network_dir={resolved_user_network_dir or '-'}",
+        f"gpu={bool(gpu)}",
+        f"download_enabled={bool(download_enabled)}",
+        f"import={'ok' if easyocr_mod is not None else 'failed'}",
+    ]
+    if import_error:
+        lines.append(f"import_error={import_error}")
+    if auto_model_dir and not resolved_model_dir:
+        lines.append("model_dir_source=auto-discovered")
+    reader, reader_error = _resolve_easyocr_reader(
+        lang=lang,
+        model_dir=model_dir,
+        user_network_dir=user_network_dir,
+        gpu=gpu,
+        download_enabled=download_enabled,
+    )
+    lines.append(f"reader={'ready' if reader is not None else 'failed'}")
+    if reader_error:
+        lines.append(f"reader_error={reader_error}")
+    return "\n".join(lines)
+
+
+def easyocr_available(
+    *,
+    lang: str | None = None,
+    model_dir: str | None = None,
+    user_network_dir: str | None = None,
+    gpu: bool = False,
+    download_enabled: bool = False,
+) -> bool:
+    reader, _ = _resolve_easyocr_reader(
+        lang=lang,
+        model_dir=model_dir,
+        user_network_dir=user_network_dir,
+        gpu=gpu,
+        download_enabled=download_enabled,
+    )
+    return reader is not None
+
+
 def tesseract_available(cmd: str = "auto") -> bool:
     return resolve_tesseract_cmd(cmd) is not None
 
@@ -305,34 +556,7 @@ def _resolve_tesseract_lang(cmd_path: str, tessdata_dir: str | None, lang: str |
     return None
 
 
-def run_tesseract(
-    image_path: Path,
-    *,
-    cmd: str = "auto",
-    psm: int = 6,
-    timeout_s: float = 8.0,
-    lang: str | None = None,
-) -> OCRRunResult:
-    cmd_path = resolve_tesseract_cmd(cmd)
-    if not cmd_path:
-        return OCRRunResult("", error=f"tesseract-not-found:{cmd}")
-    if not image_path.exists():
-        return OCRRunResult("", error=f"image-not-found:{image_path}")
-    tessdata_dir = resolve_tessdata_dir(cmd)
-    proc_args = [
-        cmd_path,
-        str(image_path),
-        "stdout",
-    ]
-    if tessdata_dir:
-        proc_args.extend(["--tessdata-dir", tessdata_dir])
-    resolved_lang = _resolve_tesseract_lang(cmd_path, tessdata_dir, lang)
-    if resolved_lang:
-        proc_args.extend(["-l", resolved_lang])
-    proc_args.extend([
-        "--psm",
-        str(max(0, int(psm))),
-    ])
+def _build_tesseract_env(cmd_path: str, tessdata_dir: str | None) -> dict[str, str]:
     env = os.environ.copy()
     try:
         cmd_path_obj = Path(cmd_path).resolve()
@@ -362,6 +586,35 @@ def run_tesseract(
             env["PATH"] = os.pathsep.join(merged_prefix + existing_parts)
     except Exception:
         pass
+    return env
+
+
+def _build_tesseract_proc_args(
+    *,
+    cmd_path: str,
+    image_path: Path,
+    tessdata_dir: str | None,
+    resolved_lang: str | None,
+    psm: int,
+    output_format: str = "txt",
+) -> list[str]:
+    proc_args = [cmd_path, str(image_path), "stdout"]
+    if tessdata_dir:
+        proc_args.extend(["--tessdata-dir", tessdata_dir])
+    if resolved_lang:
+        proc_args.extend(["-l", resolved_lang])
+    proc_args.extend(["--psm", str(max(0, int(psm)))])
+    if output_format == "tsv":
+        proc_args.append("tsv")
+    return proc_args
+
+
+def _run_tesseract_proc(
+    proc_args: list[str],
+    *,
+    timeout_s: float,
+    env: dict[str, str],
+) -> tuple[str, str | None]:
     try:
         completed = subprocess.run(
             proc_args,
@@ -372,15 +625,238 @@ def run_tesseract(
             env=env,
         )
     except subprocess.TimeoutExpired:
-        return OCRRunResult("", error="timeout")
+        return "", "timeout"
     except Exception as exc:
-        return OCRRunResult("", error=f"exec-error:{exc}")
-
+        return "", f"exec-error:{exc}"
     output = (completed.stdout or "").strip()
     if completed.returncode != 0:
         err = (completed.stderr or "").strip() or f"exit:{completed.returncode}"
-        return OCRRunResult(output, error=err)
-    return OCRRunResult(output)
+        return output, err
+    return output, None
+
+
+def _parse_tesseract_tsv_lines(tsv_text: str) -> tuple[OCRLineResult, ...]:
+    text = str(tsv_text or "").strip()
+    if not text:
+        return ()
+    rows = text.splitlines()
+    if len(rows) < 2:
+        return ()
+    header = rows[0].split("\t")
+    index: dict[str, int] = {name: idx for idx, name in enumerate(header)}
+    required = ("level", "page_num", "block_num", "par_num", "line_num", "conf", "text")
+    if any(name not in index for name in required):
+        return ()
+
+    groups: dict[tuple[int, int, int, int], dict[str, object]] = {}
+    for row in rows[1:]:
+        parts = row.split("\t")
+        if len(parts) < len(header):
+            parts.extend([""] * (len(header) - len(parts)))
+        try:
+            level = int(parts[index["level"]])
+        except Exception:
+            continue
+        if level != 5:
+            continue
+
+        token = str(parts[index["text"]] or "").strip()
+        if not token:
+            continue
+
+        try:
+            key = (
+                int(parts[index["page_num"]]),
+                int(parts[index["block_num"]]),
+                int(parts[index["par_num"]]),
+                int(parts[index["line_num"]]),
+            )
+        except Exception:
+            key = (0, 0, 0, 0)
+
+        try:
+            conf = float(parts[index["conf"]])
+        except Exception:
+            conf = -1.0
+
+        bucket = groups.setdefault(
+            key,
+            {"words": [], "conf_sum": 0.0, "conf_weight": 0.0},
+        )
+        words = bucket["words"]
+        if isinstance(words, list):
+            words.append(token)
+        if conf >= 0.0:
+            weight = max(1.0, float(len(token)))
+            bucket["conf_sum"] = float(bucket.get("conf_sum", 0.0)) + (conf * weight)
+            bucket["conf_weight"] = float(bucket.get("conf_weight", 0.0)) + weight
+
+    if not groups:
+        return ()
+
+    lines: list[OCRLineResult] = []
+    for bucket in groups.values():
+        words = [str(part).strip() for part in (bucket.get("words") or []) if str(part).strip()]
+        if not words:
+            continue
+        line_text = " ".join(words).strip()
+        conf_weight = float(bucket.get("conf_weight", 0.0))
+        if conf_weight > 0.0:
+            conf = float(bucket.get("conf_sum", 0.0)) / conf_weight
+        else:
+            conf = -1.0
+        lines.append(OCRLineResult(text=line_text, confidence=conf))
+    return tuple(lines)
+
+
+def run_tesseract_with_lines(
+    image_path: Path,
+    *,
+    cmd: str = "auto",
+    psm: int = 6,
+    timeout_s: float = 8.0,
+    lang: str | None = None,
+) -> OCRRunResult:
+    cmd_path = resolve_tesseract_cmd(cmd)
+    if not cmd_path:
+        return OCRRunResult("", error=f"tesseract-not-found:{cmd}")
+    if not image_path.exists():
+        return OCRRunResult("", error=f"image-not-found:{image_path}")
+
+    tessdata_dir = resolve_tessdata_dir(cmd)
+    resolved_lang = _resolve_tesseract_lang(cmd_path, tessdata_dir, lang)
+    env = _build_tesseract_env(cmd_path, tessdata_dir)
+    tsv_args = _build_tesseract_proc_args(
+        cmd_path=cmd_path,
+        image_path=image_path,
+        tessdata_dir=tessdata_dir,
+        resolved_lang=resolved_lang,
+        psm=psm,
+        output_format="tsv",
+    )
+    tsv_output, tsv_error = _run_tesseract_proc(tsv_args, timeout_s=timeout_s, env=env)
+    lines = _parse_tesseract_tsv_lines(tsv_output)
+    if lines:
+        merged_text = "\n".join(line.text for line in lines if str(line.text).strip())
+        return OCRRunResult(merged_text, error=None, lines=lines)
+    if tsv_error and tsv_error != "timeout":
+        # Fallback to standard stdout OCR before returning a failure.
+        pass
+
+    base_result = run_tesseract(
+        image_path,
+        cmd=cmd,
+        psm=psm,
+        timeout_s=timeout_s,
+        lang=lang,
+    )
+    fallback_lines = tuple(
+        OCRLineResult(text=line.strip(), confidence=-1.0)
+        for line in (base_result.text or "").splitlines()
+        if line.strip()
+    )
+    return OCRRunResult(base_result.text, error=base_result.error, lines=fallback_lines)
+
+
+def run_tesseract(
+    image_path: Path,
+    *,
+    cmd: str = "auto",
+    psm: int = 6,
+    timeout_s: float = 8.0,
+    lang: str | None = None,
+) -> OCRRunResult:
+    cmd_path = resolve_tesseract_cmd(cmd)
+    if not cmd_path:
+        return OCRRunResult("", error=f"tesseract-not-found:{cmd}")
+    if not image_path.exists():
+        return OCRRunResult("", error=f"image-not-found:{image_path}")
+    tessdata_dir = resolve_tessdata_dir(cmd)
+    proc_args = [
+        cmd_path,
+        str(image_path),
+        "stdout",
+    ]
+    if tessdata_dir:
+        proc_args.extend(["--tessdata-dir", tessdata_dir])
+    resolved_lang = _resolve_tesseract_lang(cmd_path, tessdata_dir, lang)
+    if resolved_lang:
+        proc_args.extend(["-l", resolved_lang])
+    proc_args.extend([
+        "--psm",
+        str(max(0, int(psm))),
+    ])
+    env = _build_tesseract_env(cmd_path, tessdata_dir)
+    output, error = _run_tesseract_proc(proc_args, timeout_s=timeout_s, env=env)
+    return OCRRunResult(output, error=error)
+
+
+def _easyocr_sort_key(detection: Any) -> tuple[float, float]:
+    try:
+        bbox = detection[0]
+    except Exception:
+        return (0.0, 0.0)
+    if not bbox:
+        return (0.0, 0.0)
+    xs: list[float] = []
+    ys: list[float] = []
+    try:
+        for point in bbox:
+            if not isinstance(point, (list, tuple)) or len(point) < 2:
+                continue
+            xs.append(float(point[0]))
+            ys.append(float(point[1]))
+    except Exception:
+        return (0.0, 0.0)
+    if not xs or not ys:
+        return (0.0, 0.0)
+    return (min(ys), min(xs))
+
+
+def run_easyocr(
+    image_path: Path,
+    *,
+    lang: str | None = None,
+    model_dir: str | None = None,
+    user_network_dir: str | None = None,
+    gpu: bool = False,
+    download_enabled: bool = False,
+) -> OCRRunResult:
+    if not image_path.exists():
+        return OCRRunResult("", error=f"image-not-found:{image_path}")
+    reader, reader_error = _resolve_easyocr_reader(
+        lang=lang,
+        model_dir=model_dir,
+        user_network_dir=user_network_dir,
+        gpu=gpu,
+        download_enabled=download_enabled,
+    )
+    if reader is None:
+        return OCRRunResult("", error=reader_error or "easyocr-reader-not-ready")
+    try:
+        detections = reader.readtext(str(image_path), detail=1, paragraph=False)
+    except Exception as exc:
+        return OCRRunResult("", error=f"easyocr-run-error:{exc}")
+    if not detections:
+        return OCRRunResult("")
+    ordered = list(detections)
+    ordered.sort(key=_easyocr_sort_key)
+    lines: list[OCRLineResult] = []
+    for detection in ordered:
+        try:
+            text = str(detection[1] or "").strip()
+        except Exception:
+            text = ""
+        if not text:
+            continue
+        try:
+            raw_conf = float(detection[2])
+            conf = raw_conf * 100.0 if raw_conf <= 1.0 else raw_conf
+        except Exception:
+            conf = -1.0
+        lines.append(OCRLineResult(text=text, confidence=conf))
+    merged_text = "\n".join(line.text for line in lines if str(line.text).strip())
+    return OCRRunResult(merged_text, lines=tuple(lines))
 
 
 def run_tesseract_multi(
@@ -394,11 +870,12 @@ def run_tesseract_multi(
 ) -> OCRRunResult:
     merged_lines: list[str] = []
     seen_lines: set[str] = set()
+    merged_confidence: dict[str, float] = {}
     errors: list[str] = []
     successful_runs = 0
 
     for psm in psm_values:
-        result = run_tesseract(
+        result = run_tesseract_with_lines(
             image_path,
             cmd=cmd,
             psm=int(psm),
@@ -409,20 +886,34 @@ def run_tesseract_multi(
             errors.append(f"psm={int(psm)}:{result.error}")
             continue
         successful_runs += 1
-        for line in (result.text or "").splitlines():
-            norm = line.strip()
+        line_entries = tuple(result.lines or ())
+        if not line_entries:
+            line_entries = tuple(
+                OCRLineResult(text=line.strip(), confidence=-1.0)
+                for line in (result.text or "").splitlines()
+                if line.strip()
+            )
+        for line_entry in line_entries:
+            norm = str(line_entry.text or "").strip()
             if not norm:
                 continue
             key = norm.lower()
             if key in seen_lines:
+                existing_conf = float(merged_confidence.get(key, -1.0))
+                merged_confidence[key] = max(existing_conf, float(line_entry.confidence))
                 continue
             seen_lines.add(key)
             merged_lines.append(norm)
+            merged_confidence[key] = float(line_entry.confidence)
         if stop_on_first_success and merged_lines:
             break
 
     if merged_lines:
-        return OCRRunResult("\n".join(merged_lines))
+        final_lines = tuple(
+            OCRLineResult(text=line, confidence=float(merged_confidence.get(line.lower(), -1.0)))
+            for line in merged_lines
+        )
+        return OCRRunResult("\n".join(merged_lines), lines=final_lines)
     if errors:
         return OCRRunResult("", error="; ".join(errors))
     if successful_runs > 0:
@@ -430,11 +921,44 @@ def run_tesseract_multi(
     return OCRRunResult("", error="no-runs")
 
 
+def run_ocr_multi(
+    image_path: Path,
+    *,
+    engine: str = "easyocr",
+    cmd: str = "auto",
+    psm_values: Iterable[int] = (6, 11),
+    timeout_s: float = 8.0,
+    lang: str | None = None,
+    stop_on_first_success: bool = False,
+    easyocr_model_dir: str | None = None,
+    easyocr_user_network_dir: str | None = None,
+    easyocr_gpu: bool = False,
+    easyocr_download_enabled: bool = False,
+) -> OCRRunResult:
+    _ = (
+        engine,
+        cmd,
+        psm_values,
+        timeout_s,
+        stop_on_first_success,
+    )
+    return run_easyocr(
+        image_path,
+        lang=lang,
+        model_dir=easyocr_model_dir,
+        user_network_dir=easyocr_user_network_dir,
+        gpu=easyocr_gpu,
+        download_enabled=easyocr_download_enabled,
+    )
+
+
 _OCR_NUMBERING_RE = re.compile(r"^\s*\d+\s*[\)\].:\-]+\s*")
 _OCR_BULLET_RE = re.compile(r"^\s*[-*•|]+\s*")
+_OCR_METADATA_PIPE_RE = re.compile(r"\s*[|¦｜┃│┆┇╎╏]+\s*")
 _OCR_SPACE_RE = re.compile(r"\s+")
 _OCR_ALLOWED_CHARS_RE = re.compile(r"[^\w .\-#]", flags=re.UNICODE)
 _OCR_HAS_ALPHA_RE = re.compile(r"[^\W\d_]", flags=re.UNICODE)
+_OCR_LEADING_ICON_RE = re.compile(r"^\s*[@©®™$%&*]+\s*")
 _OCR_EMOJI_ICON_RE = re.compile(
     "["
     "\U0001F1E6-\U0001F1FF"
@@ -446,6 +970,39 @@ _OCR_EMOJI_ICON_RE = re.compile(
     "]",
     flags=re.UNICODE,
 )
+
+
+def _strip_after_first_emoji(value: str) -> str:
+    if not value:
+        return value
+    match = _OCR_EMOJI_ICON_RE.search(value)
+    if not match:
+        return value
+    return value[: match.start()].rstrip()
+
+
+def _strip_metadata_suffix_ocr_token(line: str) -> str:
+    """Trim OCR lines like 'Massith I Marc ...' where '|' became 'I'/'l'/'1'."""
+    tokens = [tok for tok in line.split(" ") if tok]
+    if len(tokens) < 2:
+        return line
+    head = tokens[0].strip(" .-_")
+    if not head:
+        return line
+
+    second = tokens[1]
+    if second and second[0] in {"(", "[", "{", "<", "|", "¦", "｜", "┃", "│", "┆", "┇", "╎", "╏", "/", "\\"}:
+        return head
+
+    if len(tokens) < 3:
+        return line
+
+    sep = second
+    if len(sep) != 1:
+        return line
+    if sep not in {"I", "i", "l", "1", "!", "|", "¦", "｜", "┃", "│", "┆", "┇", "╎", "╏", "/", "\\"}:
+        return line
+    return head or line
 
 
 def _looks_like_name(
@@ -467,6 +1024,19 @@ def _looks_like_name(
         return False
     if not _OCR_HAS_ALPHA_RE.search(value):
         return False
+    alpha_chars = [ch for ch in value if ch.isalpha()]
+    # Apply short-token case heuristics only for scripts that have case.
+    # CJK/Hangul scripts should not be penalized by uppercase/lowercase rules.
+    cased_alpha_chars = [ch for ch in alpha_chars if ch.lower() != ch.upper()]
+    if cased_alpha_chars:
+        if len(value) <= 2 and not all(ch.isupper() for ch in cased_alpha_chars):
+            return False
+        if (
+            len(value) <= 3
+            and len(cased_alpha_chars) == len(alpha_chars)
+            and all(ch.islower() for ch in cased_alpha_chars)
+        ):
+            return False
     total_chars = sum(1 for ch in value if ch.isalnum())
     if total_chars <= 0:
         return False
@@ -544,38 +1114,74 @@ def _find_near_duplicate_key(
     return best_key
 
 
-def extract_candidate_names(
+def _extract_candidate_names_impl(
     text: str,
     *,
     min_chars: int = 2,
     max_chars: int = 24,
     max_words: int = 2,
     max_digit_ratio: float = 0.45,
-) -> list[str]:
+    include_debug: bool = False,
+) -> tuple[list[str], list[dict]]:
     if not text:
-        return []
+        return [], []
 
     found: list[str] = []
     seen: set[str] = set()
+    line_debug: list[dict] = []
     min_len = max(1, int(min_chars))
     max_len = max(0, int(max_chars))
     word_limit = max(0, int(max_words))
     digit_ratio = max(0.0, float(max_digit_ratio))
 
     for raw_line in text.splitlines():
+        debug_entry: dict | None = None
+        if include_debug:
+            debug_entry = {"raw": str(raw_line)}
         line = raw_line.strip()
         if not line:
+            if debug_entry is not None:
+                debug_entry["status"] = "dropped"
+                debug_entry["reason"] = "empty-line"
+                line_debug.append(debug_entry)
             continue
-        line = _OCR_NUMBERING_RE.sub("", line)
-        line = _OCR_BULLET_RE.sub("", line)
-        # The OCR list is expected to be line-based. Ignore any metadata suffix after "|".
-        line = line.split("|", 1)[0].strip()
-        if not line:
+        if debug_entry is not None:
+            debug_entry["trimmed"] = str(line)
+
+        normalized = _OCR_NUMBERING_RE.sub("", line)
+        normalized = _OCR_BULLET_RE.sub("", normalized)
+        had_leading_icon = bool(_OCR_LEADING_ICON_RE.match(normalized))
+        normalized = _OCR_LEADING_ICON_RE.sub("", normalized)
+        # The OCR list is expected to be line-based. Ignore metadata suffix after
+        # common pipe-like separators ("|", "¦", "｜", ...).
+        normalized = _OCR_METADATA_PIPE_RE.split(normalized, 1)[0].strip()
+        normalized = _strip_metadata_suffix_ocr_token(normalized)
+        # Ignore everything after the first emoji/icon in a line.
+        normalized = _strip_after_first_emoji(normalized)
+        if debug_entry is not None:
+            debug_entry["after_metadata"] = str(normalized)
+        if not normalized:
+            if debug_entry is not None:
+                debug_entry["status"] = "dropped"
+                debug_entry["reason"] = "empty-after-metadata-trim"
+                line_debug.append(debug_entry)
             continue
-        line = _OCR_EMOJI_ICON_RE.sub(" ", line)
-        part = _OCR_ALLOWED_CHARS_RE.sub(" ", line)
+        normalized = _OCR_EMOJI_ICON_RE.sub(" ", normalized)
+        part = _OCR_ALLOWED_CHARS_RE.sub(" ", normalized)
         part = _OCR_SPACE_RE.sub(" ", part).strip(" .-_")
+        if debug_entry is not None:
+            debug_entry["cleaned"] = str(part)
         if not part:
+            if debug_entry is not None:
+                debug_entry["status"] = "dropped"
+                debug_entry["reason"] = "empty-after-char-cleanup"
+                line_debug.append(debug_entry)
+            continue
+        if had_leading_icon and len(part) <= 5 and part.isupper():
+            if debug_entry is not None:
+                debug_entry["status"] = "dropped"
+                debug_entry["reason"] = "icon-prefixed-short-upper"
+                line_debug.append(debug_entry)
             continue
         if not _looks_like_name(
             part,
@@ -584,14 +1190,65 @@ def extract_candidate_names(
             max_words=word_limit,
             max_digit_ratio=digit_ratio,
         ):
+            if debug_entry is not None:
+                debug_entry["status"] = "dropped"
+                debug_entry["reason"] = "failed-name-heuristics"
+                line_debug.append(debug_entry)
             continue
         candidate_key = _candidate_key(part)
         if candidate_key in seen:
+            if debug_entry is not None:
+                debug_entry["status"] = "dropped"
+                debug_entry["reason"] = "duplicate-key"
+                debug_entry["key"] = candidate_key
+                line_debug.append(debug_entry)
             continue
         seen.add(candidate_key)
         found.append(part)
+        if debug_entry is not None:
+            debug_entry["status"] = "accepted"
+            debug_entry["key"] = candidate_key
+            debug_entry["candidate"] = part
+            line_debug.append(debug_entry)
 
+    return found, line_debug
+
+
+def extract_candidate_names(
+    text: str,
+    *,
+    min_chars: int = 2,
+    max_chars: int = 24,
+    max_words: int = 2,
+    max_digit_ratio: float = 0.45,
+) -> list[str]:
+    found, _ = _extract_candidate_names_impl(
+        text,
+        min_chars=min_chars,
+        max_chars=max_chars,
+        max_words=max_words,
+        max_digit_ratio=max_digit_ratio,
+        include_debug=False,
+    )
     return found
+
+
+def extract_candidate_names_debug(
+    text: str,
+    *,
+    min_chars: int = 2,
+    max_chars: int = 24,
+    max_words: int = 2,
+    max_digit_ratio: float = 0.45,
+) -> tuple[list[str], list[dict]]:
+    return _extract_candidate_names_impl(
+        text,
+        min_chars=min_chars,
+        max_chars=max_chars,
+        max_words=max_words,
+        max_digit_ratio=max_digit_ratio,
+        include_debug=True,
+    )
 
 
 def extract_candidate_names_multi(

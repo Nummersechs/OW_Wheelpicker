@@ -62,6 +62,7 @@ class _FakeStateSync:
 class TestMainWindowOCRImport(unittest.TestCase):
     def _make_window(self) -> MainWindow:
         mw = MainWindow.__new__(MainWindow)
+        mw.settings = {}
         mw.tank = _FakeWheel(subrole_labels=["MT", "OT"])
         mw.dps = _FakeWheel(subrole_labels=["HS", "FDPS"])
         mw.support = _FakeWheel(subrole_labels=["MS", "FS"])
@@ -69,6 +70,28 @@ class TestMainWindowOCRImport(unittest.TestCase):
         mw._spin_all_updates = 0
         mw._update_spin_all_enabled = lambda: setattr(mw, "_spin_all_updates", mw._spin_all_updates + 1)
         return mw
+
+    def test_apply_ocr_name_hints_maps_noisy_tokens_to_hint_names(self):
+        mw = self._make_window()
+        mw.settings.update(
+            {
+                "OCR_USE_NAME_HINTS": True,
+                "OCR_EXPECTED_CANDIDATES": 5,
+                "OCR_NAME_HINTS": ["Aero", "AJAR", "Massith", "Mika", "Nikeos"],
+                "OCR_HINT_CORRECTION_MIN_SCORE": 0.62,
+                "OCR_HINT_CORRECTION_LOW_CONF_MIN_SCORE": 0.28,
+            }
+        )
+
+        corrected = MainWindow._apply_ocr_name_hints(
+            mw,
+            "dps",
+            ["Aero", "BAO", "Rew", "MNKE"],
+        )
+
+        self.assertEqual(len(corrected), 5)
+        self.assertEqual(set(corrected), {"Aero", "AJAR", "Massith", "Mika", "Nikeos"})
+        self.assertEqual(corrected[0], "Aero")
 
     def test_selected_entries_for_pending_maps_role_assignments(self):
         mw = self._make_window()
@@ -103,6 +126,37 @@ class TestMainWindowOCRImport(unittest.TestCase):
         self.assertEqual(entries[0]["subroles_by_role"], {"tank": ["MT"], "support": ["MS"]})
         self.assertEqual(entries[1]["subroles_by_role"], {"dps": ["FDPS"]})
         self.assertEqual(entries[2]["subrole_codes"], ["main"])
+
+    def test_selected_entries_for_pending_keeps_duplicate_candidates_until_import(self):
+        mw = self._make_window()
+        pending = PendingOCRImport(
+            role_key="all",
+            candidates=["Alpha", "Alpha", "Bravo"],
+            option_labels=["Tank", "DPS", "Support", "Main", "Flex"],
+            option_assignment_by_label_key={
+                "tank": "tank",
+                "dps": "dps",
+                "support": "support",
+            },
+            option_subrole_code_by_label_key={
+                "main": "main",
+                "flex": "flex",
+            },
+            hint_key="ocr.pick_hint_all_roles",
+            hint_kwargs={},
+        )
+        payload = [
+            {"name": "Alpha", "subroles": ["Tank"]},
+            {"name": "Alpha", "subroles": ["Support"]},
+            {"name": "Bravo", "subroles": ["DPS"]},
+        ]
+
+        entries = MainWindow._selected_ocr_entries_for_pending(mw, pending, payload)
+
+        self.assertEqual([entry["name"] for entry in entries], ["Alpha", "Alpha", "Bravo"])
+        self.assertEqual(entries[0]["assignments"], ["tank"])
+        self.assertEqual(entries[1]["assignments"], ["support"])
+        self.assertEqual(entries[2]["assignments"], ["dps"])
 
     def test_add_distributed_respects_explicit_roles_and_round_robin(self):
         mw = self._make_window()

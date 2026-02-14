@@ -207,7 +207,6 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._pending_delete_names_panel = None
         self._pending_ocr_import: PendingOCRImport | None = None
         self._ocr_async_job = None
-        self._ocr_tesseract_cmd_cache: dict[str, str | None] = {}
         self._role_ocr_buttons: dict[str, QtWidgets.QPushButton] = {}
         central, root = self._build_root()
         self._build_header(root, saved)
@@ -1248,6 +1247,12 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
                 self.lbl_player_profile,
                 f"profile_label:{theme.key}",
                 f"color:{theme.muted_text}; font-size:13px; font-weight:600;",
+            )
+        if hasattr(self, "lbl_mode"):
+            style_helpers.set_stylesheet_if_needed(
+                self.lbl_mode,
+                f"mode_label:{theme.key}",
+                f"color:{theme.text}; font-size:13px; font-weight:600;",
             )
         if hasattr(self, "player_profile_dropdown"):
             self.player_profile_dropdown.apply_theme(theme)

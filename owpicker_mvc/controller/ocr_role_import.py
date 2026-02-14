@@ -49,19 +49,29 @@ def resolve_selected_candidates(
     pending_names: Iterable[str] | None,
     selected_names: Iterable[str] | None,
 ) -> list[str]:
-    selected_keys = name_key_set(selected_names)
-    if not selected_keys:
+    selected_counts: dict[str, int] = {}
+    for value in selected_names or []:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        key = normalize_name_key(text) or text.casefold()
+        if not key:
+            continue
+        selected_counts[key] = int(selected_counts.get(key, 0)) + 1
+    if not selected_counts:
         return []
     names_to_add: list[str] = []
-    seen_keys: set[str] = set()
     for name in pending_names or []:
         norm_name = str(name or "").strip()
         if not norm_name:
             continue
-        key = normalize_name_key(norm_name)
-        if not key or key not in selected_keys or key in seen_keys:
+        key = normalize_name_key(norm_name) or norm_name.casefold()
+        if not key:
             continue
-        seen_keys.add(key)
+        remaining = int(selected_counts.get(key, 0))
+        if remaining <= 0:
+            continue
+        selected_counts[key] = remaining - 1
         names_to_add.append(norm_name)
     return names_to_add
 

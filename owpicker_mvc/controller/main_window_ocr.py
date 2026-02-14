@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from collections import deque
+from difflib import SequenceMatcher
 from PySide6 import QtWidgets
 
 import i18n
+from logic.name_normalization import normalize_name_alnum_key
 from .ocr_role_import import (
     PendingOCRImport,
     normalize_name_key as normalize_ocr_name_key,
@@ -12,6 +15,166 @@ from utils import ui_helpers
 
 
 class MainWindowOCRMixin:
+    def _ocr_name_hint_candidates(self, role_key: str) -> list[str]:
+        key = str(role_key or "").strip().casefold()
+        names: list[str] = []
+        seen: set[str] = set()
+
+        def _add(value: str) -> None:
+            text = str(value or "").strip()
+            if not text:
+                return
+            norm = normalize_ocr_name_key(text)
+            if not norm or norm in seen:
+                return
+            seen.add(norm)
+            names.append(text)
+
+        cfg_hints = self._cfg("OCR_NAME_HINTS", [])
+        if isinstance(cfg_hints, (list, tuple, set)):
+            for raw in cfg_hints:
+                _add(str(raw or ""))
+        if names and bool(self._cfg("OCR_NAME_HINTS_ONLY_WHEN_SET", True)):
+            return names
+
+        if key in {"tank", "dps", "support"}:
+            wheel = self._target_wheel_for_ocr_role(key)
+            if wheel is not None and hasattr(wheel, "get_current_names"):
+                try:
+                    for current in wheel.get_current_names():
+                        _add(str(current or ""))
+                except Exception:
+                    pass
+        else:
+            for role in self._ocr_distribution_role_keys():
+                wheel = self._target_wheel_for_ocr_role(role)
+                if wheel is None or not hasattr(wheel, "get_current_names"):
+                    continue
+                try:
+                    for current in wheel.get_current_names():
+                        _add(str(current or ""))
+                except Exception:
+                    pass
+
+        return names
+
+    def _ocr_name_similarity_score(self, ocr_name: str, hint_name: str) -> float:
+        left = normalize_name_alnum_key(ocr_name)
+        right = normalize_name_alnum_key(hint_name)
+        if not left or not right:
+            return 0.0
+        if left == right:
+            return 1.0
+        score = SequenceMatcher(None, left, right).ratio()
+        if left in right or right in left:
+            score += 0.12
+        if left[:1] == right[:1]:
+            score += 0.05
+        return min(1.0, score)
+
+    def _apply_ocr_name_hints(self, role_key: str, names: list[str]) -> list[str]:
+        if not bool(self._cfg("OCR_USE_NAME_HINTS", True)):
+            return list(names or [])
+        hints = self._ocr_name_hint_candidates(role_key)
+        if not hints:
+            return list(names or [])
+
+        expected = max(1, int(self._cfg("OCR_EXPECTED_CANDIDATES", 5)))
+        min_score = float(self._cfg("OCR_HINT_CORRECTION_MIN_SCORE", 0.62))
+        low_conf_min_score = float(self._cfg("OCR_HINT_CORRECTION_LOW_CONF_MIN_SCORE", 0.28))
+
+        normalized_input = [str(value or "").strip() for value in list(names or []) if str(value or "").strip()]
+        if not normalized_input:
+            return []
+
+        corrected: list[str] = []
+        used_hints: set[str] = set()
+        hint_keys = {
+            normalize_ocr_name_key(hint)
+            for hint in hints
+            if normalize_ocr_name_key(hint)
+        }
+        unmatched_input = 0
+        short_count = 0
+
+        for raw_name in normalized_input:
+            if len(raw_name) <= 3:
+                short_count += 1
+            best_hint = ""
+            best_score = 0.0
+            for hint in hints:
+                hint_key = normalize_ocr_name_key(hint)
+                if not hint_key or hint_key in used_hints:
+                    continue
+                score = self._ocr_name_similarity_score(raw_name, hint)
+                if score > best_score:
+                    best_score = score
+                    best_hint = hint
+            if best_hint and best_score >= min_score:
+                corrected.append(best_hint)
+                used_hints.add(normalize_ocr_name_key(best_hint))
+            else:
+                corrected.append(raw_name)
+                unmatched_input += 1
+
+        looks_noisy = (
+            unmatched_input >= max(1, len(normalized_input) // 2)
+            or (short_count / max(1, len(normalized_input))) >= 0.34
+        )
+        if looks_noisy:
+            for idx, raw_name in enumerate(list(corrected)):
+                if normalize_ocr_name_key(raw_name) in hint_keys:
+                    continue
+                best_hint = ""
+                best_score = 0.0
+                for hint in hints:
+                    hint_key = normalize_ocr_name_key(hint)
+                    if not hint_key or hint_key in used_hints:
+                        continue
+                    score = self._ocr_name_similarity_score(raw_name, hint)
+                    if score > best_score:
+                        best_score = score
+                        best_hint = hint
+                if best_hint and best_score >= low_conf_min_score:
+                    corrected[idx] = best_hint
+                    used_hints.add(normalize_ocr_name_key(best_hint))
+
+            if len(hints) <= (expected + 3):
+                for idx, raw_name in enumerate(list(corrected)):
+                    if normalize_ocr_name_key(raw_name) in hint_keys:
+                        continue
+                    replacement = ""
+                    for hint in hints:
+                        hint_key = normalize_ocr_name_key(hint)
+                        if not hint_key or hint_key in used_hints:
+                            continue
+                        replacement = hint
+                        break
+                    if replacement:
+                        corrected[idx] = replacement
+                        used_hints.add(normalize_ocr_name_key(replacement))
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for value in corrected:
+            key_norm = normalize_ocr_name_key(value)
+            if not key_norm or key_norm in seen:
+                continue
+            seen.add(key_norm)
+            deduped.append(value)
+
+        if looks_noisy and len(deduped) < expected:
+            for hint in hints:
+                key_norm = normalize_ocr_name_key(hint)
+                if not key_norm or key_norm in seen:
+                    continue
+                deduped.append(hint)
+                seen.add(key_norm)
+                if len(deduped) >= expected:
+                    break
+
+        return deduped
+
     def _target_wheel_for_ocr_role(self, role_key: str):
         attr_map = {
             "tank": "tank",
@@ -158,16 +321,13 @@ class MainWindowOCRMixin:
         return labels, assignment_mapping, subrole_code_mapping, "ocr.pick_hint"
 
     def _normalize_ocr_candidate_names(self, names: list[str]) -> list[str]:
+        # Keep OCR candidates in original order and keep duplicates visible in picker.
+        # Duplicate filtering happens during import (add/replace).
         normalized: list[str] = []
-        seen_keys: set[str] = set()
         for raw in names or []:
             name = str(raw or "").strip()
             if not name:
                 continue
-            key = normalize_ocr_name_key(name)
-            if not key or key in seen_keys:
-                continue
-            seen_keys.add(key)
             normalized.append(name)
         return normalized
 
@@ -288,38 +448,48 @@ class MainWindowOCRMixin:
         if not names_in_order:
             return []
 
-        codes_by_name_key: dict[str, list[str]] = {}
-        subrole_codes_by_name_key: dict[str, list[str]] = {}
-        subroles_by_name_key: dict[str, dict[str, list[str]]] = {}
+        entries_by_name_key: dict[str, deque[dict]] = {}
         for entry in raw_selected:
             key = normalize_ocr_name_key(entry.get("name", ""))
-            if key and key not in codes_by_name_key:
-                codes_by_name_key[key] = list(entry.get("assignments", []))
-                subrole_codes_by_name_key[key] = [
+            if not key:
+                continue
+            payload = {
+                "assignments": list(entry.get("assignments", [])),
+                "subrole_codes": [
                     str(code).strip().casefold()
                     for code in list(entry.get("subrole_codes", []) or [])
                     if str(code).strip()
-                ]
-                raw_subroles = entry.get("subroles_by_role", {}) or {}
-                subroles_by_name_key[key] = {
+                ],
+                "subroles_by_role": {
                     str(role).strip().casefold(): [
                         str(subrole).strip()
                         for subrole in list(values or [])
                         if str(subrole).strip()
                     ]
-                    for role, values in raw_subroles.items()
+                    for role, values in (entry.get("subroles_by_role", {}) or {}).items()
                     if str(role).strip()
-                }
+                },
+            }
+            queue = entries_by_name_key.setdefault(key, deque())
+            queue.append(payload)
 
         resolved_entries: list[dict] = []
         for name in names_in_order:
             key = normalize_ocr_name_key(name)
+            payload = None
+            if key:
+                queue = entries_by_name_key.get(key)
+                if queue:
+                    payload = queue.popleft()
+            assignments = list((payload or {}).get("assignments", []))
+            subrole_codes = list((payload or {}).get("subrole_codes", []))
+            subroles_by_role = dict((payload or {}).get("subroles_by_role", {}))
             resolved_entries.append(
                 {
                     "name": name,
-                    "assignments": list(codes_by_name_key.get(key, [])),
-                    "subrole_codes": list(subrole_codes_by_name_key.get(key, [])),
-                    "subroles_by_role": dict(subroles_by_name_key.get(key, {})),
+                    "assignments": assignments,
+                    "subrole_codes": subrole_codes,
+                    "subroles_by_role": subroles_by_role,
                     "active": True,
                 }
             )

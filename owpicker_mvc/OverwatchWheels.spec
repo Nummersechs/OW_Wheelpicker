@@ -2,6 +2,11 @@
 import os
 import shutil
 from pathlib import Path
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+)
 
 
 block_cipher = None
@@ -47,7 +52,16 @@ INCLUDE_QT_MULTIMEDIA = not MIN_SIZE_BUILD
 # Requests is optional (online sync only). Disable by default to keep runtime lean.
 INCLUDE_REQUESTS = _env_flag("OW_INCLUDE_REQUESTS", False)
 PRUNE_QT_RUNTIME = _env_flag("OW_PRUNE_QT", True)
-INCLUDE_OCR_BUNDLE = _env_flag("OW_INCLUDE_OCR_BUNDLE", True)
+OCR_ENGINE = (os.environ.get("OW_OCR_ENGINE") or "easyocr").strip().lower()
+if OCR_ENGINE in {"easy", "easy-ocr", "easy_ocr"}:
+    OCR_ENGINE = "easyocr"
+if OCR_ENGINE != "easyocr":
+    print(f"[spec] Unsupported OW_OCR_ENGINE={OCR_ENGINE!r}; forcing 'easyocr'.")
+    OCR_ENGINE = "easyocr"
+INCLUDE_EASYOCR = _env_flag("OW_INCLUDE_EASYOCR", True)
+if _env_flag("OW_INCLUDE_OCR_BUNDLE", False):
+    print("[spec] OW_INCLUDE_OCR_BUNDLE is ignored; OCR bundle mode is disabled.")
+INCLUDE_OCR_BUNDLE = False
 OCR_BUNDLE_MODE = (os.environ.get("OW_OCR_BUNDLE_MODE") or "minimal").strip().lower()
 if OCR_BUNDLE_MODE not in {"minimal", "full"}:
     raise SystemExit(
@@ -64,6 +78,12 @@ _OCR_EXTERNAL_DIR_ENV_VARS = ("OW_TESSERACT_DIR", "TESSERACT_ROOT")
 _WINDOWS_TESSERACT_DIR_CANDIDATES = (
     Path("C:/Program Files/Tesseract-OCR"),
     Path("C:/Program Files (x86)/Tesseract-OCR"),
+)
+_EASYOCR_MODEL_HINTS = (
+    Path("EasyOCR/model"),
+    Path("easyocr/model"),
+    Path("OCR/EasyOCR/model"),
+    Path("ocr/easyocr/model"),
 )
 
 
@@ -210,6 +230,94 @@ def _target_dir_for_relative(base_dir: Path, file_path: Path, root_target: str) 
     return f"{root_target}/{rel_parent.as_posix()}"
 
 
+def _easyocr_model_candidate_dirs() -> list[Path]:
+    candidates: list[Path] = []
+    env_path = str(os.environ.get("OW_EASYOCR_MODEL_DIR", "")).strip()
+    if env_path:
+        candidates.append(Path(env_path).expanduser())
+
+    for root in (project_root, project_root.parent):
+        for rel in _EASYOCR_MODEL_HINTS:
+            candidate = root / rel
+            if candidate.exists() and candidate.is_dir():
+                candidates.append(candidate)
+
+    home_default = Path.home() / ".EasyOCR" / "model"
+    if home_default.exists() and home_default.is_dir():
+        candidates.append(home_default)
+    return _unique_paths(candidates)
+
+
+def _pick_easyocr_model_source_dir() -> Path | None:
+    candidates = _easyocr_model_candidate_dirs()
+    if not candidates:
+        return None
+    for candidate in candidates:
+        try:
+            if any(
+                path.is_file() and path.suffix.lower() in {".pth", ".pt"}
+                for path in candidate.rglob("*")
+            ):
+                return candidate
+        except Exception:
+            continue
+    return None
+
+
+def _collect_easyocr_model_datas(source_dir: Path) -> tuple[list[tuple[str, str]], int, int]:
+    datas_local: list[tuple[str, str]] = []
+    file_count = 0
+    total_bytes = 0
+    for path in sorted(source_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        target_dir = _target_dir_for_relative(source_dir, path, "EasyOCR/model")
+        datas_local.append((str(path), target_dir))
+        file_count += 1
+        try:
+            total_bytes += int(path.stat().st_size)
+        except Exception:
+            pass
+    return datas_local, file_count, total_bytes
+
+
+def _append_unique_toc_entries(target: list, entries: list) -> None:
+    seen: set[tuple[str, str, str]] = set()
+    for current in target:
+        try:
+            key = (
+                str(current[0]),
+                str(current[1]),
+                str(current[2]) if len(current) > 2 else "",
+            )
+        except Exception:
+            key = (str(current), "", "")
+        seen.add(key)
+    for entry in entries:
+        try:
+            key = (
+                str(entry[0]),
+                str(entry[1]),
+                str(entry[2]) if len(entry) > 2 else "",
+            )
+        except Exception:
+            key = (str(entry), "", "")
+        if key in seen:
+            continue
+        seen.add(key)
+        target.append(entry)
+
+
+def _append_unique_strings(target: list[str], entries: list[str]) -> None:
+    seen = {str(item).strip() for item in target if str(item).strip()}
+    for entry in entries:
+        value = str(entry).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        target.append(value)
+
+
 def _ocr_bundle_stats_from_files(files: list[Path]) -> tuple[int, int, list[str]]:
     file_count = 0
     total_bytes = 0
@@ -305,6 +413,53 @@ def _collect_minimal_ocr_datas(
 datas = []
 datas.extend(_audio_datas("Spin", "Spin"))
 datas.extend(_audio_datas("Ding", "Ding"))
+extra_binaries: list = []
+extra_hiddenimports: list[str] = []
+
+if INCLUDE_EASYOCR:
+    print("[spec] EasyOCR bundle enabled.")
+    easyocr_imports = [
+        "easyocr",
+        "torch",
+        "torchvision",
+        "cv2",
+        "numpy",
+        "PIL",
+        "scipy",
+        "skimage",
+    ]
+    try:
+        easyocr_imports.extend(collect_submodules("easyocr"))
+    except Exception as exc:
+        print(f"[spec] WARNING: failed to collect easyocr submodules: {exc}")
+    _append_unique_strings(extra_hiddenimports, easyocr_imports)
+
+    for module_name in ("torch", "torchvision"):
+        try:
+            _append_unique_toc_entries(extra_binaries, list(collect_dynamic_libs(module_name)))
+        except Exception as exc:
+            print(f"[spec] WARNING: failed to collect dynamic libs for {module_name}: {exc}")
+
+    try:
+        _append_unique_toc_entries(datas, list(collect_data_files("easyocr", include_py_files=False)))
+    except Exception as exc:
+        print(f"[spec] WARNING: failed to collect easyocr package data: {exc}")
+
+    easyocr_model_source = _pick_easyocr_model_source_dir()
+    if easyocr_model_source is not None:
+        model_datas, model_count, model_bytes = _collect_easyocr_model_datas(easyocr_model_source)
+        _append_unique_toc_entries(datas, model_datas)
+        model_mb = model_bytes / (1024 * 1024)
+        print(
+            "[spec] EasyOCR model source: "
+            f"{easyocr_model_source} ({model_count} files, ~{model_mb:.1f} MB)"
+        )
+    else:
+        print(
+            "[spec] WARNING: no EasyOCR model directory found. "
+            "Set OW_EASYOCR_MODEL_DIR to bundle offline models."
+        )
+
 if INCLUDE_OCR_BUNDLE:
     ocr_source_dir = _pick_ocr_source_dir()
     if ocr_source_dir is None:
@@ -355,7 +510,8 @@ else:
 print(
     "[spec] Build profile="
     f"{BUILD_PROFILE} | dist_mode={DIST_MODE} | strip={STRIP_BINARIES} | upx={ENABLE_UPX} | "
-    f"qt_multimedia={INCLUDE_QT_MULTIMEDIA} | requests={INCLUDE_REQUESTS}"
+    f"qt_multimedia={INCLUDE_QT_MULTIMEDIA} | requests={INCLUDE_REQUESTS} | "
+    f"ocr_engine={OCR_ENGINE} | include_easyocr={INCLUDE_EASYOCR} | include_ocr_bundle={INCLUDE_OCR_BUNDLE}"
 )
 
 hiddenimports = [
@@ -377,6 +533,7 @@ hiddenimports = [
         else []
     ),
 ]
+_append_unique_strings(hiddenimports, extra_hiddenimports)
 
 excludes = [
     "PySide6.QtConcurrent",
@@ -437,6 +594,22 @@ excludes = [
     "PySide6.QtWebView",
     "PySide6.QtXml",
     "PySide6.QtXmlPatterns",
+    # Optional ecosystems that are not needed for EasyOCR runtime.
+    # Excluding these reduces noisy build warnings and avoids unnecessary baggage.
+    "torch.utils.tensorboard",
+    "tensorboard",
+    "tensorflow",
+    "tensorflow_estimator",
+    "scipy.special._cdflib",
+    "torch.testing",
+    "torch.testing._internal",
+    "fsspec.conftest",
+    "numpy.testing",
+    "scipy._lib._testutils",
+    "sympy.testing",
+    "skimage._shared.tester",
+    "tkinter",
+    "_tkinter",
 ]
 if MIN_SIZE_BUILD:
     excludes.append("PySide6.QtMultimedia")
@@ -490,7 +663,7 @@ def _keep_toc_entry(entry) -> bool:
 a = Analysis(
     [str(project_root / "main.py")],
     pathex=[str(project_root)],
-    binaries=[],
+    binaries=extra_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     excludes=excludes,

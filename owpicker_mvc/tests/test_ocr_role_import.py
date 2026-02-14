@@ -23,6 +23,11 @@ class TestOCRRoleImport(unittest.TestCase):
         selected = ["charlie", "alpha", "ALPHA"]
         self.assertEqual(resolve_selected_candidates(pending, selected), ["Alpha", "Charlie"])
 
+    def test_resolve_selected_candidates_preserves_duplicate_counts(self):
+        pending = ["Alpha", "Alpha", "Bravo", "Alpha"]
+        selected = ["alpha", "ALPHA"]
+        self.assertEqual(resolve_selected_candidates(pending, selected), ["Alpha", "Alpha"])
+
     def test_add_names_counts_successful_adds(self):
         added_names = []
 

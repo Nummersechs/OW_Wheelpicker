@@ -65,16 +65,24 @@ NETWORK_SYNC_DEBOUNCE_MS = 220
 NETWORK_SYNC_WORKERS = 2
 
 # ---------- OCR Import (prototype) ----------
-# OCR_TESSERACT_CMD:
-# - "auto" (recommended): prefers bundled OCR runtime in EXE, then falls back to PATH
-# - absolute path (optional): force a specific binary
-OCR_TESSERACT_CMD = "auto"
+# OCR engine (local/offline):
+# - "easyocr" is the active/default backend.
+OCR_ENGINE = "easyocr"
 # OCR language packs are the biggest speed factor.
 # Keep this minimal for fast OCR; add more languages only when needed.
-# German + English mixed default.
-OCR_TESSERACT_LANG = "deu+eng"
-OCR_TESSERACT_PSM = 6
-OCR_TESSERACT_FALLBACK_PSM = 11
+# English-first default for in-game player names.
+OCR_TESSERACT_LANG = "eng"
+# EasyOCR language list (comma/plus separated), e.g. "en" or "en,de".
+OCR_EASYOCR_LANG = "en"
+# Local model paths for EasyOCR (optional). Keep empty to use EasyOCR defaults.
+OCR_EASYOCR_MODEL_DIR = ""
+OCR_EASYOCR_USER_NETWORK_DIR = ""
+OCR_EASYOCR_GPU = False
+# Keep False for strict offline behavior (no model downloads at runtime).
+OCR_EASYOCR_DOWNLOAD_ENABLED = False
+OCR_TESSERACT_PSM = 11
+OCR_TESSERACT_FALLBACK_PSM = 6
+OCR_TESSERACT_RETRY_EXTRA_PSMS = [7, 13]
 OCR_TESSERACT_TIMEOUT_S = 8.0
 # Windows override for OCR timeout (seconds). Lower = more responsive.
 OCR_TESSERACT_TIMEOUT_S_WINDOWS = 6.0
@@ -84,12 +92,84 @@ OCR_MAX_VARIANTS = 2
 # Windows override: prefer one quick variant first for faster OCR response.
 OCR_MAX_VARIANTS_WINDOWS = 1
 # In fast mode, stop after the first variant that yields text
-OCR_STOP_AFTER_FIRST_VARIANT_SUCCESS = True
+OCR_STOP_AFTER_FIRST_VARIANT_SUCCESS = False
+# Retry with a more thorough OCR pass when fast mode found too few names.
+OCR_RECALL_RETRY_ENABLED = True
+# Retry trigger threshold (0 disables retry trigger).
+OCR_RECALL_RETRY_MIN_CANDIDATES = 5
+# Retry trigger threshold for too many detected names.
+OCR_RECALL_RETRY_MAX_CANDIDATES = 7
+# Retry trigger if too many very short names (len<=2) are present.
+OCR_RECALL_RETRY_SHORT_NAME_MAX_RATIO = 0.34
+# Variant cap for retry pass (0 = same/all prepared variants).
+OCR_RECALL_RETRY_MAX_VARIANTS = 4
+# Retry can include fallback PSM for better recall.
+OCR_RECALL_RETRY_USE_FALLBACK_PSM = True
+# Retry timeout multiplier (>= 1.0).
+OCR_RECALL_RETRY_TIMEOUT_SCALE = 1.35
+# If low-count OCR results remain after retry, relax support filtering to avoid
+# dropping single-pass names.
+OCR_RECALL_RELAX_SUPPORT_ON_LOW_COUNT = True
+# Used for OCR candidate quality scoring and pass selection.
+OCR_EXPECTED_CANDIDATES = 5
+# Row-based fallback OCR for low-count results (tries to OCR each detected text row).
+OCR_ROW_PASS_ENABLED = True
+OCR_ROW_PASS_ALWAYS_RUN = True
+OCR_ROW_PASS_MIN_CANDIDATES = 5
+OCR_ROW_PASS_BRIGHTNESS_THRESHOLD = 145
+OCR_ROW_PASS_MIN_PIXELS_RATIO = 0.015
+OCR_ROW_PASS_MERGE_GAP_PX = 2
+OCR_ROW_PASS_MIN_HEIGHT_PX = 7
+OCR_ROW_PASS_MAX_ROWS = 12
+OCR_ROW_PASS_PAD_PX = 2
+OCR_ROW_PASS_NAME_X_RATIO = 0.58
+# Row projection window used for line segmentation.
+# Helps avoid continuous bright borders/checkbox columns in OCR pick overlay.
+OCR_ROW_PASS_PROJECTION_X_START_RATIO = 0.08
+OCR_ROW_PASS_PROJECTION_X_END_RATIO = 0.92
+OCR_ROW_PASS_PROJECTION_COL_MAX_RATIO = 0.84
+OCR_ROW_PASS_SCALE_FACTOR = 4
+OCR_ROW_PASS_INCLUDE_MONO = True
+OCR_ROW_PASS_TIMEOUT_SCALE = 0.55
+OCR_ROW_PASS_PSMS = [7, 13, 6]
+# OCR debug: shows a detailed report dialog after each OCR run.
+OCR_DEBUG_SHOW_REPORT = False
+# Keep enabled with OCR_DEBUG_SHOW_REPORT so the dialog receives the full report text.
+OCR_DEBUG_INCLUDE_REPORT_TEXT = False
+OCR_DEBUG_REPORT_MAX_CHARS = 24000
+# Persist OCR debug reports into a file for easier sharing/analysis.
+OCR_DEBUG_LOG_TO_FILE = True
+OCR_DEBUG_LOG_FILE = "ocr_debug.log"
+OCR_DEBUG_LOG_MAX_CHARS = 200000
+# Per-line parser diagnostics (accepted/dropped + reason) inside debug report.
+OCR_DEBUG_LINE_ANALYSIS = True
+OCR_DEBUG_LINE_MAX_ENTRIES_PER_RUN = 60
+# QUIET erzwingt zusätzlich: keine OCR-Debug-Reports/Dateilogs.
+if QUIET:
+    OCR_DEBUG_SHOW_REPORT = False
+    OCR_DEBUG_INCLUDE_REPORT_TEXT = False
+    OCR_DEBUG_LOG_TO_FILE = False
+    OCR_DEBUG_LINE_ANALYSIS = False
+# Optional manual vocabulary that improves OCR correction for known player names.
+# Keep disabled by default to avoid bias from hardcoded names.
+OCR_USE_NAME_HINTS = False
+OCR_NAME_HINTS = []
+OCR_NAME_HINTS_ONLY_WHEN_SET = True
+OCR_HINT_CORRECTION_MIN_SCORE = 0.62
+OCR_HINT_CORRECTION_LOW_CONF_MIN_SCORE = 0.28
+# OCR variants tailored for player list screenshots.
+OCR_INCLUDE_LEFT_CROP_VARIANTS = True
+OCR_NAME_COLUMN_CROP_RATIO = 0.50
+OCR_INCLUDE_MONO_VARIANTS = True
+OCR_SCALE_FACTOR = 3
 OCR_NAME_MIN_CHARS = 2
 OCR_NAME_MAX_CHARS = 24
 OCR_NAME_MAX_WORDS = 2
 OCR_NAME_MAX_DIGIT_RATIO = 0.45
 OCR_NAME_MIN_SUPPORT = 1
+OCR_NAME_MIN_CONFIDENCE = 43.0
+OCR_NAME_LOW_CONFIDENCE_MIN_SUPPORT = 2
+OCR_NAME_CONFIDENCE_FILTER_NOISY_ONLY = True
 OCR_NAME_HIGH_COUNT_THRESHOLD = 8
 OCR_NAME_HIGH_COUNT_MIN_SUPPORT = 2
 OCR_NAME_MAX_CANDIDATES = 12
@@ -98,7 +178,6 @@ OCR_NAME_NEAR_DUP_MAX_LEN_DELTA = 1
 OCR_NAME_NEAR_DUP_SIMILARITY = 0.90
 OCR_NAME_NEAR_DUP_TAIL_MIN_CHARS = 3
 OCR_NAME_NEAR_DUP_TAIL_HEAD_SIMILARITY = 0.70
-OCR_SCALE_FACTOR = 2
 OCR_USE_NATIVE_MAC_CAPTURE = True
 # Hide the main window during region selection (recommended on Windows).
 OCR_HIDE_MAIN_WINDOW_FOR_CAPTURE = True

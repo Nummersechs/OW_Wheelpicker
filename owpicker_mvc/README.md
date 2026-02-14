@@ -14,7 +14,7 @@ python3 main.py
 
 - Modes: Players, Heroes, Maps, Hero-Ban.
 - Open Queue mode for cross-role candidate pools.
-- OCR name import (Tesseract) with two flows:
+- OCR name import (local/offline) with two flows:
   - Role OCR buttons import into a single role (Tank/DPS/Support).
   - `All Roles OCR` provides 5 checkboxes per name: `Tank`, `DPS`, `Support`, `Main`, `Flex`. Unchecked names are distributed evenly across roles.
 - Persistent state (`saved_state.json`) including roster profiles.
@@ -35,25 +35,19 @@ From the repo root:
 python3 -m unittest discover owpicker_mvc/tests
 ```
 
-## Windows EXE OCR (no extra install)
+## Windows EXE OCR (EasyOCR only)
 
-If you want OCR to work in the Windows EXE without requiring users to install Tesseract:
+The Windows EXE uses EasyOCR and does not require users to install Tesseract.
 
-1. Use one bundle source:
-   Local portable bundle under `owpicker_mvc/OCR/` (for example `tesseract.exe`, runtime DLLs, and `tessdata/*.traineddata`), or the Windows install folder (auto-detected): `C:\Program Files\Tesseract-OCR` (and x86 variant).  
-   Optional explicit override: set `OW_TESSERACT_DIR` (or `TESSERACT_ROOT`) to your Tesseract folder.
-2. Build with OCR bundling enabled (`OW_INCLUDE_OCR_BUNDLE=1`) and choose a mode:
-   - `OW_OCR_BUNDLE_MODE=minimal` (default): bundle only `tesseract(.exe)`, required runtime libraries, and requested language packs.
-   - `OW_OCR_BUNDLE_MODE=full`: bundle the full OCR folder as-is.
-3. For minimal mode, set language packs explicitly, e.g. `OW_OCR_LANGS=deu+eng` (optional `OW_OCR_INCLUDE_OSD=1`).
-4. Choose distribution mode:
-   - `OW_DIST_MODE=onedir` (default on Windows): faster app startup, folder output.
-   - `OW_DIST_MODE=onefile`: single EXE, slower startup (self-extract at launch).
+1. Download EasyOCR models once during build preparation.
+2. Set `OW_OCR_ENGINE=easyocr` and `OW_INCLUDE_EASYOCR=1`.
+3. Keep `OW_INCLUDE_OCR_BUNDLE=0` (no Tesseract bundle).
+4. Set `OW_EASYOCR_MODEL_DIR` to your local model folder so models are bundled into the EXE.
 5. `OW_INCLUDE_REQUESTS` is optional and defaults to `0` (smaller/faster build). Set it to `1` only if you need online sync.
 6. For smaller release builds, use `OW_BUILD_PROFILE=release`. On Windows, keep `OW_STRIP=0` unless you have a working `strip` tool installed.
 7. Verify build output contains lines like:
-   - `[spec] OCR bundle files: ...`
-   - `[spec] OCR languages: deu.traineddata, eng.traineddata`
+   - `[spec] EasyOCR bundle enabled.`
+   - `[spec] EasyOCR model source: ...`
    - `[spec] Build profile=... | dist_mode=... | strip=...`
 
 Example (Windows CMD):
@@ -62,17 +56,37 @@ Example (Windows CMD):
 set OW_BUILD_PROFILE=release
 set OW_PRUNE_QT=1
 set OW_INCLUDE_REQUESTS=0
-set OW_INCLUDE_OCR_BUNDLE=1
-set OW_OCR_BUNDLE_MODE=minimal
-set OW_OCR_LANGS=deu+eng
-set OW_OCR_INCLUDE_OSD=1
+set OW_OCR_ENGINE=easyocr
+set OW_INCLUDE_EASYOCR=1
+set OW_INCLUDE_OCR_BUNDLE=0
+set OW_EASYOCR_MODEL_DIR=%CD%\owpicker_mvc\EasyOCR\model
 set OW_DIST_MODE=onedir
 pyinstaller --noconfirm --clean owpicker_mvc/OverwatchWheels.spec
 ```
 
-At runtime `OCR_TESSERACT_CMD = "auto"` prefers bundled Tesseract in the EXE unpack directory and only falls back to PATH.
 During OCR region selection, the main window is hidden by default (`OCR_HIDE_MAIN_WINDOW_FOR_CAPTURE = True`).
 In the Qt capture selector (used on Windows), region selection now confirms on mouse release by default (`OCR_QT_SELECTOR_AUTO_ACCEPT_ON_RELEASE = True`), so pressing Enter is optional.
+
+## Local EasyOCR backend
+
+The app uses `easyocr` as a fully local OCR backend (no cloud/API calls).
+
+1. Install optional dependency:
+
+```bash
+pip install -r requirements-ocr-local.txt
+```
+
+2. Set in `config.py`:
+
+```python
+OCR_ENGINE = "easyocr"
+OCR_EASYOCR_LANG = "en"  # e.g. "en,de"
+OCR_EASYOCR_DOWNLOAD_ENABLED = False  # strict offline mode
+```
+
+Notes:
+- In strict offline mode (`OCR_EASYOCR_DOWNLOAD_ENABLED = False`), required model files must already exist locally.
 
 ## Structure (short)
 

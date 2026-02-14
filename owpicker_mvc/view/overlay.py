@@ -149,6 +149,7 @@ class ResultOverlay(QtWidgets.QWidget):
 
         # Buttons in einer Zeile anordnen
         btn_row = QtWidgets.QHBoxLayout()
+        btn_row.setSpacing(8)
         btn_row.addStretch(1)
         btn_row.addWidget(self.btn_offline)
         btn_row.addWidget(self.btn_online)
@@ -160,6 +161,7 @@ class ResultOverlay(QtWidgets.QWidget):
         btn_row.addWidget(self.btn_disable)
         btn_row.addWidget(self.btn_close)
         btn_row.addStretch(1)
+        self._btn_row = btn_row
         v.addLayout(btn_row)
 
         self.hide()
@@ -177,6 +179,10 @@ class ResultOverlay(QtWidgets.QWidget):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
+        self._layout_card_for_current_view()
+
+    def _layout_card_for_current_view(self) -> None:
+        """Keep card size in sync with the currently active overlay view."""
         view = getattr(self, "_last_view", {}) or {}
         view_type = view.get("type")
         if view_type == "ocr_name_picker":
@@ -191,6 +197,7 @@ class ResultOverlay(QtWidgets.QWidget):
     def _show(self):
         if self.parent():
             self.setGeometry(self.parent().rect())
+        self._layout_card_for_current_view()
         self.show()
         qt_runtime.safe_raise(self)
         # Keine Fokus-Erzwingung, damit kein unerwarteter Refokus entsteht.
@@ -222,6 +229,9 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_ocr_cancel.setVisible(bool(ocr_cancel))
         self.btn_ocr_replace.setVisible(bool(ocr_replace))
         self.btn_ocr_confirm.setVisible(bool(ocr_confirm))
+        if hasattr(self, "_btn_row"):
+            ocr_mode_active = bool(ocr_cancel or ocr_replace or ocr_confirm)
+            self._btn_row.setSpacing(80 if ocr_mode_active else 8)
 
     def show_result(self, tank, dps, sup):
         self._apply_button_labels()
@@ -525,7 +535,9 @@ class ResultOverlay(QtWidgets.QWidget):
             btn.setMinimumWidth(delete_width)
             btn.setMaximumWidth(delete_width)
 
-        ocr_width = max_width(("ocr.pick_cancel", "ocr.pick_replace", "ocr.pick_confirm"))
+        # Keep OCR action buttons compact enough to avoid overlap on smaller windows.
+        ocr_width = max_width(("ocr.pick_cancel", "ocr.pick_replace", "ocr.pick_confirm")) - 20
+        ocr_width = max(120, int(ocr_width))
         for btn in (self.btn_ocr_cancel, self.btn_ocr_replace, self.btn_ocr_confirm):
             btn.setMinimumWidth(ocr_width)
             btn.setMaximumWidth(ocr_width)

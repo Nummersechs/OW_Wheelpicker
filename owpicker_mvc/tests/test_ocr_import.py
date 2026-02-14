@@ -5,10 +5,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from controller.ocr_import import (
+    OCRRunResult,
     extract_candidate_names,
+    extract_candidate_names_debug,
     extract_candidate_names_multi,
     resolve_tesseract_cmd,
     resolve_tessdata_dir,
+    run_ocr_multi,
 )
 
 
@@ -117,6 +120,34 @@ class TestOCRImport(unittest.TestCase):
             ["CoMaE DenMuchel", "Alpha", "Gamma"],
         )
 
+    def test_extract_candidate_names_ignores_pipe_like_suffix_variants(self):
+        text = "Massith ¦ Marc みのり\nMika ｜ Moonbrew\nAero │ AJAR"
+        self.assertEqual(
+            extract_candidate_names(text),
+            ["Massith", "Mika", "Aero"],
+        )
+
+    def test_extract_candidate_names_ignores_misread_separator_token(self):
+        text = "Massith I Marc みのり\nMika l Moonbrew\nAero 1 AJAR"
+        self.assertEqual(
+            extract_candidate_names(text),
+            ["Massith", "Mika", "Aero"],
+        )
+
+    def test_extract_candidate_names_ignores_lower_i_separator_token(self):
+        text = "NIKCOS i MNKE\nMassie i Marc"
+        self.assertEqual(
+            extract_candidate_names(text),
+            ["NIKCOS", "Massie"],
+        )
+
+    def test_extract_candidate_names_ignores_punctuation_prefixed_separator_token(self):
+        text = "Massie (arc i ak\nMiliu <Mowihrew @ Ao"
+        self.assertEqual(
+            extract_candidate_names(text),
+            ["Massie", "Miliu"],
+        )
+
     def test_extract_candidate_names_respects_min_length(self):
         text = "A\nBC\nD\nEF"
         self.assertEqual(extract_candidate_names(text, min_chars=2), ["BC", "EF"])
@@ -136,11 +167,35 @@ class TestOCRImport(unittest.TestCase):
         )
 
     def test_extract_candidate_names_ignores_emoji_and_icons(self):
-        text = "😀 山田太郎 ⭐\n🛡️\n🔥김민수🔥\n✅ 张三"
+        text = "Massith 💗 Moonbrew\nAero 😊\n😀 HiddenName\n🛡️"
         self.assertEqual(
             extract_candidate_names(text),
-            ["山田太郎", "김민수", "张三"],
+            ["Massith", "Aero"],
         )
+
+    def test_extract_candidate_names_drops_icon_prefixed_short_upper_tokens(self):
+        text = "@ MNKE\n® AJAR\nAero\nMassith"
+        self.assertEqual(
+            extract_candidate_names(text),
+            ["Aero", "Massith"],
+        )
+
+    def test_extract_candidate_names_debug_reports_line_reasons(self):
+        text = "Massith | Marc みのり\n😀 HiddenName\nAero\nAero\n1) 123456"
+        names, line_debug = extract_candidate_names_debug(text)
+        self.assertEqual(names, ["Massith", "Aero"])
+        self.assertEqual(len(line_debug), 5)
+
+        statuses = [str(entry.get("status", "")) for entry in line_debug]
+        reasons = [str(entry.get("reason", "")) for entry in line_debug]
+        accepted = [str(entry.get("candidate", "")) for entry in line_debug if entry.get("status") == "accepted"]
+
+        self.assertEqual(statuses.count("accepted"), 2)
+        self.assertIn("Massith", accepted)
+        self.assertIn("Aero", accepted)
+        self.assertIn("empty-after-metadata-trim", reasons)
+        self.assertIn("duplicate-key", reasons)
+        self.assertIn("failed-name-heuristics", reasons)
 
     def test_extract_candidate_names_deduplicates_spacing_and_dash_variants(self):
         text = "Nummersechs\nNummer sechs\nNUMMER-SECHS"
@@ -163,6 +218,13 @@ class TestOCRImport(unittest.TestCase):
                 max_digit_ratio=0.45,
             ),
             ["RealName"],
+        )
+
+    def test_extract_candidate_names_filters_short_lowercase_noise(self):
+        text = "cn\nal\nwl\nit\nly\nBC\nAJ\nPw"
+        self.assertEqual(
+            extract_candidate_names(text),
+            ["BC", "AJ"],
         )
 
     def test_extract_candidate_names_multi_raises_support_floor_for_large_sets(self):
@@ -239,6 +301,26 @@ class TestOCRImport(unittest.TestCase):
             ),
             ["Alpha", "Bravo"],
         )
+
+    def test_run_ocr_multi_dispatches_to_easyocr(self):
+        with (
+            patch("controller.ocr_import.run_easyocr", return_value=OCRRunResult("Aero")) as easy_mock,
+            patch("controller.ocr_import.run_tesseract_multi") as tess_mock,
+        ):
+            result = run_ocr_multi(Path("dummy.png"), engine="easyocr")
+        self.assertEqual(result.text, "Aero")
+        easy_mock.assert_called_once()
+        tess_mock.assert_not_called()
+
+    def test_run_ocr_multi_dispatches_to_tesseract_by_default(self):
+        with (
+            patch("controller.ocr_import.run_tesseract_multi", return_value=OCRRunResult("Aero")) as tess_mock,
+            patch("controller.ocr_import.run_easyocr") as easy_mock,
+        ):
+            result = run_ocr_multi(Path("dummy.png"))
+        self.assertEqual(result.text, "Aero")
+        tess_mock.assert_called_once()
+        easy_mock.assert_not_called()
 
 
 if __name__ == "__main__":
