@@ -34,6 +34,11 @@ MODE_CHOICE_INPUT_GUARD_MS = 260
 STARTUP_FINALIZE_DELAY_MS = 60
 STARTUP_WARMUP_COOLDOWN_MS = 500
 STARTUP_INPUT_DRAIN_MS = 180
+# Run visual/theme finalize after mode choice and only when UI is idle.
+# This keeps the first interaction path responsive on slower systems.
+STARTUP_VISUAL_FINALIZE_DEFERRED = True
+STARTUP_VISUAL_FINALIZE_DELAY_MS = 280
+STARTUP_VISUAL_FINALIZE_BUSY_RETRY_MS = 250
 # Für schnelleren Start standardmäßig Platform-Style nutzen.
 FORCE_FUSION_STYLE = False
 HOVER_PUMP_ON_START = False
@@ -68,6 +73,9 @@ PAUSE_SOUND_WARMUP_DURING_SPIN = True
 STATE_SAVE_DEBOUNCE_MS = 220
 NETWORK_SYNC_DEBOUNCE_MS = 220
 NETWORK_SYNC_WORKERS = 2
+# Retry delay used by wheel widgets when cache warmup should be postponed
+# (startup overlay visible, spin active, or updates paused).
+WHEEL_CACHE_WARMUP_RETRY_MS = 180
 # Suspend optional background UI services while spinning to keep animation smooth.
 PAUSE_BACKGROUND_UI_SERVICES_DURING_SPIN = True
 
@@ -222,11 +230,14 @@ DEFAULT_DURATION_MS = 3000
 # Upper repaint rate for explicit spin repaint requests (<=0 disables throttling).
 SPIN_REPAINT_MAX_FPS = 45
 # Spin fallback watchdogs for overloaded systems.
-SPIN_WATCHDOG_ENABLED = True
+SPIN_WATCHDOG_ENABLED = False
 SPIN_WATCHDOG_SCALE = 1.8
 SPIN_WATCHDOG_SLACK_MS = 2500
 SPIN_WATCHDOG_MIN_MS = 2500
 WHEEL_SPIN_GUARD_ENABLED = True
+# Fast stale-pending recovery guard: if no wheel is actually spinning/running,
+# pending can be reset after this short grace period.
+SPIN_STALE_RECOVERY_GRACE_MS = 250
 
 # ---------- Startdaten ----------
 PLAYER_PROFILE_MAX_SLOTS = 6

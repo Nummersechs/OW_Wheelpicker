@@ -330,6 +330,118 @@ class TestMainWindowInputFilter(unittest.TestCase):
 
         self.assertTrue(any(name == "spin_all_preinit_fallback" for name, _extra in traces))
 
+    def test_finalize_startup_defers_visual_finalize(self):
+        mw = MainWindow.__new__(MainWindow)
+        mw._startup_finalize_done = False
+        mw._startup_visual_finalize_pending = False
+        mw._restoring_state = True
+        mw._cfg = lambda key, default=None: True if key == "STARTUP_VISUAL_FINALIZE_DEFERRED" else default
+        mw._update_spin_all_enabled = lambda: None
+        mw._update_cancel_enabled = lambda: None
+        mw._mode_key = lambda: "players"
+        mw._apply_mode_results = lambda _key: None
+        mw._set_tooltips_ready = lambda _ready=True: None
+        apply_calls: list[str] = []
+        mw._apply_theme = lambda defer_heavy=False: apply_calls.append(f"theme:{bool(defer_heavy)}")
+        mw._apply_language = lambda defer_heavy=False: apply_calls.append(f"lang:{bool(defer_heavy)}")
+        scheduled: list[int] = []
+        mw._schedule_startup_visual_finalize = lambda delay_ms=None: scheduled.append(
+            0 if delay_ms is None else int(delay_ms)
+        )
+
+        mw._finalize_startup()
+
+        self.assertTrue(mw._startup_finalize_done)
+        self.assertFalse(mw._restoring_state)
+        self.assertTrue(mw._startup_visual_finalize_pending)
+        self.assertTrue(scheduled)
+        self.assertEqual(apply_calls, [])
+
+    def test_run_startup_visual_finalize_retries_when_blocked(self):
+        mw = MainWindow.__new__(MainWindow)
+        mw._closing = False
+        mw._startup_visual_finalize_pending = True
+        mw.pending = 1
+        mw._background_services_paused = False
+        mw._stack_switching = False
+        mw._overlay_choice_active = lambda: False
+        mw._cfg = lambda key, default=None: 123 if key == "STARTUP_VISUAL_FINALIZE_BUSY_RETRY_MS" else default
+        traces: list[tuple[str, dict]] = []
+        mw._trace_event = lambda name, **extra: traces.append((name, extra))
+        scheduled: list[int] = []
+        mw._schedule_startup_visual_finalize = lambda delay_ms=None: scheduled.append(
+            0 if delay_ms is None else int(delay_ms)
+        )
+        apply_calls: list[str] = []
+        mw._apply_theme = lambda defer_heavy=False: apply_calls.append(f"theme:{bool(defer_heavy)}")
+        mw._apply_language = lambda defer_heavy=False: apply_calls.append(f"lang:{bool(defer_heavy)}")
+
+        mw._run_startup_visual_finalize()
+
+        self.assertTrue(mw._startup_visual_finalize_pending)
+        self.assertEqual(scheduled, [123])
+        self.assertEqual(apply_calls, [])
+        self.assertTrue(any(name == "startup_visual_finalize:defer" for name, _extra in traces))
+
+    def test_run_startup_visual_finalize_applies_when_idle(self):
+        mw = MainWindow.__new__(MainWindow)
+        mw._closing = False
+        mw._startup_visual_finalize_pending = True
+        mw.pending = 0
+        mw._background_services_paused = False
+        mw._stack_switching = False
+        mw._overlay_choice_active = lambda: False
+        mw._cfg = lambda _key, default=None: default
+        traces: list[tuple[str, dict]] = []
+        mw._trace_event = lambda name, **extra: traces.append((name, extra))
+        apply_calls: list[str] = []
+        mw._apply_theme = lambda defer_heavy=False: apply_calls.append(f"theme:{bool(defer_heavy)}")
+        mw._apply_language = lambda defer_heavy=False: apply_calls.append(f"lang:{bool(defer_heavy)}")
+
+        mw._run_startup_visual_finalize()
+
+        self.assertFalse(mw._startup_visual_finalize_pending)
+        self.assertEqual(apply_calls, ["theme:True", "lang:True"])
+        self.assertTrue(any(name == "startup_visual_finalize:done" for name, _extra in traces))
+
+    def test_run_startup_visual_finalize_flushes_pending_heavy_when_warmup_done(self):
+        mw = MainWindow.__new__(MainWindow)
+        mw._closing = False
+        mw._startup_visual_finalize_pending = True
+        mw.pending = 0
+        mw._background_services_paused = False
+        mw._stack_switching = False
+        mw._startup_warmup_done = True
+        mw._post_choice_init_done = True
+        mw._overlay_choice_active = lambda: False
+        mw._post_choice_step_ms = 15
+        mw._cfg = lambda _key, default=None: default
+        traces: list[tuple[str, dict]] = []
+        mw._trace_event = lambda name, **extra: traces.append((name, extra))
+        mw._set_heavy_ui_updates_enabled = lambda enabled=True: None
+        apply_calls: list[str] = []
+        mw._apply_theme = lambda defer_heavy=False: (
+            apply_calls.append(f"theme:{bool(defer_heavy)}"),
+            setattr(mw, "_theme_heavy_pending", True),
+        )
+        mw._apply_language = lambda defer_heavy=False: (
+            apply_calls.append(f"lang:{bool(defer_heavy)}"),
+            setattr(mw, "_language_heavy_pending", True),
+        )
+        heavy_calls: list[str] = []
+        mw._apply_language_heavy = lambda: heavy_calls.append("lang_heavy")
+        mw._apply_theme_heavy = lambda _theme, step_ms=0: heavy_calls.append(f"theme_heavy:{int(step_ms)}")
+
+        mw._run_startup_visual_finalize()
+
+        self.assertFalse(mw._startup_visual_finalize_pending)
+        self.assertEqual(apply_calls, ["theme:True", "lang:True"])
+        self.assertIn("lang_heavy", heavy_calls)
+        self.assertIn("theme_heavy:15", heavy_calls)
+        self.assertFalse(bool(getattr(mw, "_theme_heavy_pending", False)))
+        self.assertFalse(bool(getattr(mw, "_language_heavy_pending", False)))
+        self.assertTrue(any(name == "startup_visual_finalize:flushed_heavy" for name, _extra in traces))
+
     def test_spin_all_ignored_while_restoring_state(self):
         mw = MainWindow.__new__(MainWindow)
         mw.current_mode = "players"

@@ -58,6 +58,12 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self.theme = saved.get("theme", "light") if isinstance(saved, dict) else "light"
         if self.theme not in theme_util.THEMES:
             self.theme = "light"
+        # Apply palette/global stylesheet baseline early so startup overlays/widgets
+        # pick the persisted theme immediately.
+        try:
+            theme_util.apply_app_theme(theme_util.get_theme(self.theme))
+        except Exception:
+            pass
 
         self.setWindowTitle(i18n.t("app.title.main"))
         self.resize(1200, 650)
@@ -82,6 +88,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._closing = False
         self._startup_finalize_done = False
         self._startup_finalize_scheduled = False
+        self._startup_visual_finalize_pending = False
         self._choice_shown_at: float | None = None
         self._post_choice_delay_ms = 350
         self._post_choice_step_ms = 90
@@ -89,6 +96,9 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._post_choice_timer = QtCore.QTimer(self)
         self._post_choice_timer.setSingleShot(True)
         self._post_choice_timer.timeout.connect(self._run_post_choice_init)
+        self._startup_visual_finalize_timer = QtCore.QTimer(self)
+        self._startup_visual_finalize_timer.setSingleShot(True)
+        self._startup_visual_finalize_timer.timeout.connect(self._run_startup_visual_finalize)
         self._theme_heavy_pending = False
         self._language_heavy_pending = False
         self._post_choice_init_done = False
@@ -147,7 +157,9 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._deferred_tooltip_refresh_reason: str | None = None
         self._deferred_tooltip_refresh_timer: QtCore.QTimer | None = None
         self._background_services_paused = False
-        self._paused_background_timers: list[tuple[object, int]] = []
+        self._paused_background_timers: list[tuple[object, int, bool]] = []
+        self._wheel_cache_warmup_timer: QtCore.QTimer | None = None
+        self._wheel_cache_warmup_queue: list[object] = []
         self._app_event_filter_installed = False
         self._applied_theme_key: str | None = None
         self._mode_button_checked_cache: dict[int, bool] = {}
@@ -193,6 +205,9 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
                 pass
         self._timers = TimerRegistry()
         self._post_choice_timer = self._timers.register(self._post_choice_timer) or self._post_choice_timer
+        self._startup_visual_finalize_timer = (
+            self._timers.register(self._startup_visual_finalize_timer) or self._startup_visual_finalize_timer
+        )
         self._stack_switch_timer = self._timers.register(self._stack_switch_timer) or self._stack_switch_timer
         self._hover_pump_timer = QtCore.QTimer(self)
         self._hover_pump_timer.setInterval(max(20, int(self._cfg("HOVER_PUMP_INTERVAL_MS", 40))))
@@ -746,6 +761,9 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
 
     def _build_overlay(self, central: QtWidgets.QWidget) -> None:
         self.overlay = ResultOverlay(parent=central)
+        # ResultOverlay defaults to light internally; enforce persisted app theme.
+        theme = theme_util.get_theme(getattr(self, "theme", "light"))
+        self.overlay.apply_theme(theme, theme_util.tool_button_stylesheet(theme))
         self.overlay.hide()
         self.overlay.closed.connect(self._on_overlay_closed)
         self.overlay.languageToggleRequested.connect(self._toggle_language)
@@ -844,20 +862,97 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             return
         self._install_window_handle_filter()
 
-    def _schedule_finalize_startup(self) -> None:
+    def _schedule_finalize_startup(self, delay_ms: int | None = None) -> None:
         if getattr(self, "_startup_finalize_done", False):
             return
         if getattr(self, "_startup_finalize_scheduled", False):
             return
         self._startup_finalize_scheduled = True
-        delay_ms = max(0, int(self._cfg("STARTUP_FINALIZE_DELAY_MS", 60)))
-        QtCore.QTimer.singleShot(delay_ms, self._run_finalize_startup)
+        if delay_ms is None:
+            delay_ms = int(self._cfg("STARTUP_FINALIZE_DELAY_MS", 60))
+        QtCore.QTimer.singleShot(max(0, int(delay_ms)), self._run_finalize_startup)
 
     def _run_finalize_startup(self) -> None:
         self._startup_finalize_scheduled = False
         if getattr(self, "_startup_finalize_done", False):
             return
         self._finalize_startup()
+
+    def _schedule_startup_visual_finalize(self, delay_ms: int | None = None) -> None:
+        if getattr(self, "_closing", False):
+            return
+        if not bool(getattr(self, "_startup_visual_finalize_pending", False)):
+            return
+        timer = getattr(self, "_startup_visual_finalize_timer", None)
+        if timer is None:
+            return
+        if delay_ms is None:
+            delay_ms = int(self._cfg("STARTUP_VISUAL_FINALIZE_DELAY_MS", 280))
+        timer.start(max(0, int(delay_ms)))
+
+    def _startup_visual_finalize_block_reason(self) -> str | None:
+        if getattr(self, "_closing", False):
+            return "closing"
+        if self._overlay_choice_active():
+            return "overlay_choice"
+        try:
+            if int(getattr(self, "pending", 0) or 0) > 0:
+                return "spin_pending"
+        except Exception:
+            pass
+        if bool(getattr(self, "_background_services_paused", False)):
+            return "background_services_paused"
+        if bool(getattr(self, "_stack_switching", False)):
+            return "stack_switching"
+        return None
+
+    def _run_startup_visual_finalize(self) -> None:
+        if getattr(self, "_closing", False):
+            return
+        if not bool(getattr(self, "_startup_visual_finalize_pending", False)):
+            return
+        block_reason = self._startup_visual_finalize_block_reason()
+        if block_reason:
+            retry_ms = max(120, int(self._cfg("STARTUP_VISUAL_FINALIZE_BUSY_RETRY_MS", 250)))
+            self._trace_event(
+                "startup_visual_finalize:defer",
+                reason=block_reason,
+                retry_ms=retry_ms,
+            )
+            self._schedule_startup_visual_finalize(delay_ms=retry_ms)
+            return
+        self._startup_visual_finalize_pending = False
+        self._trace_event("startup_visual_finalize:start")
+        self._apply_theme(defer_heavy=True)
+        self._apply_language(defer_heavy=True)
+        self._flush_startup_visual_finalize_pending_heavy()
+        self._trace_event("startup_visual_finalize:done")
+
+    def _flush_startup_visual_finalize_pending_heavy(self) -> None:
+        """
+        Apply deferred heavy theme/language updates immediately when startup warmup
+        is already done. Without this, dark-mode wheel styling can stay stale until
+        a later explicit theme toggle.
+        """
+        warmup_done = bool(getattr(self, "_startup_warmup_done", False))
+        post_choice_done = bool(getattr(self, "_post_choice_init_done", False))
+        if not (warmup_done or post_choice_done):
+            return
+        if self._overlay_choice_active():
+            return
+        did_work = False
+        self._set_heavy_ui_updates_enabled(True)
+        if bool(getattr(self, "_language_heavy_pending", False)):
+            self._apply_language_heavy()
+            self._language_heavy_pending = False
+            did_work = True
+        if bool(getattr(self, "_theme_heavy_pending", False)):
+            theme = theme_util.get_theme(getattr(self, "theme", "light"))
+            self._apply_theme_heavy(theme, step_ms=int(getattr(self, "_post_choice_step_ms", 15)))
+            self._theme_heavy_pending = False
+            did_work = True
+        if did_work:
+            self._trace_event("startup_visual_finalize:flushed_heavy")
 
     def _ensure_deferred_hover_rearm_timer(self) -> QtCore.QTimer:
         timer = getattr(self, "_deferred_hover_rearm_timer", None)
@@ -1235,9 +1330,14 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._update_spin_all_enabled()
         self._update_cancel_enabled()
         self._apply_mode_results(self._mode_key())
-        # Heavy parts (wheel styling, full wheel retranslate) erst nach Mode-Choice
-        self._apply_theme(defer_heavy=True)
-        self._apply_language(defer_heavy=True)
+        if bool(self._cfg("STARTUP_VISUAL_FINALIZE_DEFERRED", True)):
+            # Keep first paint/input responsive; visual finalize runs once the
+            # overlay is gone and the UI is idle.
+            self._startup_visual_finalize_pending = True
+            self._schedule_startup_visual_finalize()
+        else:
+            self._apply_theme(defer_heavy=True)
+            self._apply_language(defer_heavy=True)
         # Tooltips sofort erlauben (werden später noch einmal frisch berechnet)
         self._set_tooltips_ready(True)
         self._startup_finalize_done = True
@@ -1600,7 +1700,8 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
                 if not timer.isActive():
                     return
                 remaining_ms = int(timer.remainingTime())
-                self._paused_background_timers.append((timer, max(0, remaining_ms)))
+                is_single_shot = bool(timer.isSingleShot())
+                self._paused_background_timers.append((timer, max(0, remaining_ms), is_single_shot))
                 timer.stop()
             except Exception:
                 pass
@@ -1613,6 +1714,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             "_focus_trace_snapshot_timer",
             "_startup_drain_timer",
             "_post_choice_timer",
+            "_startup_visual_finalize_timer",
             "_stack_switch_timer",
         ):
             _pause_timer(getattr(self, name, None))
@@ -1659,11 +1761,17 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         paused_timers = list(getattr(self, "_paused_background_timers", []))
         self._paused_background_timers = []
 
-        for timer, remaining_ms in paused_timers:
+        for timer, remaining_ms, is_single_shot in paused_timers:
             try:
                 if timer is None or timer.isActive():
                     continue
-                timer.start(max(0, int(remaining_ms)))
+                if is_single_shot:
+                    # Resume single-shot timers near their previous remaining time.
+                    timer.start(max(0, int(remaining_ms)))
+                else:
+                    # For periodic timers keep the configured interval; using
+                    # remainingTime() as new interval can create ultra-fast loops.
+                    timer.start()
             except Exception:
                 pass
 
@@ -1694,6 +1802,8 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
                     self._schedule_ocr_runtime_cache_release()
             except Exception:
                 pass
+        if bool(getattr(self, "_startup_visual_finalize_pending", False)):
+            self._schedule_startup_visual_finalize(delay_ms=0)
         if bool(self._cfg("PAUSE_SOUND_WARMUP_DURING_SPIN", True)):
             sound = getattr(self, "sound", None)
             if sound is not None and hasattr(sound, "resume_background_warmup"):
@@ -1874,27 +1984,32 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         if pending_now <= 0:
             return False
         started_at = getattr(self, "_spin_started_at_monotonic", None)
+        grace_ms = max(0, int(self._cfg("SPIN_STALE_RECOVERY_GRACE_MS", 250)))
         if started_at is not None:
             try:
                 elapsed_ms = int((time.monotonic() - started_at) * 1000.0)
             except Exception:
                 elapsed_ms = 0
-            if elapsed_ms < 900:
+            if elapsed_ms < grace_ms:
                 return False
-        running = False
+        busy = False
         for _role, wheel in self._role_wheels():
             try:
                 if wheel.is_anim_running():
-                    running = True
+                    busy = True
+                    break
+                if bool(getattr(wheel, "_is_spinning", False)):
+                    busy = True
                     break
             except Exception:
                 pass
-        if not running and hasattr(self, "map_main"):
+        if not busy and hasattr(self, "map_main"):
             try:
-                running = bool(self.map_main.is_anim_running())
+                map_busy = bool(self.map_main.is_anim_running()) or bool(getattr(self.map_main, "_is_spinning", False))
+                busy = bool(map_busy)
             except Exception:
-                running = False
-        if running:
+                busy = False
+        if busy:
             return False
 
         self._trace_event(
@@ -1912,6 +2027,64 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._set_controls_enabled(True)
         self._update_cancel_enabled()
         return True
+
+    def _ensure_wheel_cache_warmup_timer(self) -> QtCore.QTimer:
+        timer = getattr(self, "_wheel_cache_warmup_timer", None)
+        if timer is not None:
+            return timer
+        timer = QtCore.QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(self._run_wheel_cache_warmup_step)
+        if hasattr(self, "_timers"):
+            self._timers.register(timer)
+        self._wheel_cache_warmup_timer = timer
+        return timer
+
+    def _schedule_wheel_cache_warmup(self, delay_ms: int = 0) -> None:
+        if getattr(self, "_closing", False):
+            return
+        queue: list[object] = []
+        seen: set[int] = set()
+
+        for _role, wheel in self._role_wheels():
+            if not wheel:
+                continue
+            wid = id(wheel)
+            if wid in seen:
+                continue
+            seen.add(wid)
+            queue.append(wheel)
+
+        map_main = getattr(self, "map_main", None)
+        if map_main is not None:
+            wid = id(map_main)
+            if wid not in seen:
+                queue.append(map_main)
+
+        self._wheel_cache_warmup_queue = queue
+        timer = self._ensure_wheel_cache_warmup_timer()
+        timer.start(max(0, int(delay_ms)))
+
+    def _run_wheel_cache_warmup_step(self) -> None:
+        if getattr(self, "_closing", False):
+            self._wheel_cache_warmup_queue = []
+            return
+        if int(getattr(self, "pending", 0) or 0) > 0 or getattr(self, "_background_services_paused", False):
+            timer = self._ensure_wheel_cache_warmup_timer()
+            timer.start(300)
+            return
+        if not self._wheel_cache_warmup_queue:
+            return
+        wheel_view = self._wheel_cache_warmup_queue.pop(0)
+        wheel_disc = getattr(wheel_view, "wheel", None)
+        if wheel_disc is not None and hasattr(wheel_disc, "_ensure_cache"):
+            try:
+                wheel_disc._ensure_cache(force=False)
+            except Exception:
+                pass
+        if self._wheel_cache_warmup_queue:
+            timer = self._ensure_wheel_cache_warmup_timer()
+            timer.start(0)
 
     def _update_cancel_enabled(self):
         self.btn_cancel_spin.setEnabled(self.pending > 0)
@@ -2458,6 +2631,11 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             config.debug_print("Offline-Modus aktiv.")
         # Sync ggf. neu einplanen oder abbrechen
         self.state_sync.sync_all_roles()
+        if bool(getattr(self, "_startup_visual_finalize_pending", False)):
+            self._schedule_startup_visual_finalize(
+                delay_ms=int(self._cfg("STARTUP_VISUAL_FINALIZE_DELAY_MS", 280))
+            )
+        self._schedule_wheel_cache_warmup(delay_ms=120)
         self._refresh_app_event_filter_state()
 
     def _set_heavy_ui_updates_enabled(self, enabled: bool) -> None:
@@ -2526,6 +2704,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             self._refresh_tooltip_caches_async(delay_step_ms=int(self._post_choice_step_ms))
         self._schedule_map_prebuild()
         self._post_choice_init_done = True
+        self._schedule_wheel_cache_warmup(delay_ms=0)
         self._sync_mode_stack()
         self._trace_event("run_post_choice_init:done")
         self._refresh_app_event_filter_state()

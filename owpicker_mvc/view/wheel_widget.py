@@ -22,6 +22,7 @@ class WheelWidget(QtWidgets.QGraphicsView):
         # than forcing full viewport updates on every frame.
         self.setViewportUpdateMode(QtWidgets.QGraphicsView.SmartViewportUpdate)
         self._hover_trace_budget = int(getattr(config, "HOVER_TRACE_BUDGET_PER_VIEW", 0))
+        self._cache_warmup_retry_scheduled = False
         self._rearm_hover_tracking()
         self.scene = QtWidgets.QGraphicsScene()
         self.setScene(self.scene)
@@ -68,8 +69,7 @@ class WheelWidget(QtWidgets.QGraphicsView):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._refit_view()
-        if hasattr(self, "wheel") and hasattr(self.wheel, "_ensure_cache"):
-            self.wheel._ensure_cache(force=False)
+        self._maybe_warm_cache(reason="resize")
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -77,8 +77,7 @@ class WheelWidget(QtWidgets.QGraphicsView):
         self._rearm_hover_tracking()
         # Sobald der View sichtbar ist, Cache/Geometrie auf finale Größe bringen
         self._refit_view()
-        if hasattr(self, "wheel") and hasattr(self.wheel, "_ensure_cache"):
-            self.wheel._ensure_cache(force=False)
+        self._maybe_warm_cache(reason="show")
 
     def enterEvent(self, event):
         # On some platforms, mouse tracking can drop after activation changes.
@@ -193,6 +192,63 @@ class WheelWidget(QtWidgets.QGraphicsView):
                 self.scene.removeItem(self.pointer)
             self.pointer = self._make_pointer()
             self.scene.addItem(self.pointer)
+
+    def _can_warm_cache_now(self) -> bool:
+        if not self.isVisible():
+            return False
+        if not self.updatesEnabled():
+            return False
+        viewport = self.viewport()
+        if viewport is None or not viewport.updatesEnabled():
+            return False
+        win = self.window()
+        if win is None:
+            return True
+        if bool(getattr(win, "_closing", False)):
+            return False
+        overlay_active_fn = getattr(win, "_overlay_choice_active", None)
+        if callable(overlay_active_fn):
+            try:
+                if overlay_active_fn():
+                    return False
+            except Exception:
+                pass
+        try:
+            if int(getattr(win, "pending", 0) or 0) > 0:
+                return False
+        except Exception:
+            pass
+        if bool(getattr(win, "_background_services_paused", False)):
+            return False
+        return True
+
+    def _schedule_cache_warmup_retry(self, delay_ms: int | None = None) -> None:
+        if self._cache_warmup_retry_scheduled:
+            return
+        self._cache_warmup_retry_scheduled = True
+        retry_ms = delay_ms
+        if retry_ms is None:
+            retry_ms = int(getattr(config, "WHEEL_CACHE_WARMUP_RETRY_MS", 180))
+        QtCore.QTimer.singleShot(max(60, int(retry_ms)), self._run_cache_warmup_retry)
+
+    def _run_cache_warmup_retry(self) -> None:
+        self._cache_warmup_retry_scheduled = False
+        self._maybe_warm_cache(reason="retry")
+
+    def _maybe_warm_cache(self, reason: str = "") -> None:
+        del reason
+        wheel = getattr(self, "wheel", None)
+        if wheel is None or not hasattr(wheel, "_ensure_cache"):
+            return
+        if not self.isVisible():
+            return
+        if self._can_warm_cache_now():
+            try:
+                wheel._ensure_cache(force=False)
+            except Exception:
+                pass
+            return
+        self._schedule_cache_warmup_retry()
 
         # ----- API-Wrapper -----
     def set_names(self, names: List[str]):

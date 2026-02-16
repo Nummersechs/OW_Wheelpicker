@@ -7,12 +7,20 @@ from pathlib import Path
 import random, math, tempfile, wave
 import config
 
-try:
-    from PySide6.QtMultimedia import QSoundEffect  # type: ignore
-except Exception:
-    QSoundEffect = None  # type: ignore[assignment]
-
 AUDIO_EXTENSIONS = {".wav", ".ogg", ".mp3"}
+_QSOUND_EFFECT_UNSET = object()
+_QSOUND_EFFECT_CLASS: Any = _QSOUND_EFFECT_UNSET
+
+
+def _resolve_qsoundeffect() -> Any | None:
+    global _QSOUND_EFFECT_CLASS
+    if _QSOUND_EFFECT_CLASS is _QSOUND_EFFECT_UNSET:
+        try:
+            from PySide6.QtMultimedia import QSoundEffect as _QSoundEffect  # type: ignore
+            _QSOUND_EFFECT_CLASS = _QSoundEffect
+        except Exception:
+            _QSOUND_EFFECT_CLASS = None
+    return _QSOUND_EFFECT_CLASS
 
 
 class SoundManager:
@@ -97,9 +105,10 @@ class SoundManager:
         eff = cache.get(path)
         if eff:
             return eff
-        if QSoundEffect is None:
+        qsound_effect_cls = _resolve_qsoundeffect()
+        if qsound_effect_cls is None:
             raise RuntimeError("QtMultimedia unavailable")
-        eff = QSoundEffect()
+        eff = qsound_effect_cls()
         eff.setSource(QUrl.fromLocalFile(str(path)))
         eff.setLoopCount(1)
         eff.setVolume(base_volume * self.master_volume)
@@ -264,7 +273,7 @@ class SoundManager:
             except Exception:
                 preview_tmp_exists = False
         return {
-            "qt_multimedia_available": bool(QSoundEffect is not None),
+            "qt_multimedia_available": bool(_resolve_qsoundeffect() is not None),
             "spin_sources": len(self.spin_sources),
             "ding_sources": len(self.ding_sources),
             "spin_effects": len(self.spin_effects),
@@ -367,7 +376,8 @@ class SoundManager:
         mit moderater Lautstärke (nicht lauter als die Standard-WAVs).
         """
         try:
-            if QSoundEffect is None:
+            qsound_effect_cls = _resolve_qsoundeffect()
+            if qsound_effect_cls is None:
                 return None
             # Clean up any previous preview temp file to avoid leaks across runs.
             self._cleanup_preview_file()
@@ -391,7 +401,7 @@ class SoundManager:
                 tmp_path = Path(tmp.name)
             self._preview_tmp_path = tmp_path
 
-            eff = QSoundEffect()
+            eff = qsound_effect_cls()
             eff.setSource(QUrl.fromLocalFile(str(tmp_path)))
             eff.setLoopCount(1)
             eff.setVolume(self.preview_base_volume * self.master_volume)

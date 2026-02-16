@@ -8,6 +8,7 @@ import i18n
 
 _TEXTS_BY_KEYS_CACHE: dict[tuple[str, ...], tuple[str, ...]] = {}
 _WIDTH_CACHE: dict[tuple[tuple, tuple[str, ...], tuple[str, ...], int], int] = {}
+_TEXT_WIDTH_CACHE: dict[tuple[tuple, str], int] = {}
 
 
 def _font_cache_key(font: QtGui.QFont) -> tuple:
@@ -58,14 +59,22 @@ def set_fixed_width_from_translations(
         if widget is None:
             continue
         font = widget.font()
-        cache_key = (_font_cache_key(font), keys_tuple, prefix_tuple, int(padding))
+        font_key = _font_cache_key(font)
+        cache_key = (font_key, keys_tuple, prefix_tuple, int(padding))
         width = _WIDTH_CACHE.get(cache_key)
         if width is None:
             fm = QtGui.QFontMetrics(font)
             max_w = 0
             for txt in all_texts:
                 for pre in prefix_tuple:
-                    max_w = max(max_w, fm.horizontalAdvance(f"{pre}{txt}"))
+                    text = f"{pre}{txt}"
+                    text_key = (font_key, text)
+                    measured = _TEXT_WIDTH_CACHE.get(text_key)
+                    if measured is None:
+                        measured = int(fm.horizontalAdvance(text))
+                        _TEXT_WIDTH_CACHE[text_key] = measured
+                    if measured > max_w:
+                        max_w = measured
             width = max_w + int(padding)
             _WIDTH_CACHE[cache_key] = width
         widget.setMinimumWidth(width)
