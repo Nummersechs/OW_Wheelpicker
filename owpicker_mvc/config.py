@@ -10,11 +10,11 @@ DEBUG = False
 # - deaktiviert zusätzlich alle internen Debug-/Trace-Logs
 # - Save-State bleibt davon unberührt
 QUIET = False
-TRACE_FLOW = True
-TRACE_SHUTDOWN = True
-TRACE_FOCUS = True
-TRACE_HOVER = True
-TRACE_CLEAR_ON_START = True
+TRACE_FLOW = False
+TRACE_SHUTDOWN = False
+TRACE_FOCUS = False
+TRACE_HOVER = False
+TRACE_CLEAR_ON_START = False
 FOCUS_TRACE_DURATION_S = 12.0
 FOCUS_TRACE_MAX_EVENTS = 800
 DISABLE_TOOLTIPS = True
@@ -60,9 +60,16 @@ MAP_PREBUILD_ON_START = False
 SOUND_WARMUP_ON_START = False
 TOOLTIP_CACHE_ON_START = False
 SOUND_WARMUP_LAZY_STEP_MS = 25
+# Use a lightweight control lock during spin so large name lists are not fully
+# disabled/re-styled at spin start (helps animation under CPU load).
+SPIN_LIGHTWEIGHT_UI_LOCK = True
+# Pause incremental sound warmup while spinning to keep the UI thread free.
+PAUSE_SOUND_WARMUP_DURING_SPIN = True
 STATE_SAVE_DEBOUNCE_MS = 220
 NETWORK_SYNC_DEBOUNCE_MS = 220
 NETWORK_SYNC_WORKERS = 2
+# Suspend optional background UI services while spinning to keep animation smooth.
+PAUSE_BACKGROUND_UI_SERVICES_DURING_SPIN = True
 
 # ---------- OCR Import (prototype) ----------
 # OCR engine (local/offline):
@@ -80,6 +87,16 @@ OCR_EASYOCR_USER_NETWORK_DIR = ""
 OCR_EASYOCR_GPU = False
 # Keep False for strict offline behavior (no model downloads at runtime).
 OCR_EASYOCR_DOWNLOAD_ENABLED = False
+# Keep OCR runtime fully asleep until the first OCR import click.
+OCR_RUNTIME_SLEEP_UNTIL_USED = True
+# Release cached OCR runtimes after idle (0 disables automatic release).
+# Lower value = faster sleep when OCR is not used.
+OCR_IDLE_CACHE_RELEASE_MS = 30000
+# If cache release is due while a spin is active, retry after this delay.
+OCR_IDLE_CACHE_RELEASE_BUSY_RETRY_MS = 2500
+# Keep cache release on spin disabled by default to avoid UI-thread spikes at
+# spin start when OCR runtimes were initialized before.
+OCR_RELEASE_CACHE_ON_SPIN = False
 OCR_TESSERACT_PSM = 11
 OCR_TESSERACT_FALLBACK_PSM = 6
 OCR_TESSERACT_RETRY_EXTRA_PSMS = [7, 13]
@@ -138,11 +155,11 @@ OCR_DEBUG_SHOW_REPORT = False
 OCR_DEBUG_INCLUDE_REPORT_TEXT = False
 OCR_DEBUG_REPORT_MAX_CHARS = 24000
 # Persist OCR debug reports into a file for easier sharing/analysis.
-OCR_DEBUG_LOG_TO_FILE = True
+OCR_DEBUG_LOG_TO_FILE = False
 OCR_DEBUG_LOG_FILE = "ocr_debug.log"
 OCR_DEBUG_LOG_MAX_CHARS = 200000
 # Per-line parser diagnostics (accepted/dropped + reason) inside debug report.
-OCR_DEBUG_LINE_ANALYSIS = True
+OCR_DEBUG_LINE_ANALYSIS = False
 OCR_DEBUG_LINE_MAX_ENTRIES_PER_RUN = 60
 # QUIET erzwingt zusätzlich: keine OCR-Debug-Reports/Dateilogs.
 if QUIET:
@@ -202,6 +219,14 @@ WHEEL_RADIUS = 136
 MIN_DURATION_MS = 0
 MAX_DURATION_MS = 10000
 DEFAULT_DURATION_MS = 3000
+# Upper repaint rate for explicit spin repaint requests (<=0 disables throttling).
+SPIN_REPAINT_MAX_FPS = 45
+# Spin fallback watchdogs for overloaded systems.
+SPIN_WATCHDOG_ENABLED = True
+SPIN_WATCHDOG_SCALE = 1.8
+SPIN_WATCHDOG_SLACK_MS = 2500
+SPIN_WATCHDOG_MIN_MS = 2500
+WHEEL_SPIN_GUARD_ENABLED = True
 
 # ---------- Startdaten ----------
 PLAYER_PROFILE_MAX_SLOTS = 6

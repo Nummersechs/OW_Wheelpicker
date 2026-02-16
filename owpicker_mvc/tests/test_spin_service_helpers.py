@@ -276,6 +276,30 @@ class TestSpinServiceHelpers(unittest.TestCase):
         self.assertFalse(mw.controls_enabled)
         self.assertTrue(mw.overlay.hidden)
 
+    def test_spin_single_starts_with_duration(self):
+        class _Duration:
+            def value(self):
+                return 2000
+
+        class _SingleWheel:
+            def __init__(self):
+                self.calls = []
+
+            def spin(self, duration_ms=0):
+                self.calls.append(int(duration_ms))
+                return True
+
+        mw = DummyMW()
+        mw.pending = 0
+        mw.hero_ban_active = False
+        mw._result_sent_this_spin = False
+        mw.duration = _Duration()
+        mw._update_cancel_enabled = lambda: None
+        wheel = _SingleWheel()
+
+        spin_service.spin_single(mw, wheel, mult=1.0, hero_ban_override=True)
+        self.assertEqual(wheel.calls, [2000])
+
     def test_spin_open_queue_starts_spin_for_planned_roles(self):
         mw = DummyMWOpenQueue()
         with patch("controller.spin_service.random.shuffle", side_effect=lambda vals: None):

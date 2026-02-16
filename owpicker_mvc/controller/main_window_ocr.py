@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from difflib import SequenceMatcher
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 import i18n
 from logic.name_normalization import normalize_name_alnum_key
@@ -257,6 +257,137 @@ class MainWindowOCRMixin:
             if self._overlay_choice_active():
                 enabled = False
             self.btn_open_q_ocr.setEnabled(enabled)
+
+    def _ocr_runtime_sleep_until_used(self) -> bool:
+        return bool(self._cfg("OCR_RUNTIME_SLEEP_UNTIL_USED", True))
+
+    def _mark_ocr_runtime_activated(self) -> None:
+        self._ocr_runtime_activated = True
+
+    def _ensure_ocr_cache_release_timer(self) -> QtCore.QTimer:
+        timer = getattr(self, "_ocr_cache_release_timer", None)
+        if timer is not None:
+            return timer
+        timer = QtCore.QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(self._release_ocr_runtime_cache)
+        if hasattr(self, "_timers"):
+            self._timers.register(timer)
+        self._ocr_cache_release_timer = timer
+        return timer
+
+    def _cancel_ocr_runtime_cache_release(self) -> None:
+        timer = getattr(self, "_ocr_cache_release_timer", None)
+        if timer is None:
+            return
+        try:
+            timer.stop()
+        except Exception:
+            pass
+
+    def _schedule_ocr_runtime_cache_release(self) -> None:
+        if getattr(self, "_closing", False):
+            return
+        if getattr(self, "_ocr_async_job", None):
+            return
+        if self._ocr_runtime_sleep_until_used() and not bool(
+            getattr(self, "_ocr_runtime_activated", False)
+        ):
+            return
+        delay_ms = max(0, int(self._cfg("OCR_IDLE_CACHE_RELEASE_MS", 180000)))
+        if delay_ms <= 0:
+            return
+        timer = self._ensure_ocr_cache_release_timer()
+        timer.start(delay_ms)
+        if hasattr(self, "_trace_event"):
+            try:
+                self._trace_event("ocr_cache_release_scheduled", delay_ms=delay_ms)
+            except Exception:
+                pass
+
+    def _spin_active_for_ocr_cache_release(self) -> bool:
+        try:
+            if int(getattr(self, "pending", 0)) > 0:
+                return True
+        except Exception:
+            pass
+        role_wheels_fn = getattr(self, "_role_wheels", None)
+        if callable(role_wheels_fn):
+            try:
+                for _role, wheel in role_wheels_fn():
+                    try:
+                        if hasattr(wheel, "is_anim_running") and bool(wheel.is_anim_running()):
+                            return True
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+        map_main = getattr(self, "map_main", None)
+        if map_main is not None and hasattr(map_main, "is_anim_running"):
+            try:
+                return bool(map_main.is_anim_running())
+            except Exception:
+                pass
+        return False
+
+    def _release_ocr_runtime_cache(self) -> None:
+        if getattr(self, "_ocr_async_job", None):
+            self._schedule_ocr_runtime_cache_release()
+            return
+        if self._spin_active_for_ocr_cache_release():
+            retry_ms = max(200, int(self._cfg("OCR_IDLE_CACHE_RELEASE_BUSY_RETRY_MS", 2500)))
+            timer = self._ensure_ocr_cache_release_timer()
+            timer.start(retry_ms)
+            if hasattr(self, "_trace_event"):
+                try:
+                    self._trace_event("ocr_cache_release_deferred_busy", retry_ms=retry_ms)
+                except Exception:
+                    pass
+            return
+        try:
+            from . import ocr_import
+        except Exception:
+            return
+        release_fn = getattr(ocr_import, "clear_ocr_runtime_caches", None)
+        if not callable(release_fn):
+            return
+        try:
+            release_fn(release_gpu=bool(self._cfg("OCR_EASYOCR_GPU", False)))
+        except Exception:
+            return
+        if hasattr(self, "_trace_event"):
+            try:
+                self._trace_event("ocr_cache_released")
+            except Exception:
+                pass
+
+    def _release_ocr_runtime_cache_for_spin(self) -> None:
+        """Optionally release OCR runtime cache on spin start."""
+        self._cancel_ocr_runtime_cache_release()
+        if getattr(self, "_ocr_async_job", None):
+            return
+        if not bool(self._cfg("OCR_RELEASE_CACHE_ON_SPIN", False)):
+            self._schedule_ocr_runtime_cache_release()
+            return
+        try:
+            from . import ocr_import
+        except Exception:
+            return
+        release_fn = getattr(ocr_import, "clear_ocr_runtime_caches", None)
+        if not callable(release_fn):
+            return
+        try:
+            release_fn(
+                release_gpu=False,
+                collect_garbage=False,
+            )
+        except Exception:
+            return
+        if hasattr(self, "_trace_event"):
+            try:
+                self._trace_event("ocr_cache_released_for_spin")
+            except Exception:
+                pass
 
     def _ocr_distribution_role_keys(self) -> tuple[str, ...]:
         return ("tank", "dps", "support")

@@ -17,6 +17,25 @@ class TooltipManager:
         self._done_callbacks: list[Callable[[], None]] = []
         self._last_signature: tuple | None = None
         self._pending_signature: tuple | None = None
+        self._paused = False
+        self._generation = 0
+
+    def pause(self) -> None:
+        if self._paused:
+            return
+        self._paused = True
+        # Invalidate already scheduled singleShot callbacks.
+        self._generation += 1
+        if self._timer.isActive():
+            self._timer.stop()
+
+    def resume(self) -> None:
+        if not self._paused:
+            return
+        self._paused = False
+        # Continue pending refresh work after spin/overlay phases.
+        if self._pending_signature is not None:
+            self._timer.start(0)
 
     def shutdown(self) -> None:
         if self._timer.isActive():
@@ -30,6 +49,7 @@ class TooltipManager:
             timer_active = False
         return {
             "timer_active": timer_active,
+            "paused": bool(self._paused),
             "done_callbacks": len(self._done_callbacks),
             "has_last_signature": bool(self._last_signature is not None),
             "has_pending_signature": bool(self._pending_signature is not None),
@@ -73,10 +93,14 @@ class TooltipManager:
         self._step_ms = max(0, int(delay_step_ms))
         if on_done is not None:
             self._done_callbacks.append(on_done)
+        if self._paused:
+            return
         # debounce
         self._timer.start(60)
 
     def _run_cache_refresh(self) -> None:
+        if self._paused:
+            return
         if getattr(self._mw, "_closing", False):
             return
         if self._mw._overlay_choice_active():
@@ -98,12 +122,31 @@ class TooltipManager:
 
         step_ms = max(0, int(self._step_ms))
         wheels = self._wheels()
-        for idx, w in enumerate(wheels):
-            QtCore.QTimer.singleShot(idx * step_ms, lambda _w=w: rebuild_single(_w))
-        total_delay = len(wheels) * step_ms + 40
-        QtCore.QTimer.singleShot(total_delay, self._finish_cache_refresh)
+        generation = int(self._generation)
 
-    def _finish_cache_refresh(self) -> None:
+        def _rebuild_single_guarded(w, generation_key: int) -> None:
+            if self._paused:
+                return
+            if int(generation_key) != int(self._generation):
+                return
+            rebuild_single(w)
+
+        for idx, w in enumerate(wheels):
+            QtCore.QTimer.singleShot(
+                idx * step_ms,
+                lambda _w=w, _g=generation: _rebuild_single_guarded(_w, _g),
+            )
+        total_delay = len(wheels) * step_ms + 40
+        QtCore.QTimer.singleShot(
+            total_delay,
+            lambda _g=generation: self._finish_cache_refresh(_g),
+        )
+
+    def _finish_cache_refresh(self, generation_key: int | None = None) -> None:
+        if generation_key is not None and int(generation_key) != int(self._generation):
+            return
+        if self._paused:
+            return
         self.ensure_hover_cache(ready=True)
         if self._pending_signature is not None:
             self._last_signature = self._pending_signature

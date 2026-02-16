@@ -461,8 +461,36 @@ class WheelViewEntriesMixin:
         self._tooltip_rev += 1
         self.stateChanged.emit()
 
-    def set_interactive_enabled(self, en: bool):
-        self.names.setEnabled(en)
+    def _set_name_inputs_blocked(self, blocked: bool) -> None:
+        try:
+            if not hasattr(self, "_names_default_focus_policy"):
+                self._names_default_focus_policy = self.names.focusPolicy()
+        except Exception:
+            self._names_default_focus_policy = QtCore.Qt.StrongFocus
+        try:
+            self.names.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, bool(blocked))
+        except Exception:
+            pass
+        try:
+            if blocked:
+                self.names.clearFocus()
+                self.names.setFocusPolicy(QtCore.Qt.NoFocus)
+            else:
+                self.names.setFocusPolicy(getattr(self, "_names_default_focus_policy", QtCore.Qt.StrongFocus))
+        except Exception:
+            pass
+
+    def set_interactive_enabled(self, en: bool, *, disable_name_inputs: bool = True):
+        if disable_name_inputs:
+            self._set_name_inputs_blocked(False)
+            self.names.setEnabled(en)
+        else:
+            # Keep the list visually active to avoid expensive widget-state
+            # cascades on large OCR-imported lists while still blocking edits.
+            self.names.setEnabled(True)
+            self._set_name_inputs_blocked(not en)
+        if hasattr(self, "names_panel"):
+            self.names_panel.set_interactive_enabled(en)
         if en:
             # Wenn allgemein aktiv -> Feinsteuerung über _update_name_dependent_ui
             self._update_name_dependent_ui()

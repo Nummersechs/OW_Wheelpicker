@@ -46,6 +46,38 @@ def _restore_override_cursor() -> None:
         pass
 
 
+def _cancel_ocr_cache_release(mw) -> None:
+    handler = getattr(mw, "_cancel_ocr_runtime_cache_release", None)
+    if callable(handler):
+        try:
+            handler()
+        except Exception:
+            pass
+
+
+def _schedule_ocr_cache_release(mw) -> None:
+    handler = getattr(mw, "_schedule_ocr_runtime_cache_release", None)
+    if callable(handler):
+        try:
+            handler()
+        except Exception:
+            pass
+
+
+def _mark_ocr_runtime_activated(mw) -> None:
+    marker = getattr(mw, "_mark_ocr_runtime_activated", None)
+    if callable(marker):
+        try:
+            marker()
+            return
+        except Exception:
+            pass
+    try:
+        setattr(mw, "_ocr_runtime_activated", True)
+    except Exception:
+        pass
+
+
 def _capture_region_with_qt_selector(mw) -> tuple[QtGui.QPixmap | None, str | None]:
     hide_for_capture = bool(mw._cfg("OCR_HIDE_MAIN_WINDOW_FOR_CAPTURE", True))
     if sys.platform == "win32":
@@ -1807,11 +1839,14 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
         return
     if getattr(mw, "_ocr_async_job", None):
         return
+    _mark_ocr_runtime_activated(mw)
+    _cancel_ocr_cache_release(mw)
     mw._update_role_ocr_button_enabled(role)
     btn = mw._role_ocr_buttons.get(role)
     if btn is not None:
         btn.setEnabled(False)
     temp_paths: list[Path] = []
+    async_started = False
     try:
         selected_pixmap, select_error = capture_region_for_ocr(mw)
         if selected_pixmap is None:
@@ -1895,6 +1930,7 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
             except Exception:
                 pass
             mw._update_role_ocr_buttons_enabled()
+            _schedule_ocr_cache_release(mw)
 
         def _handle_result(names: list[str], raw_text: str, ocr_error: str | None) -> None:
             _finalize_job()
@@ -2001,7 +2037,11 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
-        thread.start()
+        try:
+            thread.start(QtCore.QThread.LowPriority)
+        except Exception:
+            thread.start()
+        async_started = True
         return
     except Exception as exc:
         _cleanup_temp_paths(temp_paths)
@@ -2014,3 +2054,6 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
         )
         mw._update_role_ocr_buttons_enabled()
         return
+    finally:
+        if not async_started and not getattr(mw, "_ocr_async_job", None):
+            _schedule_ocr_cache_release(mw)

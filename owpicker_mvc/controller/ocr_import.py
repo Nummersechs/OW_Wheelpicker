@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from difflib import SequenceMatcher
+import gc
 import os
 import re
 import shutil
@@ -500,6 +501,43 @@ def easyocr_available(
         download_enabled=download_enabled,
     )
     return reader is not None
+
+
+def clear_ocr_runtime_caches(
+    *,
+    release_gpu: bool = False,
+    collect_garbage: bool = True,
+) -> None:
+    """Release cached OCR runtime resources after idle periods."""
+    try:
+        _cached_easyocr_reader.cache_clear()
+    except Exception:
+        pass
+    try:
+        _list_tesseract_languages.cache_clear()
+    except Exception:
+        pass
+    try:
+        resolve_tesseract_cmd.cache_clear()
+    except Exception:
+        pass
+    try:
+        resolve_tessdata_dir.cache_clear()
+    except Exception:
+        pass
+    if release_gpu:
+        try:
+            import torch  # type: ignore
+
+            if bool(getattr(torch, "cuda", None)) and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+    if collect_garbage:
+        try:
+            gc.collect()
+        except Exception:
+            pass
 
 
 def tesseract_available(cmd: str = "auto") -> bool:

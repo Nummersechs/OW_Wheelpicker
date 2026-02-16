@@ -18,6 +18,9 @@ class WheelWidget(QtWidgets.QGraphicsView):
         self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.setStyleSheet("QGraphicsView { background: transparent; border: none; }")
+        # Smart mode avoids missed redraws for rotations while keeping cost lower
+        # than forcing full viewport updates on every frame.
+        self.setViewportUpdateMode(QtWidgets.QGraphicsView.SmartViewportUpdate)
         self._hover_trace_budget = int(getattr(config, "HOVER_TRACE_BUDGET_PER_VIEW", 0))
         self._rearm_hover_tracking()
         self.scene = QtWidgets.QGraphicsScene()

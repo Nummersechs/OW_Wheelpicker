@@ -18,6 +18,10 @@ def _cfg(mw, key: str, default=None):
     return getattr(config, key, default)
 
 
+def _background_services_paused(mw) -> bool:
+    return bool(getattr(mw, "_background_services_paused", False))
+
+
 def mark_hover_activity(mw) -> None:
     mw._hover_activity_last = time.monotonic()
 
@@ -31,11 +35,17 @@ def mark_hover_user_move(mw) -> None:
 
 
 def ensure_hover_watchdog_started(mw) -> None:
+    if _background_services_paused(mw):
+        return
+    if _cfg(mw, "DISABLE_TOOLTIPS", False):
+        return
     if not _cfg(mw, "HOVER_WATCHDOG_ON", False):
         return
-    if mw._hover_watchdog_started:
-        return
     if not hasattr(mw, "_hover_watchdog_timer") or not mw._hover_watchdog_timer:
+        return
+    if mw._hover_watchdog_started:
+        if not mw._hover_watchdog_timer.isActive():
+            mw._hover_watchdog_timer.start()
         return
     # Start only after first real user input to avoid early re-entrant events.
     mw._hover_watchdog_started = True
@@ -94,12 +104,14 @@ def start_hover_pump(
     duration_ms: int | None = None,
     force: bool = False,
 ) -> None:
-    if not force and not _cfg(mw, "HOVER_PUMP_ON_START", False):
+    if _background_services_paused(mw):
         return
     if getattr(mw, "_closing", False):
         return
     if getattr(mw, "_startup_block_input", False) or getattr(mw, "_startup_drain_active", False):
         record_hover_prime_deferred(mw, reason=reason)
+        return
+    if not force and not _cfg(mw, "HOVER_PUMP_ON_START", False):
         return
     flush_hover_prime_deferred_trace(mw)
     if mw._overlay_choice_active():
@@ -121,6 +133,13 @@ def start_hover_pump(
 
 
 def hover_pump_tick(mw) -> None:
+    if _background_services_paused(mw):
+        try:
+            if mw._hover_pump_timer:
+                mw._hover_pump_timer.stop()
+        except Exception:
+            pass
+        return
     if getattr(mw, "_closing", False):
         return
     if mw._overlay_choice_active():
@@ -163,6 +182,8 @@ def hover_pump_tick(mw) -> None:
 
 
 def hover_poke_under_cursor(mw, reason: str | None = None) -> None:
+    if _background_services_paused(mw):
+        return
     if not _cfg(mw, "HOVER_POKE_ON_REARM", False):
         return
     if getattr(mw, "_closing", False):
@@ -217,6 +238,10 @@ def iter_hover_views(mw, include_maps: bool | None = None) -> list:
 
 
 def hover_watchdog_tick(mw) -> None:
+    if _background_services_paused(mw):
+        return
+    if _cfg(mw, "DISABLE_TOOLTIPS", False):
+        return
     if not _cfg(mw, "HOVER_WATCHDOG_ON", False):
         return
     if getattr(mw, "_closing", False):
@@ -264,6 +289,10 @@ def hover_watchdog_tick(mw) -> None:
 
 
 def hover_poke_at_global(mw, pos: QtCore.QPoint, reason: str | None = None) -> bool:
+    if _background_services_paused(mw):
+        return False
+    if _cfg(mw, "DISABLE_TOOLTIPS", False):
+        return False
     if getattr(mw, "_closing", False):
         return False
     if getattr(mw, "_startup_block_input", False) or getattr(mw, "_startup_drain_active", False):
@@ -342,6 +371,10 @@ def hover_poke_at_global(mw, pos: QtCore.QPoint, reason: str | None = None) -> b
 
 
 def forward_hover_from_app_mousemove(mw, event: QtGui.QMouseEvent) -> None:
+    if _background_services_paused(mw):
+        return
+    if _cfg(mw, "DISABLE_TOOLTIPS", False):
+        return
     if not _cfg(mw, "HOVER_FORWARD_MOUSEMOVE", False):
         return
     if getattr(mw, "_closing", False):
@@ -383,6 +416,8 @@ def forward_hover_from_app_mousemove(mw, event: QtGui.QMouseEvent) -> None:
 
 def rearm_hover_tracking(mw, reason: str | None = None, force: bool = False) -> None:
     """Re-enable hover tracking on wheel views without forcing focus."""
+    if _background_services_paused(mw):
+        return
     if getattr(mw, "_closing", False):
         return
     if mw._overlay_choice_active():

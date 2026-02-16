@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from controller.ocr_import import (
     OCRRunResult,
+    clear_ocr_runtime_caches,
     extract_candidate_names,
     extract_candidate_names_debug,
     extract_candidate_names_multi,
@@ -290,6 +291,22 @@ class TestOCRImport(unittest.TestCase):
             ),
             ["HIKEOS MNKE"],
         )
+
+    def test_clear_ocr_runtime_caches_clears_cached_layers(self):
+        with (
+            patch("controller.ocr_import._cached_easyocr_reader.cache_clear") as easyocr_clear,
+            patch("controller.ocr_import._list_tesseract_languages.cache_clear") as langs_clear,
+            patch("controller.ocr_import.resolve_tesseract_cmd.cache_clear") as cmd_clear,
+            patch("controller.ocr_import.resolve_tessdata_dir.cache_clear") as tessdata_clear,
+            patch("controller.ocr_import.gc.collect") as gc_collect,
+        ):
+            clear_ocr_runtime_caches(release_gpu=False)
+
+        easyocr_clear.assert_called_once()
+        langs_clear.assert_called_once()
+        cmd_clear.assert_called_once()
+        tessdata_clear.assert_called_once()
+        gc_collect.assert_called_once()
 
     def test_extract_candidate_names_multi_falls_back_if_support_filter_would_be_empty(self):
         texts = ["Alpha", "Bravo"]

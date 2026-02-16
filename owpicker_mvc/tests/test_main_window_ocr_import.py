@@ -259,6 +259,41 @@ class TestMainWindowOCRImport(unittest.TestCase):
             },
         )
 
+    def test_release_ocr_runtime_cache_defers_while_spin_is_active(self):
+        class _FakeTimer:
+            def __init__(self):
+                self.started: list[int] = []
+
+            def start(self, timeout_ms):
+                self.started.append(int(timeout_ms))
+
+        mw = self._make_window()
+        fake_timer = _FakeTimer()
+        mw.pending = 1
+        traces: list[tuple[str, dict]] = []
+        mw._cfg = lambda key, default=None: 777 if key == "OCR_IDLE_CACHE_RELEASE_BUSY_RETRY_MS" else default
+        mw._ensure_ocr_cache_release_timer = lambda: fake_timer
+        mw._trace_event = lambda name, **extra: traces.append((name, extra))
+
+        MainWindow._release_ocr_runtime_cache(mw)
+
+        self.assertEqual(fake_timer.started, [777])
+        self.assertTrue(any(name == "ocr_cache_release_deferred_busy" for name, _extra in traces))
+
+    def test_release_ocr_runtime_cache_for_spin_can_be_disabled(self):
+        mw = self._make_window()
+        cancel_calls = {"count": 0}
+        schedule_calls = {"count": 0}
+        mw._cfg = lambda key, default=None: False if key == "OCR_RELEASE_CACHE_ON_SPIN" else default
+        mw._cancel_ocr_runtime_cache_release = lambda: cancel_calls.__setitem__("count", cancel_calls["count"] + 1)
+        mw._schedule_ocr_runtime_cache_release = lambda: schedule_calls.__setitem__("count", schedule_calls["count"] + 1)
+        mw._ocr_async_job = None
+
+        MainWindow._release_ocr_runtime_cache_for_spin(mw)
+
+        self.assertEqual(cancel_calls["count"], 1)
+        self.assertEqual(schedule_calls["count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

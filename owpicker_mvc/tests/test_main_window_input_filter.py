@@ -362,6 +362,54 @@ class TestMainWindowInputFilter(unittest.TestCase):
         self.assertEqual(mw.pending, 2)
         self.assertTrue(any(name == "spin_cancel_ignored" for name, _extra in traces))
 
+    def test_watchdog_forces_finish_for_stalled_wheels_before_recovery(self):
+        class _FakeWheel:
+            def __init__(self, owner):
+                self._owner = owner
+                self._is_spinning = True
+                self._pending_result = "A"
+                self.emit_calls = 0
+
+            def is_anim_running(self):
+                return False
+
+            def _emit_result(self):
+                self.emit_calls += 1
+                if self._owner.pending > 0:
+                    self._owner.pending -= 1
+                self._is_spinning = False
+                if hasattr(self, "_pending_result"):
+                    delattr(self, "_pending_result")
+
+        class _FakeTimer:
+            def __init__(self):
+                self.started = []
+
+            def start(self, timeout):
+                self.started.append(int(timeout))
+
+        mw = MainWindow.__new__(MainWindow)
+        mw.pending = 2
+        mw._cfg = lambda key, default=None: True if key == "SPIN_WATCHDOG_ENABLED" else default
+        traces: list[tuple[str, dict]] = []
+        mw._trace_event = lambda name, **extra: traces.append((name, extra))
+        wheel_a = _FakeWheel(mw)
+        wheel_b = _FakeWheel(mw)
+        mw._role_wheels = lambda: [("Tank", wheel_a), ("Damage", wheel_b)]
+        mw._spin_watchdog_timer = _FakeTimer()
+        mw.open_queue = type("OpenQ", (), {"spin_active": lambda self: False})()
+        mw.sound = type("Sound", (), {"stop_spin": lambda self: None, "stop_ding": lambda self: None})()
+        mw._set_controls_enabled = lambda _enabled: None
+        mw._update_cancel_enabled = lambda: None
+
+        mw._on_spin_watchdog_timeout()
+
+        self.assertEqual(mw.pending, 0)
+        self.assertEqual(wheel_a.emit_calls, 1)
+        self.assertEqual(wheel_b.emit_calls, 1)
+        self.assertTrue(any(name == "spin_watchdog_force_finish" for name, _extra in traces))
+        self.assertFalse(any(name == "spin_watchdog_recovery" for name, _extra in traces))
+
     def test_mode_button_ignored_during_post_choice_guard(self):
         mw = MainWindow.__new__(MainWindow)
         mw._post_choice_input_guard_until = time.monotonic() + 1.0

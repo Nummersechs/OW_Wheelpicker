@@ -146,6 +146,8 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._deferred_hover_rearm_timer: QtCore.QTimer | None = None
         self._deferred_tooltip_refresh_reason: str | None = None
         self._deferred_tooltip_refresh_timer: QtCore.QTimer | None = None
+        self._background_services_paused = False
+        self._paused_background_timers: list[tuple[object, int]] = []
         self._app_event_filter_installed = False
         self._applied_theme_key: str | None = None
         self._mode_button_checked_cache: dict[int, bool] = {}
@@ -207,6 +209,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._pending_delete_names_panel = None
         self._pending_ocr_import: PendingOCRImport | None = None
         self._ocr_async_job = None
+        self._ocr_runtime_activated = False
         self._role_ocr_buttons: dict[str, QtWidgets.QPushButton] = {}
         central, root = self._build_root()
         self._build_header(root, saved)
@@ -710,9 +713,12 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._result_sent_this_spin = False
         self._last_results_snapshot: dict | None = None
         self._spin_started_at_monotonic: float | None = None
-        self._spin_watchdog_timer = QtCore.QTimer(self)
-        self._spin_watchdog_timer.setSingleShot(True)
-        self._spin_watchdog_timer.timeout.connect(self._on_spin_watchdog_timeout)
+        self._spin_watchdog_timer: QtCore.QTimer | None = None
+        if bool(self._cfg("SPIN_WATCHDOG_ENABLED", False)):
+            timer = QtCore.QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._on_spin_watchdog_timeout)
+            self._spin_watchdog_timer = timer
         self.open_queue = OpenQueueController(self)
         if hasattr(self, "open_count_slider"):
             self.open_queue.set_player_count(int(self.open_count_slider.value()))
@@ -870,9 +876,17 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         force = bool(self._deferred_hover_rearm_force)
         self._deferred_hover_rearm_reason = None
         self._deferred_hover_rearm_force = False
+        if getattr(self, "_background_services_paused", False):
+            self._deferred_hover_rearm_reason = reason
+            self._deferred_hover_rearm_force = bool(force)
+            return
         self._rearm_hover_tracking(reason=reason, force=force)
 
     def _schedule_hover_rearm(self, reason: str, delay_ms: int = 0, *, force: bool = False) -> None:
+        if getattr(self, "_background_services_paused", False):
+            self._deferred_hover_rearm_reason = str(reason or "deferred_hover_rearm")
+            self._deferred_hover_rearm_force = bool(force) or bool(self._deferred_hover_rearm_force)
+            return
         if max(0, int(delay_ms)) <= 0:
             self._rearm_hover_tracking(reason=reason, force=force)
             return
@@ -896,12 +910,18 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
     def _run_deferred_tooltip_refresh(self) -> None:
         reason = self._deferred_tooltip_refresh_reason or "deferred_refresh"
         self._deferred_tooltip_refresh_reason = None
+        if getattr(self, "_background_services_paused", False):
+            self._deferred_tooltip_refresh_reason = str(reason or "deferred_refresh")
+            return
         if self._cfg("DISABLE_TOOLTIPS", False):
             return
         self._refresh_tooltip_caches_async(reason=reason)
 
     def _schedule_tooltip_refresh(self, reason: str, delay_ms: int = 0) -> None:
         if self._cfg("DISABLE_TOOLTIPS", False):
+            return
+        if getattr(self, "_background_services_paused", False):
+            self._deferred_tooltip_refresh_reason = str(reason or "deferred_refresh")
             return
         if max(0, int(delay_ms)) <= 0:
             self._refresh_tooltip_caches_async(reason=reason)
@@ -1565,14 +1585,134 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
     def _set_tooltips_ready(self, ready: bool = True):
         hover_tooltip_ops.set_tooltips_ready(self, ready=ready)
 
+    def _pause_background_ui_services(self) -> None:
+        if not bool(self._cfg("PAUSE_BACKGROUND_UI_SERVICES_DURING_SPIN", True)):
+            return
+        if getattr(self, "_background_services_paused", False):
+            return
+        self._background_services_paused = True
+        self._paused_background_timers = []
+
+        def _pause_timer(timer) -> None:
+            if timer is None:
+                return
+            try:
+                if not timer.isActive():
+                    return
+                remaining_ms = int(timer.remainingTime())
+                self._paused_background_timers.append((timer, max(0, remaining_ms)))
+                timer.stop()
+            except Exception:
+                pass
+
+        for name in (
+            "_hover_pump_timer",
+            "_hover_watchdog_timer",
+            "_deferred_hover_rearm_timer",
+            "_deferred_tooltip_refresh_timer",
+            "_focus_trace_snapshot_timer",
+            "_startup_drain_timer",
+            "_post_choice_timer",
+            "_stack_switch_timer",
+        ):
+            _pause_timer(getattr(self, name, None))
+
+        state_sync = getattr(self, "state_sync", None)
+        if state_sync is not None:
+            _pause_timer(getattr(state_sync, "_save_timer", None))
+            _pause_timer(getattr(state_sync, "_sync_timer", None))
+
+        player_list_panel = getattr(self, "player_list_panel", None)
+        if player_list_panel is not None:
+            _pause_timer(getattr(player_list_panel, "_sync_timer", None))
+
+        map_ui = getattr(self, "map_ui", None)
+        if map_ui is not None:
+            _pause_timer(getattr(map_ui, "_update_timer", None))
+            _pause_timer(getattr(map_ui, "_list_build_timer", None))
+
+        manager = getattr(self, "_tooltip_manager", None)
+        if manager is not None and hasattr(manager, "pause"):
+            try:
+                manager.pause()
+            except Exception:
+                pass
+        if hasattr(self, "_cancel_ocr_runtime_cache_release"):
+            try:
+                self._cancel_ocr_runtime_cache_release()
+            except Exception:
+                pass
+        if bool(self._cfg("PAUSE_SOUND_WARMUP_DURING_SPIN", True)):
+            sound = getattr(self, "sound", None)
+            if sound is not None and hasattr(sound, "pause_background_warmup"):
+                try:
+                    sound.pause_background_warmup()
+                except Exception:
+                    pass
+
+    def _resume_background_ui_services(self) -> None:
+        if not bool(self._cfg("PAUSE_BACKGROUND_UI_SERVICES_DURING_SPIN", True)):
+            return
+        if not getattr(self, "_background_services_paused", False):
+            return
+        self._background_services_paused = False
+        paused_timers = list(getattr(self, "_paused_background_timers", []))
+        self._paused_background_timers = []
+
+        for timer, remaining_ms in paused_timers:
+            try:
+                if timer is None or timer.isActive():
+                    continue
+                timer.start(max(0, int(remaining_ms)))
+            except Exception:
+                pass
+
+        manager = getattr(self, "_tooltip_manager", None)
+        if manager is not None and hasattr(manager, "resume"):
+            try:
+                manager.resume()
+            except Exception:
+                pass
+        reason = getattr(self, "_deferred_hover_rearm_reason", None)
+        force = bool(getattr(self, "_deferred_hover_rearm_force", False))
+        if reason:
+            self._schedule_hover_rearm(reason, force=force)
+        if getattr(self, "_hover_watchdog_started", False):
+            timer = getattr(self, "_hover_watchdog_timer", None)
+            if timer is not None:
+                try:
+                    if not timer.isActive():
+                        timer.start()
+                except Exception:
+                    pass
+        refresh_reason = getattr(self, "_deferred_tooltip_refresh_reason", None)
+        if refresh_reason:
+            self._schedule_tooltip_refresh(refresh_reason)
+        if hasattr(self, "_schedule_ocr_runtime_cache_release"):
+            try:
+                if not getattr(self, "_ocr_async_job", None):
+                    self._schedule_ocr_runtime_cache_release()
+            except Exception:
+                pass
+        if bool(self._cfg("PAUSE_SOUND_WARMUP_DURING_SPIN", True)):
+            sound = getattr(self, "sound", None)
+            if sound is not None and hasattr(sound, "resume_background_warmup"):
+                try:
+                    sound.resume_background_warmup()
+                except Exception:
+                    pass
+
     def _set_hero_ban_visuals(self, active: bool):
         """Delegiert an den Mode-Manager und sperrt Breiten in Hero-Ban."""
         self._apply_role_width_lock(active)
         mode_manager.set_hero_ban_visuals(self, active)
-    def _set_controls_enabled(self, en: bool):
+    def _set_controls_enabled(self, en: bool, *, spin_mode: bool = False):
+        lightweight_spin_lock = bool(spin_mode and not en and self._cfg("SPIN_LIGHTWEIGHT_UI_LOCK", True))
         if en:
+            self._resume_background_ui_services()
             self._update_spin_all_enabled()
         else:
+            self._pause_background_ui_services()
             self.btn_spin_all.setEnabled(False)
             if hasattr(self, "spin_mode_toggle"):
                 self.spin_mode_toggle.setEnabled(False)
@@ -1583,12 +1723,30 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             if hasattr(self, "player_list_panel"):
                 self.player_list_panel.hide_panel()
         for _role, w in self._role_wheels():
+            if lightweight_spin_lock:
+                try:
+                    w.set_interactive_enabled(en, disable_name_inputs=False)
+                    continue
+                except TypeError:
+                    pass
             w.set_interactive_enabled(en)
         if getattr(self, "current_mode", "") == "maps" and hasattr(self, "map_lists"):
             for w in self.map_lists.values():
+                if lightweight_spin_lock:
+                    try:
+                        w.set_interactive_enabled(en, disable_name_inputs=False)
+                        continue
+                    except TypeError:
+                        pass
                 w.set_interactive_enabled(en)
             if hasattr(self, "map_main"):
-                self.map_main.set_interactive_enabled(en)
+                if lightweight_spin_lock:
+                    try:
+                        self.map_main.set_interactive_enabled(en, disable_name_inputs=False)
+                    except TypeError:
+                        self.map_main.set_interactive_enabled(en)
+                else:
+                    self.map_main.set_interactive_enabled(en)
         if not en:
             self._update_cancel_enabled()
         if self.hero_ban_active and en:
@@ -1605,29 +1763,65 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             except Exception:
                 pass
 
+    def _spin_watchdog_enabled(self) -> bool:
+        return bool(self._cfg("SPIN_WATCHDOG_ENABLED", False))
+
+    def _ensure_spin_watchdog_timer(self) -> QtCore.QTimer | None:
+        if not self._spin_watchdog_enabled():
+            return None
+        timer = getattr(self, "_spin_watchdog_timer", None)
+        if timer is None:
+            timer = QtCore.QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._on_spin_watchdog_timeout)
+            self._spin_watchdog_timer = timer
+        return timer
+
     def _arm_spin_watchdog(self, expected_duration_ms: int) -> None:
+        timer = self._ensure_spin_watchdog_timer()
+        if timer is None:
+            return
         try:
-            timeout_ms = max(1200, int(expected_duration_ms) + 1500)
+            expected = max(1, int(expected_duration_ms))
         except Exception:
-            timeout_ms = 3500
-        if hasattr(self, "_spin_watchdog_timer"):
-            self._spin_watchdog_timer.start(timeout_ms)
+            expected = 2500
+        try:
+            scale = float(self._cfg("SPIN_WATCHDOG_SCALE", 1.8))
+        except Exception:
+            scale = 1.8
+        try:
+            slack_ms = int(self._cfg("SPIN_WATCHDOG_SLACK_MS", 2500))
+        except Exception:
+            slack_ms = 2500
+        try:
+            min_timeout_ms = int(self._cfg("SPIN_WATCHDOG_MIN_MS", 2500))
+        except Exception:
+            min_timeout_ms = 2500
+        timeout_ms = max(min_timeout_ms, int(expected * max(1.0, scale)) + max(0, slack_ms))
+        timer.start(timeout_ms)
 
     def _disarm_spin_watchdog(self) -> None:
-        if hasattr(self, "_spin_watchdog_timer"):
-            self._spin_watchdog_timer.stop()
+        timer = getattr(self, "_spin_watchdog_timer", None)
+        if timer is not None:
+            timer.stop()
 
     def _on_spin_watchdog_timeout(self) -> None:
+        if not self._spin_watchdog_enabled():
+            return
         if hasattr(self, "_trace_event"):
             self._trace_event("spin_watchdog_timeout", pending=self.pending)
         if self.pending <= 0:
             return
+        timer = getattr(self, "_spin_watchdog_timer", None)
         running = False
+        stalled: list[tuple[str, object]] = []
         for _role, wheel in self._role_wheels():
             try:
                 if wheel.is_anim_running():
                     running = True
                     break
+                if bool(getattr(wheel, "_is_spinning", False)) and hasattr(wheel, "_pending_result"):
+                    stalled.append((_role, wheel))
             except Exception:
                 pass
         if not running and hasattr(self, "map_main"):
@@ -1638,9 +1832,26 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         if running:
             if hasattr(self, "_trace_event"):
                 self._trace_event("spin_watchdog_rearmed", pending=self.pending)
-            if hasattr(self, "_spin_watchdog_timer"):
-                self._spin_watchdog_timer.start(750)
+            if timer is not None:
+                timer.start(750)
             return
+
+        if stalled:
+            if hasattr(self, "_trace_event"):
+                self._trace_event(
+                    "spin_watchdog_force_finish",
+                    pending=self.pending,
+                    roles=[role for role, _wheel in stalled],
+                )
+            for _role, wheel in stalled:
+                try:
+                    wheel._emit_result()
+                except Exception:
+                    pass
+            if self.pending > 0 and timer is not None:
+                timer.start(750)
+            return
+
         if hasattr(self, "_trace_event"):
             self._trace_event("spin_watchdog_recovery", pending=self.pending)
         self.pending = 0
@@ -1657,6 +1868,50 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
 
     def _clear_spin_started(self) -> None:
         self._spin_started_at_monotonic = None
+
+    def _recover_stale_pending_if_idle(self, source: str) -> bool:
+        pending_now = int(getattr(self, "pending", 0) or 0)
+        if pending_now <= 0:
+            return False
+        started_at = getattr(self, "_spin_started_at_monotonic", None)
+        if started_at is not None:
+            try:
+                elapsed_ms = int((time.monotonic() - started_at) * 1000.0)
+            except Exception:
+                elapsed_ms = 0
+            if elapsed_ms < 900:
+                return False
+        running = False
+        for _role, wheel in self._role_wheels():
+            try:
+                if wheel.is_anim_running():
+                    running = True
+                    break
+            except Exception:
+                pass
+        if not running and hasattr(self, "map_main"):
+            try:
+                running = bool(self.map_main.is_anim_running())
+            except Exception:
+                running = False
+        if running:
+            return False
+
+        self._trace_event(
+            "spin_stale_pending_recovered",
+            source=source,
+            pending_before=pending_now,
+        )
+        self.pending = 0
+        self._disarm_spin_watchdog()
+        self._clear_spin_started()
+        self.sound.stop_spin()
+        self.sound.stop_ding()
+        if hasattr(self, "open_queue") and self.open_queue.spin_active():
+            self.open_queue.restore_spin_overrides()
+        self._set_controls_enabled(True)
+        self._update_cancel_enabled()
+        return True
 
     def _update_cancel_enabled(self):
         self.btn_cancel_spin.setEnabled(self.pending > 0)
@@ -1676,6 +1931,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
 
     def spin_all(self):
         """Dreht alle selektierten Räder auf faire Weise."""
+        self._recover_stale_pending_if_idle(source="spin_all")
         if not getattr(self, "_post_choice_init_done", True):
             self._ensure_post_choice_ready()
             if not getattr(self, "_post_choice_init_done", False):
@@ -1699,6 +1955,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             spin_service.spin_all(self)
 
     def _spin_single(self, wheel: WheelView, mult: float = 1.0, hero_ban_override: bool = True):
+        self._recover_stale_pending_if_idle(source="spin_single")
         if not getattr(self, "_post_choice_init_done", True):
             self._ensure_post_choice_ready()
             if not getattr(self, "_post_choice_init_done", False):
@@ -2385,6 +2642,16 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             except Exception:
                 pass
             self._ocr_async_job = None
+        if hasattr(self, "_cancel_ocr_runtime_cache_release"):
+            try:
+                self._cancel_ocr_runtime_cache_release()
+            except Exception:
+                pass
+        if hasattr(self, "_release_ocr_runtime_cache"):
+            try:
+                self._release_ocr_runtime_cache()
+            except Exception:
+                pass
         self._set_app_event_filter_enabled(False)
         shutdown_manager.handle_close_event(self, event)
 

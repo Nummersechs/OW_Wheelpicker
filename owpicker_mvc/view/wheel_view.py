@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 from typing import List, Optional
 from PySide6 import QtCore, QtWidgets
+import config
 from view.base_panel import BasePanel
 from view.wheel_widget import WheelWidget
 from view import wheel_spin_ops
@@ -432,12 +433,61 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
 
     def is_anim_running(self) -> bool:
         return hasattr(self, "anim") and self.anim.state() == QtCore.QAbstractAnimation.Running
+
+    def _arm_spin_guard(self, duration_ms: int) -> None:
+        self._disarm_spin_guard()
+        if not bool(getattr(config, "WHEEL_SPIN_GUARD_ENABLED", False)):
+            return
+        timeout_ms = max(1200, int(duration_ms) + 3000)
+        timer = QtCore.QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(self._on_spin_guard_timeout)
+        timer.start(timeout_ms)
+        self._spin_guard_timer = timer
+
+    def _disarm_spin_guard(self) -> None:
+        timer = getattr(self, "_spin_guard_timer", None)
+        if timer is None:
+            return
+        try:
+            timer.stop()
+            timer.deleteLater()
+        finally:
+            self._spin_guard_timer = None
+
+    def _on_spin_guard_timeout(self) -> None:
+        # Fallback for overloaded systems where animation finished-signal is delayed/lost.
+        if not bool(getattr(config, "WHEEL_SPIN_GUARD_ENABLED", False)):
+            return
+        if not getattr(self, "_is_spinning", False):
+            return
+        self._emit_result()
+
+    def _restore_spin_render_state(self) -> None:
+        prev_mode = getattr(self, "_spin_prev_viewport_update_mode", None)
+        if prev_mode is None:
+            return
+        try:
+            self.view.setViewportUpdateMode(prev_mode)
+        except Exception:
+            pass
+        try:
+            delattr(self, "_spin_prev_viewport_update_mode")
+        except Exception:
+            pass
+
     def hard_stop(self):
+        self._disarm_spin_guard()
         if hasattr(self, "anim"):
             try:
                 if self.is_anim_running(): self.anim.stop()
             finally:
                 self.anim.deleteLater(); delattr(self, "anim")
+        self._restore_spin_render_state()
+        if hasattr(self, "_anim_repaint_cb"):
+            delattr(self, "_anim_repaint_cb")
+        if hasattr(self, "_pending_result"):
+            delattr(self, "_pending_result")
         self._is_spinning = False
     def spin(self, duration_ms: int = 2500):
         if self._is_spinning and self.is_anim_running():
@@ -488,6 +538,9 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
 
 
     def _emit_result(self):
+        self._disarm_spin_guard()
+        if hasattr(self, "_anim_repaint_cb"):
+            delattr(self, "_anim_repaint_cb")
         if hasattr(self, "_pending_result"):
             self.set_result_value(str(self._pending_result))
             self.spun.emit(self._pending_result)
@@ -496,6 +549,7 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
         if hasattr(self, "anim"):
             self.anim.deleteLater()
             delattr(self, "anim")
+        self._restore_spin_render_state()
         self._is_spinning = False
 
     # --- Added resize behaviour ---

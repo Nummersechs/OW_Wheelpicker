@@ -17,6 +17,19 @@ def _active_role_wheels(mw) -> list[tuple[str, object]]:
     ]
 
 
+def _set_controls_enabled(mw, enabled: bool, *, spin_mode: bool = False) -> None:
+    setter = getattr(mw, "_set_controls_enabled", None)
+    if not callable(setter):
+        return
+    if spin_mode:
+        try:
+            setter(bool(enabled), spin_mode=True)
+            return
+        except TypeError:
+            pass
+    setter(bool(enabled))
+
+
 def _begin_spin_run(mw, active: list[tuple[str, object]]) -> None:
     if hasattr(mw, "_trace_event"):
         try:
@@ -31,9 +44,14 @@ def _begin_spin_run(mw, active: list[tuple[str, object]]) -> None:
     mw.sound.stop_spin()
     mw.sound.stop_ding()
     mw._stop_all_wheels()
+    if hasattr(mw, "_set_heavy_ui_updates_enabled"):
+        try:
+            mw._set_heavy_ui_updates_enabled(True)
+        except Exception:
+            pass
     mw.summary.setText("")
     mw.pending = 0
-    mw._set_controls_enabled(False)
+    _set_controls_enabled(mw, False, spin_mode=True)
     mw.overlay.hide()
     mw.sound.play_spin()
     if hasattr(mw, "_mark_spin_started"):
@@ -410,7 +428,12 @@ def spin_single(mw, wheel, mult: float = 1.0, hero_ban_override: bool = True):
     mw.sound.stop_spin()
     mw.sound.stop_ding()
     mw._stop_all_wheels()
-    mw._set_controls_enabled(False)
+    if hasattr(mw, "_set_heavy_ui_updates_enabled"):
+        try:
+            mw._set_heavy_ui_updates_enabled(True)
+        except Exception:
+            pass
+    _set_controls_enabled(mw, False, spin_mode=True)
     mw.summary.setText("")
     mw.pending = 0
     mw.overlay.hide()

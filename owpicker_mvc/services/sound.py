@@ -41,6 +41,7 @@ class SoundManager:
         self._warmup_items: list[tuple[Path, dict[Path, Any], float]] = []
         self._warmup_done_callbacks: list[Callable[[], None]] = []
         self._lazy_warmup_started = False
+        self._warmup_paused = False
 
         spin_dir = base_dir / "Spin"
         ding_dir = base_dir / "Ding"
@@ -78,6 +79,8 @@ class SoundManager:
         if self._lazy_warmup_started:
             return
         if self._warmup_timer is not None:
+            return
+        if self._warmup_paused:
             return
         if self._warmup_complete():
             return
@@ -146,6 +149,7 @@ class SoundManager:
             self._warmup_timer.deleteLater()
             self._warmup_timer = None
         self._warmup_items = []
+        self._warmup_paused = False
         callbacks = self._warmup_done_callbacks
         self._warmup_done_callbacks = []
         for cb in callbacks:
@@ -153,6 +157,35 @@ class SoundManager:
                 cb()
             except Exception:
                 pass
+
+    def pause_background_warmup(self) -> None:
+        timer = self._warmup_timer
+        if timer is None:
+            return
+        try:
+            if not timer.isActive():
+                return
+            timer.stop()
+            self._warmup_paused = True
+        except Exception:
+            pass
+
+    def resume_background_warmup(self) -> None:
+        if not self._warmup_paused:
+            return
+        timer = self._warmup_timer
+        if timer is None:
+            self._warmup_paused = False
+            return
+        if not self._warmup_items:
+            self._warmup_paused = False
+            return
+        self._warmup_paused = False
+        try:
+            step_ms = int(getattr(config, "SOUND_WARMUP_LAZY_STEP_MS", 25))
+            timer.start(max(0, step_ms))
+        except Exception:
+            pass
 
     def _cleanup_preview_file(self) -> None:
         path = self._preview_tmp_path

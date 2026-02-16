@@ -61,6 +61,19 @@ class TestWheelViewRenderToggle(unittest.TestCase):
         self.assertEqual(list(getattr(wheel.wheel, "names", [])), ["A", "B", "C"])
         wheel.close()
 
+    def test_spin_repaint_callback_is_cleaned_on_hard_stop(self):
+        wheel = WheelView("Test", ["A", "B", "C"])
+        QtWidgets.QApplication.processEvents()
+
+        started = wheel.spin(duration_ms=1500)
+        self.assertTrue(started)
+        self.assertTrue(hasattr(wheel, "_anim_repaint_cb"))
+
+        wheel.hard_stop()
+        QtWidgets.QApplication.processEvents()
+        self.assertFalse(hasattr(wheel, "_anim_repaint_cb"))
+        wheel.close()
+
 
 if __name__ == "__main__":
     unittest.main()
