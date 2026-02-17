@@ -1,10 +1,26 @@
 from __future__ import annotations
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 import i18n
 from utils import qt_runtime, theme as theme_util
 from view.name_list import NameRowWidget, NamesListPanel
+from view import style_helpers
+
+_PLAYER_PANEL_STYLE_CACHE: dict[str, str] = {}
+
+
+def _player_panel_style(theme: theme_util.Theme) -> str:
+    cached = _PLAYER_PANEL_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    cached = (
+        "QFrame#playerListPanel { "
+        f"background: {theme.card_bg}; border: 2px solid {theme.card_border}; border-radius: 10px; "
+        "}"
+    )
+    _PLAYER_PANEL_STYLE_CACHE[theme.key] = cached
+    return cached
 
 
 class PlayerListPanelController(QtCore.QObject):
@@ -135,15 +151,16 @@ class PlayerListPanelController(QtCore.QObject):
         theme = theme_util.get_theme(getattr(self._mw, "theme", "light"))
         if self._applied_theme_key == theme.key:
             return
-        panel.setStyleSheet(
-            f"QFrame#playerListPanel {{ background: {theme.card_bg}; border: 2px solid {theme.card_border}; border-radius: 10px; }}"
+        style_helpers.set_stylesheet_if_needed(
+            panel,
+            f"player_list_panel:{theme.key}",
+            _player_panel_style(theme),
         )
-        if self._title:
-            self._title.setStyleSheet(f"font-weight:700; font-size:14px; color:{theme.text};")
+        style_helpers.apply_theme_roles(theme, ((self._title, "label.editor_title"),))
         if self._names_panel:
             self._names_panel.apply_theme(theme)
         if self._close:
-            self._close.setStyleSheet(theme_util.tool_button_stylesheet(theme))
+            style_helpers.style_tool_button(self._close, theme)
         self._applied_theme_key = theme.key
 
     def set_language(self, lang: str) -> None:
@@ -254,12 +271,50 @@ class PlayerListPanelController(QtCore.QObject):
         target_h = max(420, int(parent.height() * 0.70))
         panel_h = max(330, min(540, target_h, available_h))
         panel.setFixedSize(panel_w, panel_h)
+        self._apply_names_row_profile(panel_width=panel_w)
         tank_geo = self._mw.tank.geometry()
         x = tank_geo.x()
         y = tank_geo.y() + tank_geo.height() + 8
         x = max(8, min(x, parent.width() - panel.width() - 8))
         y = max(8, min(y, parent.height() - panel.height() - 8))
         panel.move(x, y)
+
+    def _apply_names_row_profile(self, panel_width: int | None = None) -> None:
+        names = self._names
+        if names is None:
+            return
+        width = int(panel_width or 540)
+        # Approximate usable list row width inside the popup panel after frame/layout paddings.
+        row_budget = max(220, width - 86)
+
+        # Estimate subrole block width from the current font + checkbox overhead.
+        fm = QtGui.QFontMetrics(names.font())
+        labels = self._role_labels()
+        subrole_block_w = 6  # left margin inside subrole layout
+        for idx, label in enumerate(labels):
+            # text + checkbox indicator/padding overhead
+            subrole_block_w += int(fm.horizontalAdvance(label)) + 27
+            if idx > 0:
+                subrole_block_w += 8
+
+        fixed_w = 18 + 3 + 3 + 18  # active checkbox + spacings + delete marker column
+        name_with_subroles = max(96, min(220, row_budget - fixed_w - subrole_block_w))
+        name_without_subroles = max(140, min(220, row_budget - fixed_w))
+        name_max_width = max(name_with_subroles, min(236, name_with_subroles + 18))
+
+        indicator_h = max(
+            0,
+            int(names.style().pixelMetric(QtWidgets.QStyle.PM_IndicatorHeight, None, names)),
+        )
+        row_height = max(22, indicator_h + 6)
+        edit_height = max(20, row_height - 2)
+        names.set_row_visual_profile(
+            row_height=row_height,
+            name_edit_height=edit_height,
+            name_min_width_with_subroles=name_with_subroles,
+            name_min_width_without_subroles=name_without_subroles,
+            name_max_width=name_max_width,
+        )
 
     def _ensure_panel(self) -> None:
         if self._panel:
@@ -276,7 +331,6 @@ class PlayerListPanelController(QtCore.QObject):
 
         header = QtWidgets.QHBoxLayout()
         title = QtWidgets.QLabel(i18n.t("players.list_title"))
-        title.setStyleSheet("font-weight:700; font-size:14px;")
         header.addWidget(title)
         header.addStretch(1)
         btn_close = QtWidgets.QToolButton()
@@ -293,14 +347,6 @@ class PlayerListPanelController(QtCore.QObject):
             enable_mark_for_delete=True,
         )
         names = names_panel.names
-        # Wider name column + slightly taller rows so role checkboxes are not cramped.
-        names.set_row_visual_profile(
-            row_height=22,
-            name_edit_height=20,
-            name_min_width_with_subroles=220,
-            name_min_width_without_subroles=220,
-            name_max_width=236,
-        )
         layout.addWidget(names_panel, 1)
 
         names.itemChanged.connect(self._schedule_sync)
@@ -314,6 +360,7 @@ class PlayerListPanelController(QtCore.QObject):
         self._close = btn_close
         self._names_panel = names_panel
         self._names = names
+        self._apply_names_row_profile(panel_width=int(panel.width()))
         self.apply_theme()
 
     def _on_rows_inserted(self, _parent, start: int, end: int) -> None:
@@ -358,6 +405,9 @@ class PlayerListPanelController(QtCore.QObject):
     def _schedule_sync(self, *_args) -> None:
         if self._syncing:
             return
+        panel = self._panel
+        if panel is None or not panel.isVisible():
+            return
         if self._sync_timer is None:
             self._sync_timer = QtCore.QTimer(self)
             self._sync_timer.setSingleShot(True)
@@ -366,6 +416,9 @@ class PlayerListPanelController(QtCore.QObject):
 
     def _sync_panel(self) -> None:
         if self._syncing:
+            return
+        panel = self._panel
+        if panel is None or not panel.isVisible():
             return
         names = self._names
         if not names:
@@ -450,19 +503,6 @@ class PlayerListPanelController(QtCore.QObject):
             self._mw._update_spin_all_enabled()
         finally:
             self._syncing = False
-
-    def _name_stats(self) -> dict[str, dict[str, int]]:
-        stats: dict[str, dict[str, int]] = {}
-        for wheel in (self._mw.tank, self._mw.dps, self._mw.support):
-            for entry in wheel.get_current_entries():
-                name = str(entry.get("name", "")).strip()
-                if not name:
-                    continue
-                bucket = stats.setdefault(name, {"total": 0, "active": 0})
-                bucket["total"] += 1
-                if entry.get("active", True):
-                    bucket["active"] += 1
-        return stats
 
     def _name_roles(self) -> dict[str, dict[str, set]]:
         stats: dict[str, dict[str, set]] = {}

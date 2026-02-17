@@ -153,13 +153,13 @@ class ResultOverlay(QtWidgets.QWidget):
         btn_row.addStretch(1)
         btn_row.addWidget(self.btn_offline)
         btn_row.addWidget(self.btn_online)
-        btn_row.addWidget(self.btn_delete_cancel)
         btn_row.addWidget(self.btn_delete_confirm)
+        btn_row.addWidget(self.btn_delete_cancel)
         btn_row.addWidget(self.btn_ocr_confirm)
         btn_row.addWidget(self.btn_ocr_replace)
         btn_row.addWidget(self.btn_ocr_cancel)
-        btn_row.addWidget(self.btn_disable)
         btn_row.addWidget(self.btn_close)
+        btn_row.addWidget(self.btn_disable)
         btn_row.addStretch(1)
         self._btn_row = btn_row
         v.addLayout(btn_row)
@@ -255,7 +255,7 @@ class ResultOverlay(QtWidgets.QWidget):
         self._last_view = {"type": "result", "data": (tank, dps, sup)}
         self._show()
 
-    def show_message(self, title, lines):
+    def show_message(self, title, lines, *, show_disable_button: bool = False):
         self._apply_button_labels()
         self.title.setText(escape(title))
         self._set_info_labels_visible(tank=True, dps=True, sup=True)
@@ -264,8 +264,12 @@ class ResultOverlay(QtWidgets.QWidget):
         self.lab_dps.setText(escape(texts[1]))
         self.lab_sup.setText(escape(texts[2]))
         self.ocr_names_panel.setVisible(False)
-        self._set_action_buttons_visible(close=True)
-        self._last_view = {"type": "message", "data": (title, list(lines))}
+        self._set_action_buttons_visible(close=True, disable=bool(show_disable_button))
+        self._last_view = {
+            "type": "message",
+            "data": (title, list(lines)),
+            "show_disable_button": bool(show_disable_button),
+        }
         self._show()
 
     def show_online_choice(self):
@@ -453,7 +457,11 @@ class ResultOverlay(QtWidgets.QWidget):
             self.show_result(*data)
         elif kind == "message" and len(data) == 2:
             title, lines = data
-            self.show_message(title, lines)
+            self.show_message(
+                title,
+                lines,
+                show_disable_button=bool(self._last_view.get("show_disable_button", False)),
+            )
         elif kind == "online_choice":
             self.show_online_choice()
             if prev_choice_enabled:
@@ -489,7 +497,7 @@ class ResultOverlay(QtWidgets.QWidget):
         style_helpers.style_primary_button(self.btn_offline, theme)
         style_helpers.style_primary_button(self.btn_delete_cancel, theme)
         style_helpers.style_danger_button(self.btn_delete_confirm, theme)
-        style_helpers.style_danger_button(self.btn_ocr_cancel, theme)
+        style_helpers.style_primary_button(self.btn_ocr_cancel, theme)
         style_helpers.style_warning_button(self.btn_ocr_replace, theme)
         style_helpers.style_success_button(self.btn_ocr_confirm, theme)
         self._applied_theme_key = theme.key

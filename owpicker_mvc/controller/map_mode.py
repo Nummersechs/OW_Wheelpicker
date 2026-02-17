@@ -137,6 +137,9 @@ class MapModeController:
         else:
             mw.sound.stop_spin()
             _set_controls_enabled(mw, True)
+            if getattr(mw, "_map_temp_override", False):
+                self.rebuild_wheel()
+                mw._map_temp_override = False
             mw.summary.setText(i18n.t("map.summary.prompt"))
             if hasattr(mw, "_trace_event"):
                 try:
@@ -163,7 +166,11 @@ class MapModeController:
         choice = getattr(mw, "_pending_map_choice", None) or getattr(mw, "_map_result_text", "–")
         mw._map_result_text = choice
         mw._update_summary_from_results()
-        mw.overlay.show_message(i18n.t("overlay.map_title"), [choice, "", ""])
+        mw.overlay.show_message(
+            i18n.t("overlay.map_title"),
+            [choice, "", ""],
+            show_disable_button=True,
+        )
         mw._last_results_snapshot = None
         mw._snapshot_mode_results()
         if getattr(mw, "_map_temp_override", False):

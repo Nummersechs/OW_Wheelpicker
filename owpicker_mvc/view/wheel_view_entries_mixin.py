@@ -615,6 +615,8 @@ class WheelViewEntriesMixin:
         """Blendet Subrollen-Kästchen in den Zeilen ein/aus."""
         new_val = bool(visible)
         if new_val == self._subrole_controls_visible:
+            self._subrole_visibility_applied = None
+            self._apply_subrole_visibility()
             return
         self._subrole_controls_visible = new_val
         self._tooltip_rev += 1

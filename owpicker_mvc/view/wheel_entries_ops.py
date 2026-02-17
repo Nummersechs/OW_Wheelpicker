@@ -59,6 +59,13 @@ def apply_subrole_visibility(list_widget, visible: bool) -> None:
                 group.setVisible(target_visible)
             for cb in widget.subrole_checks:
                 cb.setVisible(target_visible)
+            delete_cb = getattr(widget, "chk_mark_for_delete", None)
+            if isinstance(delete_cb, QtWidgets.QCheckBox):
+                show_delete = bool(getattr(list_widget, "enable_mark_for_delete", True))
+                delete_cb.setVisible(show_delete)
+                delete_cell = delete_cb.parentWidget()
+                if isinstance(delete_cell, QtWidgets.QWidget):
+                    delete_cell.setVisible(show_delete)
             layout = widget.layout()
             if isinstance(layout, QtWidgets.QLayout):
                 layout.invalidate()
@@ -67,3 +74,9 @@ def apply_subrole_visibility(list_widget, visible: bool) -> None:
         list_widget.doItemsLayout()
     except Exception:
         pass
+    sync_viewport = getattr(list_widget, "_sync_viewport_right_padding", None)
+    if callable(sync_viewport):
+        try:
+            sync_viewport()
+        except Exception:
+            pass

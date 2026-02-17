@@ -108,6 +108,7 @@ class NamesList(QtWidgets.QListWidget):
         self._name_edit_height = NAME_EDIT_HEIGHT
         self._name_min_width_with_subroles = 188
         self._name_min_width_without_subroles = 196
+        self._subrole_controls_layout_visible = bool(self.has_subroles)
         # Keep subrole rows compact and stable even after list rebuild/sort.
         self._name_max_width: int | None = (
             NAME_EDIT_MAX_WIDTH_WITH_SUBROLES if self.has_subroles else None
@@ -151,10 +152,14 @@ class NamesList(QtWidgets.QListWidget):
         # Reserve right space only for subrole rows with delete marker column.
         # For simple rows this can make the list unnecessarily wide and trigger
         # a horizontal scrollbar.
-        reserve_right = self.has_subroles and self.enable_mark_for_delete
-        has_vertical_scroll = bool(
-            sb is not None and sb.isVisible() and sb.maximum() > sb.minimum()
+        reserve_right = (
+            self.has_subroles
+            and self.enable_mark_for_delete
+            and bool(self._subrole_controls_layout_visible)
         )
+        # Use range instead of current visibility: during startup/show the
+        # scrollbar can still report invisible although a range is already set.
+        has_vertical_scroll = bool(sb is not None and sb.maximum() > sb.minimum())
         margin_right = self._scrollbar_extent(sb) if (reserve_right and has_vertical_scroll) else 0
         if margin_right == self._viewport_right_margin:
             return
@@ -232,13 +237,14 @@ class NamesList(QtWidgets.QListWidget):
         if not isinstance(row_widget, NameRowWidget):
             return
         row_widget.edit.setFixedHeight(max(1, int(self._name_edit_height)))
+        use_subrole_profile = bool(self.has_subroles and self._subrole_controls_layout_visible)
         min_width = (
             int(self._name_min_width_with_subroles)
-            if bool(self.has_subroles)
+            if use_subrole_profile
             else int(self._name_min_width_without_subroles)
         )
         row_widget.edit.setMinimumWidth(max(1, min_width))
-        if isinstance(self._name_max_width, int) and self._name_max_width > 0:
+        if use_subrole_profile and isinstance(self._name_max_width, int) and self._name_max_width > 0:
             row_widget.edit.setMaximumWidth(self._name_max_width)
         else:
             row_widget.edit.setMaximumWidth(16777215)
@@ -279,6 +285,19 @@ class NamesList(QtWidgets.QListWidget):
             self._name_rows_read_only = bool(read_only)
         self._apply_visual_profile_to_all_rows()
         self.doItemsLayout()
+        QtCore.QTimer.singleShot(0, self._sync_viewport_right_padding)
+
+    def set_subrole_controls_layout_visible(self, visible: bool) -> None:
+        """Adjust row sizing/margins when subrole controls are toggled."""
+        new_val = bool(visible and self.has_subroles)
+        if new_val == bool(self._subrole_controls_layout_visible):
+            return
+        self._subrole_controls_layout_visible = new_val
+        self._apply_visual_profile_to_all_rows()
+        try:
+            self.doItemsLayout()
+        except Exception:
+            pass
         QtCore.QTimer.singleShot(0, self._sync_viewport_right_padding)
 
     def _detach_row_widget(self, item: QtWidgets.QListWidgetItem) -> None:
@@ -545,6 +564,9 @@ class NameRowWidget(QtWidgets.QWidget):
         self._subrole_group: QtWidgets.QWidget | None = None
         if subrole_labels:
             self._subrole_group = QtWidgets.QWidget(self)
+            group_policy = self._subrole_group.sizePolicy()
+            group_policy.setRetainSizeWhenHidden(True)
+            self._subrole_group.setSizePolicy(group_policy)
             subrole_layout = QtWidgets.QHBoxLayout(self._subrole_group)
             subrole_layout.setContentsMargins(6, 0, 0, 0)
             subrole_layout.setSpacing(SUBROLE_CHECK_SPACING)
@@ -566,7 +588,11 @@ class NameRowWidget(QtWidgets.QWidget):
             self.chk_mark_for_delete.setToolTip(i18n.t("names.mark_for_delete_tooltip"))
             self.chk_mark_for_delete.toggled.connect(self._on_mark_for_delete_toggled)
             delete_cell = QtWidgets.QWidget(self)
-            delete_cell.setFixedWidth(DELETE_MARK_COLUMN_WIDTH)
+            delete_cell_width = max(
+                int(DELETE_MARK_COLUMN_WIDTH),
+                int(self.chk_mark_for_delete.sizeHint().width()),
+            )
+            delete_cell.setFixedWidth(delete_cell_width)
             delete_cell_layout = QtWidgets.QHBoxLayout(delete_cell)
             delete_cell_layout.setContentsMargins(0, 0, 0, 0)
             delete_cell_layout.setSpacing(0)

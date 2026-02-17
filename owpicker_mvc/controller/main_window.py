@@ -1599,8 +1599,11 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         for name, widget in self._role_wheels():
             base = self._role_base_widths.get(name, widget.sizeHint().width() or widget.width())
             if lock:
-                widget.setMaximumWidth(base)
+                fixed = max(1, int(base))
+                widget.setMinimumWidth(fixed)
+                widget.setMaximumWidth(fixed)
             else:
+                widget.setMinimumWidth(0)
                 widget.setMaximumWidth(QWIDGETSIZE_MAX)
 
     def resizeEvent(self, e: QtGui.QResizeEvent):
@@ -2199,7 +2202,11 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             if self.hero_ban_active:
                 d = self.dps.get_result_value() or "–"
                 self.summary.setText(i18n.t("summary.hero_ban", pick=d))
-                self.overlay.show_message(i18n.t("overlay.hero_ban_title"), [d, "", ""])
+                self.overlay.show_message(
+                    i18n.t("overlay.hero_ban_title"),
+                    [d, "", ""],
+                    show_disable_button=True,
+                )
                 self._last_results_snapshot = None
                 self._update_cancel_enabled()
                 return

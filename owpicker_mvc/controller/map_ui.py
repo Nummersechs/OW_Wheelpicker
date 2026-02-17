@@ -33,6 +33,10 @@ def _map_type_list_style(theme: theme_util.Theme) -> str:
     return cached
 
 
+def _default_map_role_state() -> dict:
+    return {"entries": [], "pair_mode": False, "use_subroles": False}
+
+
 class MapUI(QtCore.QObject):
     """
     Kapselt die komplette Map-UI (Listen + zentrales Rad) aus MainWindow heraus.
@@ -54,6 +58,8 @@ class MapUI(QtCore.QObject):
         self.map_categories = list(getattr(config, "MAP_CATEGORIES", [])) or list(config.DEFAULT_MAPS.keys())
         self.map_lists: Dict[str, ListPanel] = {}
         self._map_combined: list[str] = []
+        self._map_override_entries: list[dict] = []
+        self._map_override_signature: tuple[str, ...] | None = None
         self._map_result_text = "–"
         self._active = True
         self._pending_rebuild = False
@@ -87,17 +93,16 @@ class MapUI(QtCore.QObject):
             theme_util.get_theme(self.theme_key),
             ((self.lbl_map_types, "label.map_types"),),
         )
-        ui_helpers.set_fixed_width_from_translations([self.lbl_map_types], ["map.types"], padding=30)
         sb_layout.addWidget(self.lbl_map_types)
         self.map_type_checks: dict[str, QtWidgets.QCheckBox] = {}
         self._map_type_list_layout = QtWidgets.QVBoxLayout()
         self._map_type_list_layout.setSpacing(4)
         sb_layout.addLayout(self._map_type_list_layout)
         self.btn_edit_map_types = QtWidgets.QPushButton(i18n.t("map.edit_types"))
-        ui_helpers.set_fixed_width_from_translations([self.btn_edit_map_types], ["map.edit_types"], padding=48)
         self.btn_edit_map_types.setToolTip(i18n.t("map.edit_types_tooltip"))
         self.btn_edit_map_types.clicked.connect(lambda: self._show_map_type_editor(container))
         self.btn_edit_map_types.setFocusPolicy(QtCore.Qt.ClickFocus)
+        self._apply_map_control_widths()
         sb_layout.addWidget(self.btn_edit_map_types, 0, QtCore.Qt.AlignLeft)
         sb_layout.addStretch(1)
         self.map_sidebar = sidebar
@@ -106,7 +111,8 @@ class MapUI(QtCore.QObject):
         self.map_grid_container = QtWidgets.QWidget()
         self.map_grid_container.setObjectName("mapGridContainer")
         self.map_grid = QtWidgets.QVBoxLayout(self.map_grid_container)
-        self.map_grid.setContentsMargins(4, 4, 4, 4)
+        # Make only the inner right-side map canvas 10px narrower.
+        self.map_grid.setContentsMargins(4, 4, 14, 4)
         self.map_grid.setSpacing(8)
 
         scroll = QtWidgets.QScrollArea()
@@ -190,6 +196,18 @@ class MapUI(QtCore.QObject):
         include_checked = role_state.get("include_in_all", True)
         parent = getattr(self, "map_grid_container", None)
         w = ListPanel(cat, role_state.get("entries", []), parent=parent)
+        # Increase only the map names-list canvas height (not row visuals/buttons).
+        try:
+            names_canvas = getattr(w, "names", None)
+            if isinstance(names_canvas, QtWidgets.QListWidget):
+                base_canvas_h = max(
+                    int(names_canvas.minimumHeight()),
+                    int(names_canvas.sizeHint().height()),
+                    120,
+                )
+                names_canvas.setMinimumHeight(max(1, int(round(base_canvas_h * 1.3))))
+        except Exception:
+            pass
         w.set_spin_button_text(i18n.t("wheel.spin_single_map"))
         w.set_language(self.language)
         w.set_interactive_enabled(include_checked)
@@ -222,7 +240,7 @@ class MapUI(QtCore.QObject):
     def _build_map_lists(self, map_state: dict):
         self._clear_map_lists()
         for cat in self.map_categories:
-            role_state = map_state.get(cat) or {"entries": [], "pair_mode": False, "use_subroles": False}
+            role_state = map_state.get(cat) or _default_map_role_state()
             self._add_map_list(cat, role_state)
         self._map_type_list_layout.addStretch(1)
         self._theme_apply_signature = None
@@ -248,7 +266,7 @@ class MapUI(QtCore.QObject):
             return
         # Build one category per tick to keep UI responsive
         cat = self._pending_list_categories.pop(0)
-        role_state = self._pending_list_state.get(cat) or {"entries": [], "pair_mode": False, "use_subroles": False}
+        role_state = self._pending_list_state.get(cat) or _default_map_role_state()
         self._add_map_list(cat, role_state)
         if self._list_build_timer is not None:
             self._list_build_timer.start(0)
@@ -281,7 +299,6 @@ class MapUI(QtCore.QObject):
             layout.setContentsMargins(10, 10, 10, 10)
             layout.setSpacing(8)
             self._map_type_editor_title = QtWidgets.QLabel(i18n.t("map.editor.title"))
-            ui_helpers.set_fixed_width_from_translations([self._map_type_editor_title], ["map.editor.title"], padding=28)
             layout.addWidget(self._map_type_editor_title)
 
             self._map_type_list_widget = QtWidgets.QListWidget()
@@ -301,11 +318,6 @@ class MapUI(QtCore.QObject):
             self._map_type_btn_del.setToolTip(i18n.t("map.editor.delete_tooltip"))
             self._map_type_btn_add.clicked.connect(self._add_map_type_row)
             self._map_type_btn_del.clicked.connect(self._del_map_type_row)
-            ui_helpers.set_fixed_width_from_translations(
-                [self._map_type_btn_add, self._map_type_btn_del],
-                ["map.editor.add", "map.editor.delete"],
-                padding=40,
-            )
             btn_grid.addWidget(self._map_type_btn_add, 0, 0, QtCore.Qt.AlignLeft)
             btn_grid.addWidget(self._map_type_btn_del, 0, 1, QtCore.Qt.AlignRight)
             btn_grid.setColumnStretch(0, 1)
@@ -320,14 +332,11 @@ class MapUI(QtCore.QObject):
             self._map_type_btn_cancel.setToolTip(i18n.t("map.editor.cancel_tooltip"))
             self._map_type_btn_ok.clicked.connect(self._confirm_map_types)
             self._map_type_btn_cancel.clicked.connect(lambda: self._map_type_editor.hide())
-            ui_helpers.set_fixed_width_from_translations(
-                [self._map_type_btn_ok, self._map_type_btn_cancel],
-                ["map.editor.apply", "map.editor.cancel"],
-                padding=44,
-            )
-            confirm_row.addWidget(self._map_type_btn_ok, 0, QtCore.Qt.AlignLeft)
-            confirm_row.addWidget(self._map_type_btn_cancel, 0, QtCore.Qt.AlignRight)
+            confirm_row.addWidget(self._map_type_btn_ok)
+            confirm_row.addStretch(1)
+            confirm_row.addWidget(self._map_type_btn_cancel)
             layout.addLayout(confirm_row)
+            self._apply_map_editor_widths()
 
         self._apply_theme_to_map_controls(theme_util.get_theme(self.theme_key))
 
@@ -421,10 +430,10 @@ class MapUI(QtCore.QObject):
                     new_state[cat] = st
                     new_include_map[cat] = include_map.get(old_cat, True)
                 else:
-                    new_state[cat] = {"entries": [], "pair_mode": False, "use_subroles": False}
+                    new_state[cat] = _default_map_role_state()
                     new_include_map[cat] = True
             else:
-                new_state[cat] = {"entries": [], "pair_mode": False, "use_subroles": False}
+                new_state[cat] = _default_map_role_state()
                 new_include_map[cat] = True
 
         self.map_categories = list(new_types)
@@ -445,6 +454,7 @@ class MapUI(QtCore.QObject):
         if hasattr(self, "btn_edit_map_types"):
             self.btn_edit_map_types.setText(i18n.t("map.edit_types"))
             self.btn_edit_map_types.setToolTip(i18n.t("map.edit_types_tooltip"))
+        self._apply_map_control_widths()
         for w in self.map_lists.values():
             w.set_language(lang)
             w.set_spin_button_text(i18n.t("wheel.spin_single_map"))
@@ -465,6 +475,28 @@ class MapUI(QtCore.QObject):
         if hasattr(self, "_map_type_btn_cancel"):
             self._map_type_btn_cancel.setText(i18n.t("map.editor.cancel"))
             self._map_type_btn_cancel.setToolTip(i18n.t("map.editor.cancel_tooltip"))
+        self._apply_map_editor_widths()
+
+    def _apply_map_control_widths(self) -> None:
+        ui_helpers.set_fixed_width_from_translations([self.lbl_map_types], ["map.types"], padding=30)
+        if hasattr(self, "btn_edit_map_types"):
+            ui_helpers.set_fixed_width_from_translations([self.btn_edit_map_types], ["map.edit_types"], padding=48)
+
+    def _apply_map_editor_widths(self) -> None:
+        if hasattr(self, "_map_type_editor_title"):
+            ui_helpers.set_fixed_width_from_translations([self._map_type_editor_title], ["map.editor.title"], padding=28)
+        if hasattr(self, "_map_type_btn_add") and hasattr(self, "_map_type_btn_del"):
+            ui_helpers.set_fixed_width_from_translations(
+                [self._map_type_btn_add, self._map_type_btn_del],
+                ["map.editor.add", "map.editor.delete"],
+                padding=40,
+            )
+        if hasattr(self, "_map_type_btn_ok") and hasattr(self, "_map_type_btn_cancel"):
+            ui_helpers.set_fixed_width_from_translations(
+                [self._map_type_btn_ok, self._map_type_btn_cancel],
+                ["map.editor.apply", "map.editor.cancel"],
+                padding=44,
+            )
 
     def _apply_theme_to_map_controls(self, theme: theme_util.Theme):
         style_helpers.apply_theme_roles(
@@ -491,9 +523,9 @@ class MapUI(QtCore.QObject):
                 theme,
                 (
                     (getattr(self, "_map_type_btn_add", None), "button.primary"),
-                    (getattr(self, "_map_type_btn_del", None), "button.primary"),
+                    (getattr(self, "_map_type_btn_del", None), "button.danger"),
                     (getattr(self, "_map_type_btn_ok", None), "button.success"),
-                    (getattr(self, "_map_type_btn_cancel", None), "button.danger"),
+                    (getattr(self, "_map_type_btn_cancel", None), "button.primary"),
                 ),
             )
 
@@ -561,13 +593,14 @@ class MapUI(QtCore.QObject):
     def set_active(self, active: bool) -> None:
         self._active = bool(active)
         if self._active:
-            if self._pending_wheel_refresh:
-                self.rebuild_combined(emit_state=False, force_wheel=True)
+            if self._pending_rebuild or self._pending_wheel_refresh:
+                emit_state = bool(self._pending_state_emit)
+                self.rebuild_combined(emit_state=emit_state, force_wheel=True)
+            self._pending_rebuild = False
+            self._pending_state_emit = False
         else:
             if self._update_timer.isActive():
                 self._update_timer.stop()
-            self._pending_rebuild = False
-            self._pending_state_emit = False
 
     def shutdown(self) -> None:
         """Stop internal timers and prevent further wheel updates."""
@@ -604,6 +637,12 @@ class MapUI(QtCore.QObject):
         }
 
     def _schedule_update(self):
+        if not self._active:
+            # Defer expensive merge work while maps mode is inactive.
+            self._pending_rebuild = True
+            self._pending_wheel_refresh = True
+            self._pending_state_emit = True
+            return
         self._pending_rebuild = True
         self._pending_state_emit = True
         if not self._update_timer.isActive():
@@ -627,12 +666,25 @@ class MapUI(QtCore.QObject):
                 if name:
                     combined.append(name)
         changed = combined != self._map_combined
-        self._map_combined = combined
+        if changed:
+            self._map_combined = combined
+            self._map_override_entries = [
+                {"name": name, "subroles": [], "active": True}
+                for name in combined
+            ]
+        combined_sig = tuple(self._map_combined)
         if changed or force_wheel or self._pending_wheel_refresh:
             if hasattr(self, "map_main") and (self._active or force_wheel):
-                self.map_main.set_override_entries(
-                    [{"name": n, "subroles": [], "active": True} for n in combined]
+                needs_push = (
+                    force_wheel
+                    or
+                    changed
+                    or self._pending_wheel_refresh
+                    or self._map_override_signature != combined_sig
                 )
+                if needs_push:
+                    self.map_main.set_override_entries(self._map_override_entries)
+                    self._map_override_signature = combined_sig
                 self._pending_wheel_refresh = False
             else:
                 self._pending_wheel_refresh = True

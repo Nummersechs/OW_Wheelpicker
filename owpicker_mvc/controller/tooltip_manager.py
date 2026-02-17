@@ -40,6 +40,12 @@ class TooltipManager:
     def shutdown(self) -> None:
         if self._timer.isActive():
             self._timer.stop()
+        self._done_callbacks = []
+        self._pending_signature = None
+        self._last_signature = None
+        self._paused = False
+        # Invalidate pending singleShot callbacks scheduled by _run_cache_refresh.
+        self._generation += 1
 
     def resource_snapshot(self) -> dict:
         timer_active = False
