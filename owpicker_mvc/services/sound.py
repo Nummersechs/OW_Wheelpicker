@@ -125,12 +125,25 @@ class SoundManager:
         if on_done is not None:
             self._warmup_done_callbacks.append(on_done)
         items: list[tuple[Path, dict[Path, Any], float]] = []
-        items.extend([(p, self.spin_effects, self.spin_base_volume) for p in self.spin_sources])
-        items.extend([(p, self.ding_effects, self.ding_base_volume) for p in self.ding_sources])
-        if not items:
+        items.extend(
+            [(p, self.spin_effects, self.spin_base_volume) for p in self.spin_sources if p not in self.spin_effects]
+        )
+        items.extend(
+            [(p, self.ding_effects, self.ding_base_volume) for p in self.ding_sources if p not in self.ding_effects]
+        )
+        if self._warmup_items:
+            queued = {(path, id(cache)) for path, cache, _base_volume in self._warmup_items}
+            for path, cache, base_volume in items:
+                key = (path, id(cache))
+                if key in queued:
+                    continue
+                queued.add(key)
+                self._warmup_items.append((path, cache, base_volume))
+        else:
+            self._warmup_items = list(items)
+        if not self._warmup_items:
             self._stop_warmup_timer()
             return
-        self._warmup_items = items
         if self._warmup_timer is None:
             self._warmup_timer = QtCore.QTimer(parent)
             self._warmup_timer.timeout.connect(self._warmup_step)
@@ -138,7 +151,8 @@ class SoundManager:
             if parent is not None:
                 self._warmup_timer.setParent(parent)
         self._warmup_timer.setSingleShot(False)
-        self._warmup_timer.start(max(0, int(step_ms)))
+        if not self._warmup_paused:
+            self._warmup_timer.start(max(0, int(step_ms)))
 
     def _warmup_step(self) -> None:
         if not self._warmup_items:

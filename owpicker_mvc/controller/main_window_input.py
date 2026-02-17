@@ -34,6 +34,7 @@ _FOCUS_ACTIVATION_EVENT_TYPES = (
     int(QtCore.QEvent.ApplicationActivate),
     int(QtCore.QEvent.ActivationChange),
 )
+_FOCUS_BLOCK_EVENT_TYPES = _FOCUS_ACTIVATION_EVENT_TYPES + (int(QtCore.QEvent.FocusIn),)
 _MOUSE_MOVE_EVENT_TYPE = int(QtCore.QEvent.MouseMove)
 _MOUSE_BUTTON_PRESS_EVENT_TYPE = int(QtCore.QEvent.MouseButtonPress)
 _FAST_FILTER_EVENT_TYPES = (
@@ -60,6 +61,8 @@ class MainWindowInputMixin:
         ):
             return super().eventFilter(obj, event)
 
+        if self._should_block_startup_focus_event(etype_int):
+            return True
         if self._should_drop_post_choice_clickthrough_event(etype_int, obj):
             return True
         if self._should_drop_disabled_choice_pointer_event(etype_int):
@@ -117,6 +120,24 @@ class MainWindowInputMixin:
         if etype not in _MOUSE_CLICK_EVENT_TYPES:
             return False
         return self._choice_overlay_buttons_locked()
+
+    def _should_block_startup_focus_event(self, etype: int) -> bool:
+        if etype not in _FOCUS_BLOCK_EVENT_TYPES:
+            return False
+        if not getattr(self, "_startup_block_input", False):
+            return False
+        if not bool(self._cfg("STARTUP_CLEAR_FOCUS_WHILE_BLOCKED", True)):
+            return False
+        try:
+            self._clear_focus_now()
+        except Exception:
+            pass
+        if hasattr(self, "_trace_event"):
+            try:
+                self._trace_event("startup_focus_blocked", event=self._event_type_name(etype))
+            except Exception:
+                pass
+        return True
 
     def _post_choice_input_guard_active(self) -> bool:
         until = getattr(self, "_post_choice_input_guard_until", None)

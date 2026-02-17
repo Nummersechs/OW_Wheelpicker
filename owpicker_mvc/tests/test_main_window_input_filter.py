@@ -173,6 +173,30 @@ class TestMainWindowInputFilter(unittest.TestCase):
         finally:
             config.STARTUP_DROP_CHOICE_POINTER_EVENTS = prev
 
+    def test_focus_event_blocked_while_startup_input_lock_active(self):
+        mw = MainWindow.__new__(MainWindow)
+        mw._startup_block_input = True
+        cleared: list[bool] = []
+        traces: list[tuple[str, dict]] = []
+        mw._clear_focus_now = lambda: cleared.append(True)
+        mw._trace_event = lambda name, **extra: traces.append((name, extra))
+
+        blocked = mw._should_block_startup_focus_event(int(QtCore.QEvent.WindowActivate))
+
+        self.assertTrue(blocked)
+        self.assertTrue(cleared)
+        self.assertTrue(any(name == "startup_focus_blocked" for name, _extra in traces))
+
+    def test_focus_event_not_blocked_when_disabled_in_config(self):
+        mw = MainWindow.__new__(MainWindow)
+        mw._startup_block_input = True
+        mw._cfg = lambda key, default=None: False if key == "STARTUP_CLEAR_FOCUS_WHILE_BLOCKED" else default
+        mw._clear_focus_now = lambda: None
+
+        blocked = mw._should_block_startup_focus_event(int(QtCore.QEvent.WindowActivate))
+
+        self.assertFalse(blocked)
+
     def test_hover_prime_deferred_events_are_coalesced(self):
         mw = MainWindow.__new__(MainWindow)
         traces: list[tuple[str, dict]] = []
@@ -329,6 +353,54 @@ class TestMainWindowInputFilter(unittest.TestCase):
             mocked.assert_called_once()
 
         self.assertTrue(any(name == "spin_all_preinit_fallback" for name, _extra in traces))
+
+    def test_flush_posted_events_uses_targeted_receivers(self):
+        mw = MainWindow.__new__(MainWindow)
+        mw.pending = 0
+        mw.overlay = object()
+        traces: list[tuple[str, dict]] = []
+        mw._trace_event = lambda name, **extra: traces.append((name, extra))
+
+        removed: list[object] = []
+        with patch("controller.main_window.QtCore.QCoreApplication.instance", return_value=object()):
+            with patch(
+                "controller.main_window.QtCore.QCoreApplication.removePostedEvents",
+                side_effect=lambda target: removed.append(target),
+            ):
+                mw._flush_posted_events("unit_test")
+
+        self.assertEqual(removed, [mw, mw.overlay])
+        self.assertTrue(any(name == "posted_events_flushed" for name, _extra in traces))
+
+    def test_flush_posted_events_is_skipped_while_spin_active(self):
+        mw = MainWindow.__new__(MainWindow)
+        mw.pending = 1
+        traces: list[tuple[str, dict]] = []
+        mw._trace_event = lambda name, **extra: traces.append((name, extra))
+
+        with patch("controller.main_window.QtCore.QCoreApplication.instance", return_value=object()):
+            with patch("controller.main_window.QtCore.QCoreApplication.removePostedEvents") as remove_events:
+                mw._flush_posted_events("unit_test")
+                remove_events.assert_not_called()
+
+        self.assertTrue(any(name == "posted_events_flush_skipped" for name, _extra in traces))
+
+    def test_startup_warmup_cooldown_respects_minimum_input_lock(self):
+        mw = MainWindow.__new__(MainWindow)
+        mw._startup_warmup_done = False
+        mw._startup_warmup_finalize_scheduled = False
+        mw._startup_block_input_until = time.monotonic() + 2.4
+        traces: list[tuple[str, dict]] = []
+        mw._trace_event = lambda name, **extra: traces.append((name, extra))
+        mw._cfg = lambda key, default=None: 300 if key == "STARTUP_WARMUP_COOLDOWN_MS" else default
+
+        with patch("controller.main_window.QtCore.QTimer.singleShot") as single_shot:
+            mw._finish_startup_warmup()
+
+        self.assertTrue(single_shot.called)
+        delay_ms = int(single_shot.call_args[0][0])
+        self.assertGreaterEqual(delay_ms, 2000)
+        self.assertTrue(any(name == "startup_warmup:cooldown" for name, _extra in traces))
 
     def test_finalize_startup_defers_visual_finalize(self):
         mw = MainWindow.__new__(MainWindow)

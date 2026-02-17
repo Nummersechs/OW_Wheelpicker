@@ -482,6 +482,8 @@ class ResultOverlay(QtWidgets.QWidget):
         if tool_style:
             self.btn_language.setStyleSheet(tool_style)
         self.ocr_names_panel.apply_theme(theme)
+        style_helpers.style_primary_button(self.btn_close, theme)
+        style_helpers.style_warning_button(self.btn_disable, theme)
         style_helpers.style_primary_button(self.btn_online, theme)
         style_helpers.style_primary_button(self.btn_offline, theme)
         style_helpers.style_primary_button(self.btn_delete_cancel, theme)

@@ -128,14 +128,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._hover_trace_max_events = int(self._cfg("HOVER_TRACE_MAX_EVENTS", 200))
         self._hover_trace_last_t: float | None = None
         self._hover_trace_file = self._state_dir / "hover_trace.log"
-        if self._hover_trace_enabled:
-            try:
-                if bool(self._cfg("TRACE_CLEAR_ON_START", False)):
-                    self._hover_trace_file.write_text("", encoding="utf-8")
-                with self._hover_trace_file.open("a", encoding="utf-8") as f:
-                    f.write(f"=== run {self._run_id} ===\n")
-            except Exception:
-                pass
+        self._write_trace_run_header(self._hover_trace_enabled, self._hover_trace_file)
         self._hover_forward_last: float | None = None
         self._hover_forwarding = False
         self._hover_seen = False
@@ -164,6 +157,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._applied_theme_key: str | None = None
         self._mode_button_checked_cache: dict[int, bool] = {}
         self._startup_block_input = False
+        self._startup_block_input_until: float | None = None
         self._startup_warmup_running = False
         self._startup_warmup_done = False
         self._startup_warmup_finalize_scheduled = False
@@ -181,14 +175,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._drained_input_first_t: float | None = None
         self._drained_input_last_t: float | None = None
         self._focus_trace_file = self._state_dir / "focus_trace.log"
-        if self._focus_trace_enabled:
-            try:
-                if bool(self._cfg("TRACE_CLEAR_ON_START", False)):
-                    self._focus_trace_file.write_text("", encoding="utf-8")
-                with self._focus_trace_file.open("a", encoding="utf-8") as f:
-                    f.write(f"=== run {self._run_id} ===\n")
-            except Exception:
-                pass
+        self._write_trace_run_header(self._focus_trace_enabled, self._focus_trace_file)
         self._trace_enabled = bool(
             self._cfg("TRACE_FLOW", False)
             or self._cfg("TRACE_SHUTDOWN", False)
@@ -258,6 +245,17 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             except Exception:
                 pass
         return getattr(config, key, default)
+
+    def _write_trace_run_header(self, enabled: bool, trace_file: Path) -> None:
+        if not enabled:
+            return
+        try:
+            if bool(self._cfg("TRACE_CLEAR_ON_START", False)):
+                trace_file.write_text("", encoding="utf-8")
+            with trace_file.open("a", encoding="utf-8") as handle:
+                handle.write(f"=== run {self._run_id} ===\n")
+        except Exception:
+            pass
 
     def _role_wheels(self) -> list[tuple[str, object]]:
         return role_wheels(self)
@@ -940,6 +938,13 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             return
         if self._overlay_choice_active():
             return
+        did_work = self._flush_pending_heavy_ui_updates(step_ms=int(getattr(self, "_post_choice_step_ms", 15)))
+        if did_work:
+            self._trace_event("startup_visual_finalize:flushed_heavy")
+
+    def _flush_pending_heavy_ui_updates(self, step_ms: int | None = None) -> bool:
+        if step_ms is None:
+            step_ms = int(getattr(self, "_post_choice_step_ms", 15))
         did_work = False
         self._set_heavy_ui_updates_enabled(True)
         if bool(getattr(self, "_language_heavy_pending", False)):
@@ -948,11 +953,10 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             did_work = True
         if bool(getattr(self, "_theme_heavy_pending", False)):
             theme = theme_util.get_theme(getattr(self, "theme", "light"))
-            self._apply_theme_heavy(theme, step_ms=int(getattr(self, "_post_choice_step_ms", 15)))
+            self._apply_theme_heavy(theme, step_ms=int(step_ms))
             self._theme_heavy_pending = False
             did_work = True
-        if did_work:
-            self._trace_event("startup_visual_finalize:flushed_heavy")
+        return did_work
 
     def _ensure_deferred_hover_rearm_timer(self) -> QtCore.QTimer:
         timer = getattr(self, "_deferred_hover_rearm_timer", None)
@@ -1081,8 +1085,13 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._startup_task_queue = tasks
         self._startup_warmup_running = True
         self._startup_block_input = True
+        min_block_ms = max(0, int(self._cfg("STARTUP_MIN_BLOCK_INPUT_MS", 0)))
+        if min_block_ms > 0:
+            self._startup_block_input_until = time.monotonic() + (min_block_ms / 1000.0)
+        else:
+            self._startup_block_input_until = None
         self._refresh_app_event_filter_state()
-        self._trace_event("startup_warmup:start", tasks=[name for name, _ in tasks])
+        self._trace_event("startup_warmup:start", tasks=[name for name, _ in tasks], min_block_ms=min_block_ms)
         if not tasks:
             self._finish_startup_warmup()
             return
@@ -1111,7 +1120,12 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             return
         self._startup_warmup_finalize_scheduled = True
         extra_ms = max(0, int(self._cfg("STARTUP_WARMUP_COOLDOWN_MS", 500)))
-        self._trace_event("startup_warmup:cooldown", delay_ms=extra_ms)
+        remaining_lock_ms = 0
+        block_until = getattr(self, "_startup_block_input_until", None)
+        if block_until is not None:
+            remaining_lock_ms = max(0, int((float(block_until) - time.monotonic()) * 1000.0))
+            extra_ms = max(extra_ms, remaining_lock_ms)
+        self._trace_event("startup_warmup:cooldown", delay_ms=extra_ms, remaining_lock_ms=remaining_lock_ms)
         QtCore.QTimer.singleShot(extra_ms, self._finalize_startup_warmup)
 
     def _finalize_startup_warmup(self) -> None:
@@ -1121,6 +1135,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._startup_warmup_done = True
         self._flush_posted_events("startup_warmup_done")
         self._startup_block_input = False
+        self._startup_block_input_until = None
         self._startup_drain_active = True
         self._refresh_app_event_filter_state()
         self._restart_startup_drain_timer()
@@ -1128,14 +1143,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self._startup_current_task = None
         self._startup_waiting_for_map = False
         # Heavy UI updates were deferred; apply once warmup is done.
-        self._set_heavy_ui_updates_enabled(True)
-        if self._language_heavy_pending:
-            self._apply_language_heavy()
-            self._language_heavy_pending = False
-        if self._theme_heavy_pending:
-            theme = theme_util.get_theme(getattr(self, "theme", "light"))
-            self._apply_theme_heavy(theme, step_ms=int(self._post_choice_step_ms))
-            self._theme_heavy_pending = False
+        self._flush_pending_heavy_ui_updates(step_ms=int(self._post_choice_step_ms))
         self._sync_mode_stack()
         self._trace_event("startup_warmup:done")
         self._rearm_hover_tracking(reason="startup_warmup:done")
@@ -1249,13 +1257,11 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             app = None
         if app is None:
             return
-        # Attempt to clear all queued events (best-effort).
-        try:
-            QtCore.QCoreApplication.removePostedEvents(None)  # type: ignore[arg-type]
-            self._trace_event("posted_events_flushed", reason=reason, scope="all")
+        if int(getattr(self, "pending", 0) or 0) > 0 or self._has_active_spin_animations(
+            include_internal_flags=True
+        ):
+            self._trace_event("posted_events_flush_skipped", reason=reason, scope="spin_active")
             return
-        except Exception:
-            pass
         targets = [self, getattr(self, "overlay", None)]
         count = 0
         for target in targets:
@@ -1267,6 +1273,32 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             except Exception:
                 pass
         self._trace_event("posted_events_flushed", reason=reason, scope="targets", targets=count)
+
+    def _has_active_spin_animations(self, *, include_internal_flags: bool = False) -> bool:
+        role_wheels_fn = getattr(self, "_role_wheels", None)
+        if callable(role_wheels_fn):
+            try:
+                for _role, wheel in role_wheels_fn():
+                    try:
+                        if hasattr(wheel, "is_anim_running") and bool(wheel.is_anim_running()):
+                            return True
+                        if include_internal_flags and bool(getattr(wheel, "_is_spinning", False)):
+                            return True
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+        map_main = getattr(self, "map_main", None)
+        if map_main is None:
+            return False
+        try:
+            if hasattr(map_main, "is_anim_running") and bool(map_main.is_anim_running()):
+                return True
+            if include_internal_flags and bool(getattr(map_main, "_is_spinning", False)):
+                return True
+        except Exception:
+            return False
+        return False
 
     def _startup_task_sound(self) -> None:
         if not self._cfg("SOUND_WARMUP_ON_START", False):
@@ -1992,23 +2024,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
                 elapsed_ms = 0
             if elapsed_ms < grace_ms:
                 return False
-        busy = False
-        for _role, wheel in self._role_wheels():
-            try:
-                if wheel.is_anim_running():
-                    busy = True
-                    break
-                if bool(getattr(wheel, "_is_spinning", False)):
-                    busy = True
-                    break
-            except Exception:
-                pass
-        if not busy and hasattr(self, "map_main"):
-            try:
-                map_busy = bool(self.map_main.is_anim_running()) or bool(getattr(self.map_main, "_is_spinning", False))
-                busy = bool(map_busy)
-            except Exception:
-                busy = False
+        busy = self._has_active_spin_animations(include_internal_flags=True)
         if busy:
             return False
 
@@ -2104,13 +2120,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
 
     def spin_all(self):
         """Dreht alle selektierten Räder auf faire Weise."""
-        self._recover_stale_pending_if_idle(source="spin_all")
-        if not getattr(self, "_post_choice_init_done", True):
-            self._ensure_post_choice_ready()
-            if not getattr(self, "_post_choice_init_done", False):
-                self._trace_event("spin_all_preinit_fallback")
-        if getattr(self, "_restoring_state", False):
-            self._trace_event("spin_all_ignored", reason="state_restore_active")
+        if not self._prepare_spin_request("spin_all"):
             return
         self._trace_event(
             "spin_all_requested",
@@ -2128,13 +2138,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             spin_service.spin_all(self)
 
     def _spin_single(self, wheel: WheelView, mult: float = 1.0, hero_ban_override: bool = True):
-        self._recover_stale_pending_if_idle(source="spin_single")
-        if not getattr(self, "_post_choice_init_done", True):
-            self._ensure_post_choice_ready()
-            if not getattr(self, "_post_choice_init_done", False):
-                self._trace_event("spin_single_preinit_fallback")
-        if getattr(self, "_restoring_state", False):
-            self._trace_event("spin_single_ignored", reason="state_restore_active")
+        if not self._prepare_spin_request("spin_single"):
             return
         role = role_for_wheel(self, wheel) or "unknown"
         self._trace_event(
@@ -2149,6 +2153,17 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             self.map_mode.spin_single()
         else:
             spin_service.spin_single(self, wheel, mult=mult, hero_ban_override=hero_ban_override)
+
+    def _prepare_spin_request(self, source: str) -> bool:
+        self._recover_stale_pending_if_idle(source=source)
+        if not bool(getattr(self, "_post_choice_init_done", True)):
+            self._ensure_post_choice_ready()
+            if not bool(getattr(self, "_post_choice_init_done", False)):
+                self._trace_event(f"{source}_preinit_fallback")
+        if bool(getattr(self, "_restoring_state", False)):
+            self._trace_event(f"{source}_ignored", reason="state_restore_active")
+            return False
+        return True
 
     def _wheel_finished(self, _name: str):
         # Wenn laut State gar kein Spin aktiv ist, ignorieren wir alte/späte Signale,
@@ -2690,14 +2705,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             return
         self._trace_event("run_post_choice_init:start")
         self._set_tooltips_ready(True)
-        self._set_heavy_ui_updates_enabled(True)
-        if self._language_heavy_pending:
-            self._apply_language_heavy()
-            self._language_heavy_pending = False
-        if self._theme_heavy_pending:
-            theme = theme_util.get_theme(getattr(self, "theme", "light"))
-            self._apply_theme_heavy(theme, step_ms=int(self._post_choice_step_ms))
-            self._theme_heavy_pending = False
+        self._flush_pending_heavy_ui_updates(step_ms=int(self._post_choice_step_ms))
         if self._cfg("SOUND_WARMUP_ON_START", False):
             self.sound.warmup_async(self, step_ms=int(self._post_choice_warmup_step_ms))
         if self._cfg("TOOLTIP_CACHE_ON_START", False) and not self._cfg("DISABLE_TOOLTIPS", False):

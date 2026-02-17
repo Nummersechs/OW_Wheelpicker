@@ -33,6 +33,28 @@ class _MutatingEffect(_FakeEffect):
         self._manager.spin_effects[self._injected_key] = _FakeEffect()
 
 
+class _FakeWarmupTimer:
+    def __init__(self) -> None:
+        self.started: list[int] = []
+        self.single_shot = False
+        self.parent = None
+
+    def setParent(self, parent) -> None:
+        self.parent = parent
+
+    def setSingleShot(self, value: bool) -> None:
+        self.single_shot = bool(value)
+
+    def start(self, interval_ms: int) -> None:
+        self.started.append(int(interval_ms))
+
+    def stop(self) -> None:
+        return
+
+    def deleteLater(self) -> None:
+        return
+
+
 class TestSoundManager(unittest.TestCase):
     def test_play_spin_stops_existing_spin_effects_before_new_play(self):
         sm = SoundManager(base_dir=Path("."))
@@ -64,6 +86,39 @@ class TestSoundManager(unittest.TestCase):
         sm = SoundManager(base_dir=Path("."))
         sm.set_master_volume("invalid")
         self.assertEqual(sm.master_volume, 1.0)
+
+    def test_warmup_async_only_queues_uncached_sources(self):
+        sm = SoundManager(base_dir=Path("."))
+        a = Path("a.wav")
+        b = Path("b.wav")
+        c = Path("c.wav")
+        sm.spin_sources = [a, b]
+        sm.ding_sources = [c]
+        sm.spin_effects = {a: _FakeEffect()}
+        sm.ding_effects = {}
+        sm._warmup_timer = _FakeWarmupTimer()
+
+        sm.warmup_async(step_ms=7)
+
+        queued_paths = [path for path, _cache, _volume in sm._warmup_items]
+        self.assertEqual(queued_paths, [b, c])
+        self.assertEqual(sm._warmup_timer.started, [7])
+
+    def test_warmup_async_does_not_duplicate_existing_queue_entries(self):
+        sm = SoundManager(base_dir=Path("."))
+        a = Path("a.wav")
+        b = Path("b.wav")
+        sm.spin_sources = [a, b]
+        sm.ding_sources = []
+        sm.spin_effects = {}
+        sm._warmup_items = [(a, sm.spin_effects, sm.spin_base_volume)]
+        sm._warmup_timer = _FakeWarmupTimer()
+
+        sm.warmup_async(step_ms=5)
+
+        queued_paths = [path for path, _cache, _volume in sm._warmup_items]
+        self.assertEqual(queued_paths.count(a), 1)
+        self.assertIn(b, queued_paths)
 
 
 if __name__ == "__main__":

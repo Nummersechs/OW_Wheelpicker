@@ -34,6 +34,12 @@ MODE_CHOICE_INPUT_GUARD_MS = 260
 STARTUP_FINALIZE_DELAY_MS = 60
 STARTUP_WARMUP_COOLDOWN_MS = 500
 STARTUP_INPUT_DRAIN_MS = 180
+# Minimum startup lock duration for global input filtering.
+# Set to 0 to disable this additional lock window.
+STARTUP_MIN_BLOCK_INPUT_MS = 2000
+# While startup input lock is active, immediately clear focus/activation
+# events so the window cannot be interacted with accidentally.
+STARTUP_CLEAR_FOCUS_WHILE_BLOCKED = True
 # Run visual/theme finalize after mode choice and only when UI is idle.
 # This keeps the first interaction path responsive on slower systems.
 STARTUP_VISUAL_FINALIZE_DEFERRED = True
