@@ -80,7 +80,7 @@ class BasePanel(QtWidgets.QWidget):
         if hint is None and names_hint_key:
             hint = i18n.t(names_hint_key)
         self.names_hint = QtWidgets.QLabel(hint or "")
-        self.names_hint.setStyleSheet("color:#444; font-size:12px; padding:2px;")
+        self.names_hint.setStyleSheet("font-size:12px; padding:2px;")
         self._inner_layout.addWidget(self.names_hint)
 
         self.names_panel = NamesListPanel(subrole_labels=self.subrole_labels)
@@ -163,18 +163,16 @@ class BasePanel(QtWidgets.QWidget):
     def apply_theme(self, theme: theme_util.Theme) -> None:
         if self._applied_theme_key == theme.key:
             return
-        self.card.setStyleSheet(
-            "#card { "
-            f"background: {theme.card_bg}; "
-            f"border:1px solid {theme.card_border}; border-radius:16px; }}"
+        style_helpers.apply_theme_roles(
+            theme,
+            (
+                (self.card, "frame.card"),
+                (self.label, "label.panel_title"),
+                (self.names_hint, "label.hint"),
+                (self.btn_local_spin, "button.primary"),
+                (self.btn_include_in_all, "button.include"),
+            ),
         )
-        self.label.setStyleSheet(
-            "font-size:18px; font-weight:800; letter-spacing:0.3px; "
-            f"color:{theme.text};"
-        )
-        self.names_hint.setStyleSheet(f"color:{theme.muted_text}; font-size:12px; padding:2px;")
-        style_helpers.style_primary_button(self.btn_local_spin, theme)
-        style_helpers.style_include_button(self.btn_include_in_all, theme)
         if hasattr(self, "names_panel"):
             self.names_panel.apply_theme(theme)
         self._applied_theme_key = theme.key

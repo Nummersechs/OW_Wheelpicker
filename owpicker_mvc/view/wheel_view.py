@@ -13,6 +13,7 @@ from utils import qt_runtime, theme as theme_util, ui_helpers
 _WHEEL_INDICATOR_STYLE_CACHE: dict[str, str] = {}
 _WHEEL_RESULT_STYLE_CACHE: dict[str, str] = {}
 _RESET_TOOL_STYLE_CACHE: dict[str, str] = {}
+_CLEAR_RESULT_TOOL_STYLE_CACHE: dict[str, str] = {}
 
 
 def _wheel_indicator_style(theme: theme_util.Theme) -> str:
@@ -104,6 +105,25 @@ def _reset_button_style(theme: theme_util.Theme) -> str:
         f"border:1px solid {theme.border}; border-radius:6px; }}"
     )
     _RESET_TOOL_STYLE_CACHE[theme.key] = cached
+    return cached
+
+
+def _clear_result_button_style(theme: theme_util.Theme) -> str:
+    cached = _CLEAR_RESULT_TOOL_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    cached = (
+        "QToolButton {"
+        " background: transparent;"
+        " border: none;"
+        f" color: {theme.primary};"
+        " font-size: 14px;"
+        "}"
+        f"QToolButton:hover {{ color: {theme.primary_hover}; background: {theme.tool_hover}; }}"
+        f"QToolButton:pressed {{ color: {theme.primary_pressed}; background: {theme.tool_pressed}; }}"
+        f"QToolButton:disabled {{ color: {theme.disabled_text}; }}"
+    )
+    _CLEAR_RESULT_TOOL_STYLE_CACHE[theme.key] = cached
     return cached
 
 
@@ -213,17 +233,6 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
         self.btn_clear_result.setToolTip(i18n.t("wheel.clear_result_tooltip"))
         self.btn_clear_result.setAutoRaise(True)  # kein blauer Button, nur Icon
         self.btn_clear_result.setCursor(QtCore.Qt.PointingHandCursor)
-        self.btn_clear_result.setStyleSheet("""
-            QToolButton {
-                background: transparent;
-                border: none;
-                color: #b00020;
-                font-size: 14px;
-            }
-            QToolButton:hover {
-                color: #ff1744;
-            }
-        """)
         self.btn_clear_result.clicked.connect(self._clear_result)
         self.btn_clear_result.setVisible(False)  # nur zeigen, wenn Ergebnis da ist
 
@@ -271,8 +280,9 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
         self._apply_placeholder()
         self._apply_result_state()
 
-        # Default theme; main window reapplies the persisted choice.
-        self.apply_theme(theme_util.get_theme("light"))
+        # Default to the currently active app theme; MainWindow may still
+        # reapply persisted state after startup restore.
+        self.apply_theme(theme_util.app_theme("light"))
         QtCore.QTimer.singleShot(0, self._refit_view)
 
     def set_wheel_overlay_widget(
@@ -405,6 +415,7 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
         self.result.setStyleSheet(_wheel_result_style(theme))
         # Indicator styling stays aligned with the active theme colors.
         self.setStyleSheet(_wheel_indicator_style(theme))
+        self.btn_clear_result.setStyleSheet(_clear_result_button_style(theme))
         if hasattr(self, "btn_reset_segments"):
             self.btn_reset_segments.setStyleSheet(_reset_button_style(theme))
         self._applied_theme_key_local = theme.key

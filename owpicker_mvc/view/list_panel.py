@@ -32,7 +32,7 @@ class ListPanel(BasePanel):
         self.names.metaChanged.connect(self._on_names_changed)
 
         self._apply_fixed_widths()
-        self.apply_theme(theme_util.get_theme("light"))
+        self.apply_theme(theme_util.app_theme("light"))
 
     # --- API kompatibel zu WheelView für Map-Mode ---
     def set_language(self, lang: str):

@@ -167,8 +167,9 @@ class ResultOverlay(QtWidgets.QWidget):
         self.hide()
         self._last_view: dict | None = None
         self._applied_theme_key: str | None = None
-        # Default to light; caller reapplies with the persisted theme.
-        default_theme = theme_util.get_theme("light")
+        # Prefer the currently applied app theme during startup to avoid
+        # brief light-theme flashes before MainWindow reapplies persisted theme.
+        default_theme = theme_util.app_theme("light")
         self.apply_theme(default_theme, theme_util.tool_button_stylesheet(default_theme))
 
     def paintEvent(self, e):

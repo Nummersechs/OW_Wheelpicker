@@ -111,19 +111,84 @@ def get_theme(key: str) -> Theme:
     return THEMES.get(key, THEMES["light"])
 
 
+def app_theme_key(default: str = "light") -> str:
+    """Return the currently applied app theme key if available."""
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        return str(default or "light")
+    key = app.property(_THEME_KEY_PROP)
+    if isinstance(key, str) and key in THEMES:
+        return key
+    return str(default or "light")
+
+
+def app_theme(default: str = "light") -> Theme:
+    """Return the current app theme object, falling back to `default`."""
+    return get_theme(app_theme_key(default))
+
+
 def build_palette(theme: Theme) -> QtGui.QPalette:
     pal = QtGui.QPalette()
+    window = QtGui.QColor(theme.window)
+    base = QtGui.QColor(theme.base)
+    alt_base = QtGui.QColor(theme.alt_base)
+    text = QtGui.QColor(theme.text)
+    border = QtGui.QColor(theme.border)
+    frame_border = QtGui.QColor(theme.frame_border)
+    primary = QtGui.QColor(theme.primary)
+    button_text = QtGui.QColor(theme.button_text)
+    disabled_bg = QtGui.QColor(theme.disabled_bg)
+    disabled_text = QtGui.QColor(theme.disabled_text)
+
+    # Roles referenced by global stylesheet via palette(...), explicitly set so
+    # they stay deterministic across light/dark switches.
+    light = QtGui.QColor(base).lighter(110)
+    midlight = QtGui.QColor(border)
+    mid = QtGui.QColor(frame_border)
+    dark = QtGui.QColor(alt_base).darker(115)
+    shadow = QtGui.QColor(frame_border).darker(130)
+
     pal.setColor(QtGui.QPalette.Window, QtGui.QColor(theme.window))
-    pal.setColor(QtGui.QPalette.Base, QtGui.QColor(theme.base))
-    pal.setColor(QtGui.QPalette.AlternateBase, QtGui.QColor(theme.alt_base))
+    pal.setColor(QtGui.QPalette.Base, base)
+    pal.setColor(QtGui.QPalette.AlternateBase, alt_base)
     pal.setColor(QtGui.QPalette.ToolTipBase, QtGui.QColor(theme.tooltip_bg))
     pal.setColor(QtGui.QPalette.ToolTipText, QtGui.QColor(theme.tooltip_text))
-    pal.setColor(QtGui.QPalette.Text, QtGui.QColor(theme.text))
-    pal.setColor(QtGui.QPalette.WindowText, QtGui.QColor(theme.text))
-    pal.setColor(QtGui.QPalette.ButtonText, QtGui.QColor(theme.button_text))
-    pal.setColor(QtGui.QPalette.Button, QtGui.QColor(theme.base))
-    pal.setColor(QtGui.QPalette.Highlight, QtGui.QColor(theme.primary))
-    pal.setColor(QtGui.QPalette.HighlightedText, QtGui.QColor(theme.button_text))
+    pal.setColor(QtGui.QPalette.Text, text)
+    pal.setColor(QtGui.QPalette.WindowText, text)
+    pal.setColor(QtGui.QPalette.ButtonText, button_text)
+    pal.setColor(QtGui.QPalette.Button, base)
+    pal.setColor(QtGui.QPalette.Highlight, primary)
+    pal.setColor(QtGui.QPalette.HighlightedText, button_text)
+    pal.setColor(QtGui.QPalette.Light, light)
+    pal.setColor(QtGui.QPalette.Midlight, midlight)
+    pal.setColor(QtGui.QPalette.Mid, mid)
+    pal.setColor(QtGui.QPalette.Dark, dark)
+    pal.setColor(QtGui.QPalette.Shadow, shadow)
+
+    # Disabled group keeps controls readable and consistent with button styles.
+    pal.setColor(QtGui.QPalette.Disabled, QtGui.QPalette.Button, disabled_bg)
+    pal.setColor(QtGui.QPalette.Disabled, QtGui.QPalette.ButtonText, disabled_text)
+    pal.setColor(QtGui.QPalette.Disabled, QtGui.QPalette.Text, disabled_text)
+    pal.setColor(QtGui.QPalette.Disabled, QtGui.QPalette.WindowText, disabled_text)
+    pal.setColor(QtGui.QPalette.Disabled, QtGui.QPalette.Highlight, primary.darker(130))
+    pal.setColor(QtGui.QPalette.Disabled, QtGui.QPalette.HighlightedText, button_text)
+
+    # Keep inactive group aligned to active colors (Qt may otherwise derive
+    # style-specific values that clash with custom global stylesheet usage).
+    pal.setColor(QtGui.QPalette.Inactive, QtGui.QPalette.Window, window)
+    pal.setColor(QtGui.QPalette.Inactive, QtGui.QPalette.Base, base)
+    pal.setColor(QtGui.QPalette.Inactive, QtGui.QPalette.AlternateBase, alt_base)
+    pal.setColor(QtGui.QPalette.Inactive, QtGui.QPalette.Text, text)
+    pal.setColor(QtGui.QPalette.Inactive, QtGui.QPalette.WindowText, text)
+    pal.setColor(QtGui.QPalette.Inactive, QtGui.QPalette.Button, base)
+    pal.setColor(QtGui.QPalette.Inactive, QtGui.QPalette.ButtonText, button_text)
+    pal.setColor(QtGui.QPalette.Inactive, QtGui.QPalette.Highlight, primary)
+    pal.setColor(QtGui.QPalette.Inactive, QtGui.QPalette.HighlightedText, button_text)
+    pal.setColor(QtGui.QPalette.Inactive, QtGui.QPalette.Light, light)
+    pal.setColor(QtGui.QPalette.Inactive, QtGui.QPalette.Midlight, midlight)
+    pal.setColor(QtGui.QPalette.Inactive, QtGui.QPalette.Mid, mid)
+    pal.setColor(QtGui.QPalette.Inactive, QtGui.QPalette.Dark, dark)
+    pal.setColor(QtGui.QPalette.Inactive, QtGui.QPalette.Shadow, shadow)
     return pal
 
 
@@ -212,10 +277,20 @@ def global_stylesheet(_theme: Theme) -> str:
             padding:10px 18px;
             font-size:14px;
         }
-        QPushButton:hover { background: palette(light); }
-        QPushButton:pressed { background: palette(dark); }
+        QPushButton:hover { background: palette(light); color: palette(window-text); }
+        QPushButton:pressed { background: palette(dark); color: palette(window-text); }
         QPushButton:checked {
+            background: palette(highlight);
             border:2px solid palette(shadow);
+            color: palette(button-text);
+        }
+        QPushButton:checked:hover {
+            background: palette(highlight);
+            color: palette(button-text);
+        }
+        QPushButton:checked:pressed {
+            background: palette(highlight);
+            color: palette(button-text);
         }
         QPushButton:disabled {
             background: palette(button);

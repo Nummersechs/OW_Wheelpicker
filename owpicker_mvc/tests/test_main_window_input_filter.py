@@ -427,7 +427,7 @@ class TestMainWindowInputFilter(unittest.TestCase):
         self.assertFalse(mw._restoring_state)
         self.assertTrue(mw._startup_visual_finalize_pending)
         self.assertTrue(scheduled)
-        self.assertEqual(apply_calls, [])
+        self.assertEqual(apply_calls, ["theme:True", "lang:True"])
 
     def test_run_startup_visual_finalize_retries_when_blocked(self):
         mw = MainWindow.__new__(MainWindow)

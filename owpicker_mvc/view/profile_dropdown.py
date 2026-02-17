@@ -12,6 +12,14 @@ _POPUP_STYLE_CACHE: dict[str, str] = {}
 _LIST_STYLE_CACHE: dict[str, str] = {}
 
 
+def _rgba(color_value: str, alpha: float) -> str:
+    color = QtGui.QColor(str(color_value or ""))
+    if not color.isValid():
+        color = QtGui.QColor("#4080ff")
+    alpha_ch = max(0, min(255, int(round(float(alpha) * 255.0))))
+    return f"rgba({color.red()}, {color.green()}, {color.blue()}, {alpha_ch})"
+
+
 def _header_style(theme: theme_util.Theme) -> str:
     cached = _HEADER_STYLE_CACHE.get(theme.key)
     if cached is not None:
@@ -33,7 +41,7 @@ def _name_edit_style(theme: theme_util.Theme) -> str:
         "QLineEdit {"
         " border:0; background:transparent; padding:0 4px 0 2px;"
         f" color:{theme.text}; font-size:13px; font-weight:600;"
-        " selection-background-color: rgba(64,128,255,0.35);"
+        f" selection-background-color: {_rgba(theme.primary, 0.35)};"
         "}"
     )
     _NAME_EDIT_STYLE_CACHE[theme.key] = cached
@@ -79,7 +87,7 @@ def _list_style(theme: theme_util.Theme) -> str:
         f" background:transparent; color:{theme.text}; border:0; border-radius:0; padding:0;"
         "}"
         f"QListWidget::item {{ color:{theme.text}; height:28px; padding:0 8px; }}"
-        f"QListWidget::item:selected {{ background:rgba(64,128,255,0.28); color:{theme.text}; }}"
+        f"QListWidget::item:selected {{ background:{_rgba(theme.primary, 0.28)}; color:{theme.text}; }}"
     )
     _LIST_STYLE_CACHE[theme.key] = cached
     return cached
@@ -163,11 +171,13 @@ class _ProfileListWidget(QtWidgets.QListWidget):
 class _ProfileRowDelegate(QtWidgets.QStyledItemDelegate):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._handle_bg = QtGui.QColor("#ffffff")
-        self._handle_bg_selected = QtGui.QColor(64, 128, 255, 72)
-        self._handle_fg = QtGui.QColor("#202124")
-        self._handle_fg_selected = QtGui.QColor("#202124")
-        self._handle_separator = QtGui.QColor("#e6e6e6")
+        theme = theme_util.app_theme("light")
+        self._handle_bg = QtGui.QColor(theme.base)
+        self._handle_fg = QtGui.QColor(theme.text)
+        self._handle_fg_selected = QtGui.QColor(theme.text)
+        self._handle_separator = QtGui.QColor(theme.border)
+        self._handle_bg_selected = QtGui.QColor(theme.primary)
+        self._handle_bg_selected.setAlpha(72)
 
     def set_theme(self, theme: theme_util.Theme) -> None:
         self._handle_bg = QtGui.QColor(theme.base)
@@ -175,7 +185,8 @@ class _ProfileRowDelegate(QtWidgets.QStyledItemDelegate):
         self._handle_fg_selected = QtGui.QColor(theme.text)
         self._handle_separator = QtGui.QColor(theme.border)
         selected_alpha = 72 if theme.key == "light" else 96
-        self._handle_bg_selected = QtGui.QColor(64, 128, 255, selected_alpha)
+        self._handle_bg_selected = QtGui.QColor(theme.primary)
+        self._handle_bg_selected.setAlpha(selected_alpha)
 
     def paint(self, painter, option, index):
         opt = QtWidgets.QStyleOptionViewItem(option)

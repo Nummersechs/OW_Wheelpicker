@@ -57,6 +57,35 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         self._hover_item: QtWidgets.QGraphicsTextItem | None = None
         self._hover_bg: QtWidgets.QGraphicsRectItem | None = None
 
+    @staticmethod
+    def _theme_tooltip_colors() -> tuple[QtGui.QColor, QtGui.QColor, QtGui.QColor]:
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            pal = app.palette()
+            bg = QtGui.QColor(pal.color(QtGui.QPalette.ToolTipBase))
+            fg = QtGui.QColor(pal.color(QtGui.QPalette.ToolTipText))
+            border = QtGui.QColor(pal.color(QtGui.QPalette.Mid))
+        else:
+            bg = QtGui.QColor("#333333")
+            fg = QtGui.QColor("#ffffff")
+            border = QtGui.QColor("#666666")
+        if not bg.isValid():
+            bg = QtGui.QColor("#333333")
+        if not fg.isValid():
+            fg = QtGui.QColor("#ffffff")
+        if not border.isValid():
+            border = QtGui.QColor("#666666")
+        if bg.alpha() >= 255:
+            bg.setAlpha(228)
+        return bg, fg, border
+
+    @staticmethod
+    def _rgba_css(color: QtGui.QColor) -> str:
+        c = QtGui.QColor(color)
+        if not c.isValid():
+            c = QtGui.QColor("#000000")
+        return f"rgba({c.red()}, {c.green()}, {c.blue()}, {c.alpha()})"
+
     def _invalidate_runtime_caches(self) -> None:
         self._runtime_truncation_checked = set()
         self._tooltip_runtime_cache.clear()
@@ -514,20 +543,21 @@ class WheelDisc(QtWidgets.QGraphicsObject):
 
     def _ensure_hover_overlay(self):
         """Creates text + background items inside the scene for reliable hover display."""
+        bg_color, fg_color, border_color = self._theme_tooltip_colors()
         if self._hover_item is None:
             if not self.scene():
                 return None, None
             txt = QtWidgets.QGraphicsTextItem()
-            txt.setDefaultTextColor(QtGui.QColor("#ffffff"))
             txt.setZValue(2000)
             bg = QtWidgets.QGraphicsRectItem()
-            bg.setBrush(QtGui.QBrush(QtGui.QColor(40, 40, 40, 220)))
-            bg.setPen(QtGui.QPen(QtGui.QColor(80, 80, 80), 1))
             bg.setZValue(1999)
             self.scene().addItem(bg)
             self.scene().addItem(txt)
             self._hover_item = txt
             self._hover_bg = bg
+        self._hover_item.setDefaultTextColor(fg_color)
+        self._hover_bg.setBrush(QtGui.QBrush(bg_color))
+        self._hover_bg.setPen(QtGui.QPen(border_color, 1))
         return self._hover_item, self._hover_bg
 
     def _show_hover_overlay(self, text: str, scene_pos: QtCore.QPointF):
@@ -567,13 +597,20 @@ class WheelDisc(QtWidgets.QGraphicsObject):
     def _show_floating_label(self, text: str, screen_pos: QtCore.QPointF):
         if getattr(config, "DISABLE_TOOLTIPS", False):
             return
+        bg_color, fg_color, border_color = self._theme_tooltip_colors()
         if not getattr(self, "_floating_label", None):
             lbl = QtWidgets.QLabel()
             lbl.setWindowFlags(QtCore.Qt.ToolTip)
             lbl.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
-            lbl.setStyleSheet("QLabel { background: #333; color: white; border:1px solid #666; border-radius:4px; padding:4px 6px; }")
             self._floating_label = lbl
         lbl = self._floating_label
+        lbl.setStyleSheet(
+            "QLabel { "
+            f"background: {self._rgba_css(bg_color)}; "
+            f"color: {self._rgba_css(fg_color)}; "
+            f"border:1px solid {self._rgba_css(border_color)}; "
+            "border-radius:4px; padding:4px 6px; }"
+        )
         lbl.setText(text)
         lbl.adjustSize()
         self._move_floating_label(screen_pos)

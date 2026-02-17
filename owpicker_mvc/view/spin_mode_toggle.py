@@ -67,7 +67,7 @@ class SpinModeToggle(QtWidgets.QFrame):
         self._value = 0
         self._left_text = ""
         self._right_text = ""
-        self._theme = theme_util.get_theme("light")
+        self._theme = theme_util.app_theme("light")
         self._applied_theme_key: str | None = None
         self._thumb_anim: QtCore.QPropertyAnimation | None = None
 

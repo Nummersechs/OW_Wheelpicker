@@ -275,9 +275,10 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         return central, root
 
     def _build_header(self, root: QtWidgets.QVBoxLayout, saved: dict) -> None:
+        current_theme = theme_util.get_theme(getattr(self, "theme", "light"))
         self.title = QtWidgets.QLabel("")
         self.title.setAlignment(QtCore.Qt.AlignCenter)
-        self.title.setStyleSheet("font-size:22px; font-weight:700; margin:8px 0 2px 0;")
+        style_helpers.apply_theme_roles(current_theme, ((self.title, "label.window_title"),))
 
         # Lautstärke-Regler oben rechts
         vol_row = QtWidgets.QHBoxLayout()
@@ -306,11 +307,6 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self.btn_language.setAutoRaise(True)
         self.btn_language.setCursor(QtCore.Qt.PointingHandCursor)
         self.btn_language.setFixedSize(40, 32)
-        self.btn_language.setStyleSheet(
-            "QToolButton { font-size:18px; padding:2px; background:transparent; border:none; border-radius:6px; }"
-            "QToolButton:hover { background:rgba(0,0,0,0.06); }"
-            "QToolButton:pressed { background:rgba(0,0,0,0.12); }"
-        )
         self.btn_language.setIconSize(QtCore.QSize(28, 20))
         self.btn_language.clicked.connect(self._toggle_language)
         self.btn_theme = QtWidgets.QToolButton()
@@ -319,6 +315,13 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self.btn_theme.setFixedSize(40, 32)
         self.btn_theme.setIconSize(QtCore.QSize(24, 24))
         self.btn_theme.clicked.connect(self._toggle_theme)
+        style_helpers.apply_theme_roles(
+            current_theme,
+            (
+                (self.btn_language, "tool.button"),
+                (self.btn_theme, "tool.button"),
+            ),
+        )
         vol_row.addWidget(self.lbl_volume_icon, 0, QtCore.Qt.AlignVCenter)
         vol_row.addWidget(self.volume_slider, 0, QtCore.Qt.AlignVCenter)
         vol_row.addSpacing(6)
@@ -707,7 +710,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self.btn_cancel_spin.setFixedHeight(44)
         self.btn_cancel_spin.setEnabled(False)
         self.btn_cancel_spin.setToolTip(i18n.t("controls.cancel_spin_tooltip"))
-        self.btn_cancel_spin.setStyleSheet("QPushButton { background:#c62828; color:white; } QPushButton:disabled { background:#c7c7c7; color:#777; }")
+        style_helpers.style_danger_button(self.btn_cancel_spin, theme_util.get_theme(getattr(self, "theme", "light")))
         self.btn_cancel_spin.clicked.connect(self._cancel_spin)
         controls.addWidget(self.btn_cancel_spin)
         controls.addStretch(1)
@@ -716,9 +719,10 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         self.lbl_open_count_value.setVisible(False)
 
     def _build_summary(self, root: QtWidgets.QVBoxLayout) -> None:
+        current_theme = theme_util.get_theme(getattr(self, "theme", "light"))
         self.summary = QtWidgets.QLabel("")
         self.summary.setAlignment(QtCore.Qt.AlignCenter)
-        self.summary.setStyleSheet("font-size:15px; color:#333; margin:10px 0 6px 0;")
+        style_helpers.apply_theme_roles(current_theme, ((self.summary, "label.summary"),))
         root.addWidget(self.summary)
 
     def _init_spin_state(self) -> None:
@@ -1366,6 +1370,10 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             # Keep first paint/input responsive; visual finalize runs once the
             # overlay is gone and the UI is idle.
             self._startup_visual_finalize_pending = True
+            # Apply lightweight theme/language updates immediately so widgets
+            # don't temporarily render with stale startup colors.
+            self._apply_theme(defer_heavy=True)
+            self._apply_language(defer_heavy=True)
             self._schedule_startup_visual_finalize()
         else:
             self._apply_theme(defer_heavy=True)
@@ -1436,85 +1444,55 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
                 self.btn_theme.setEnabled(True)
             return
         theme_util.apply_app_theme(theme)  # einmal zentral, danach in Scheiben
-        tool_style = theme_util.tool_button_stylesheet(theme)
 
         # Schnelle/kleine Updates sofort
-        if hasattr(self, "btn_language"):
-            style_helpers.set_stylesheet_if_needed(self.btn_language, f"tool:{theme.key}", tool_style)
-        if hasattr(self, "btn_theme"):
-            style_helpers.set_stylesheet_if_needed(self.btn_theme, f"tool:{theme.key}", tool_style)
+        style_helpers.apply_theme_roles(
+            theme,
+            (
+                (getattr(self, "btn_language", None), "tool.button"),
+                (getattr(self, "btn_theme", None), "tool.button"),
+                (getattr(self, "title", None), "label.window_title"),
+                (getattr(self, "lbl_player_profile", None), "label.section_muted"),
+                (getattr(self, "lbl_mode", None), "label.section"),
+                (getattr(self, "lbl_anim_duration", None), "label.section"),
+                (getattr(self, "lbl_open_count", None), "label.section"),
+                (getattr(self, "lbl_open_count_value", None), "label.section"),
+                (getattr(self, "summary", None), "label.summary"),
+            ),
+        )
         self._update_theme_button_label()
-        if hasattr(self, "title"):
-            style_helpers.set_stylesheet_if_needed(
-                self.title,
-                f"title_label:{theme.key}",
-                f"font-size:22px; font-weight:700; color:{theme.text}; margin:8px 0 2px 0;",
-            )
-        if hasattr(self, "lbl_player_profile"):
-            style_helpers.set_stylesheet_if_needed(
-                self.lbl_player_profile,
-                f"profile_label:{theme.key}",
-                f"color:{theme.muted_text}; font-size:13px; font-weight:600;",
-            )
-        if hasattr(self, "lbl_mode"):
-            style_helpers.set_stylesheet_if_needed(
-                self.lbl_mode,
-                f"mode_label:{theme.key}",
-                f"color:{theme.text}; font-size:13px; font-weight:600;",
-            )
-        if hasattr(self, "lbl_anim_duration"):
-            style_helpers.set_stylesheet_if_needed(
-                self.lbl_anim_duration,
-                f"anim_duration_label:{theme.key}",
-                f"color:{theme.text}; font-size:13px; font-weight:600;",
-            )
-        if hasattr(self, "lbl_open_count"):
-            style_helpers.set_stylesheet_if_needed(
-                self.lbl_open_count,
-                f"open_count_label:{theme.key}",
-                f"color:{theme.text}; font-size:13px; font-weight:600;",
-            )
-        if hasattr(self, "lbl_open_count_value"):
-            style_helpers.set_stylesheet_if_needed(
-                self.lbl_open_count_value,
-                f"open_count_value_label:{theme.key}",
-                f"color:{theme.text}; font-size:13px; font-weight:600;",
-            )
         if hasattr(self, "player_profile_dropdown"):
             self.player_profile_dropdown.apply_theme(theme)
-        if hasattr(self, "summary"):
-            style_helpers.set_stylesheet_if_needed(
-                self.summary,
-                f"summary_label:{theme.key}",
-                f"font-size:15px; color:{theme.muted_text}; margin:10px 0 6px 0;",
-            )
+        if hasattr(self, "map_ui"):
+            # Map UI should switch immediately as well; relying only on the
+            # deferred heavy pass can leave stale colors in map mode.
+            self.map_ui.apply_theme(theme)
         if getattr(self, "_mode_buttons", None):
             for btn in self._mode_buttons:
-                style_helpers.style_mode_button(btn, theme)
+                style_helpers.apply_theme_role(btn, theme, "button.mode")
             # Ensure initial checked mode button gets the correct visual state
             # immediately, even before deferred heavy-theme updates run.
             self._update_mode_button_styles(force=True)
-        if hasattr(self, "volume_slider"):
-            style_helpers.style_horizontal_slider(self.volume_slider, theme)
-        if hasattr(self, "duration"):
-            style_helpers.style_horizontal_slider(self.duration, theme)
-        if hasattr(self, "open_count_slider"):
-            style_helpers.style_horizontal_slider(self.open_count_slider, theme)
-        if hasattr(self, "btn_spin_all"):
-            style_helpers.style_primary_button(self.btn_spin_all, theme)
+        style_helpers.apply_theme_roles(
+            theme,
+            (
+                (getattr(self, "volume_slider", None), "slider.horizontal"),
+                (getattr(self, "duration", None), "slider.horizontal"),
+                (getattr(self, "open_count_slider", None), "slider.horizontal"),
+                (getattr(self, "btn_spin_all", None), "button.primary"),
+                (getattr(self, "btn_all_players", None), "button.primary"),
+                (getattr(self, "btn_open_q_ocr", None), "button.primary"),
+                (getattr(self, "btn_cancel_spin", None), "button.danger"),
+            ),
+        )
         if hasattr(self, "spin_mode_toggle"):
             self.spin_mode_toggle.apply_theme(theme)
-        if hasattr(self, "btn_all_players"):
-            style_helpers.style_primary_button(self.btn_all_players, theme)
-        if hasattr(self, "btn_open_q_ocr"):
-            style_helpers.style_primary_button(self.btn_open_q_ocr, theme)
         for btn in self._role_ocr_buttons.values():
-            style_helpers.style_primary_button(btn, theme)
-        if hasattr(self, "btn_cancel_spin"):
-            style_helpers.style_danger_button(self.btn_cancel_spin, theme)
+            style_helpers.apply_theme_role(btn, theme, "button.primary")
         if hasattr(self, "player_list_panel"):
             self.player_list_panel.apply_theme()
         if hasattr(self, "overlay"):
+            tool_style = theme_util.tool_button_stylesheet(theme)
             self.overlay.apply_theme(theme, tool_style)
 
         self._theme_heavy_pending = bool(defer_heavy)

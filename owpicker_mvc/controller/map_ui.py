@@ -83,7 +83,10 @@ class MapUI(QtCore.QObject):
         sb_layout.setContentsMargins(8, 8, 8, 8)
         sb_layout.setSpacing(6)
         self.lbl_map_types = QtWidgets.QLabel(i18n.t("map.types"))
-        self.lbl_map_types.setStyleSheet("font-weight:600;")
+        style_helpers.apply_theme_roles(
+            theme_util.get_theme(self.theme_key),
+            ((self.lbl_map_types, "label.map_types"),),
+        )
         ui_helpers.set_fixed_width_from_translations([self.lbl_map_types], ["map.types"], padding=30)
         sb_layout.addWidget(self.lbl_map_types)
         self.map_type_checks: dict[str, QtWidgets.QCheckBox] = {}
@@ -464,32 +467,35 @@ class MapUI(QtCore.QObject):
             self._map_type_btn_cancel.setToolTip(i18n.t("map.editor.cancel_tooltip"))
 
     def _apply_theme_to_map_controls(self, theme: theme_util.Theme):
-        style_helpers.set_stylesheet_if_needed(
-            self.lbl_map_types,
-            f"map_label:{theme.key}",
-            f"font-weight:600; color:{theme.text};",
+        style_helpers.apply_theme_roles(
+            theme,
+            (
+                (self.lbl_map_types, "label.map_types"),
+                (getattr(self, "btn_edit_map_types", None), "button.primary"),
+            ),
         )
-        style_helpers.style_primary_button(getattr(self, "btn_edit_map_types", None), theme)
         if hasattr(self, "_map_type_editor"):
-            style_helpers.set_stylesheet_if_needed(
-                self._map_type_editor,
-                f"map_editor_frame:{theme.key}",
-                f"QFrame {{ background:{theme.card_bg}; border:2px solid {theme.card_border}; border-radius:10px; }}",
-            )
-            style_helpers.set_stylesheet_if_needed(
-                getattr(self, "_map_type_editor_title", None),
-                f"map_editor_title:{theme.key}",
-                f"font-weight:700; font-size:14px; color:{theme.text};",
+            style_helpers.apply_theme_roles(
+                theme,
+                (
+                    (self._map_type_editor, "frame.editor_dialog"),
+                    (getattr(self, "_map_type_editor_title", None), "label.editor_title"),
+                ),
             )
             style_helpers.set_stylesheet_if_needed(
                 getattr(self, "_map_type_list_widget", None),
                 f"map_editor_list:{theme.key}",
                 _map_type_list_style(theme),
             )
-            style_helpers.style_primary_button(getattr(self, "_map_type_btn_add", None), theme)
-            style_helpers.style_primary_button(getattr(self, "_map_type_btn_del", None), theme)
-            style_helpers.style_success_button(getattr(self, "_map_type_btn_ok", None), theme)
-            style_helpers.style_danger_button(getattr(self, "_map_type_btn_cancel", None), theme)
+            style_helpers.apply_theme_roles(
+                theme,
+                (
+                    (getattr(self, "_map_type_btn_add", None), "button.primary"),
+                    (getattr(self, "_map_type_btn_del", None), "button.primary"),
+                    (getattr(self, "_map_type_btn_ok", None), "button.success"),
+                    (getattr(self, "_map_type_btn_cancel", None), "button.danger"),
+                ),
+            )
 
     def apply_theme(self, theme: theme_util.Theme):
         signature = (theme.key, len(self.map_lists), bool(hasattr(self, "_map_type_editor")))
@@ -501,7 +507,32 @@ class MapUI(QtCore.QObject):
         for w in self.map_lists.values():
             w.apply_theme(theme)
         self._apply_theme_to_map_controls(theme)
+        self._refresh_palette_backed_widgets()
         self._theme_apply_signature = signature
+
+    def _refresh_palette_backed_widgets(self) -> None:
+        """Force repolish for widgets that depend on global palette(...) rules."""
+        targets: list[QtWidgets.QWidget] = [
+            getattr(self, "container", None),
+            getattr(self, "map_sidebar", None),
+            getattr(self, "map_grid_container", None),
+            getattr(self, "map_lists_wrapper", None),
+            getattr(self, "map_lists_frame", None),
+        ]
+        targets.extend(self.map_type_checks.values())
+        for widget in targets:
+            if not isinstance(widget, QtWidgets.QWidget):
+                continue
+            style = widget.style()
+            if style is None:
+                widget.update()
+                continue
+            try:
+                style.unpolish(widget)
+                style.polish(widget)
+            except Exception:
+                pass
+            widget.update()
 
     def load_state(self):
         state = self.state_store.get_mode_state("maps") or {}
