@@ -98,7 +98,9 @@ OCR_EASYOCR_LANG = "en"
 # Local model paths for EasyOCR (optional). Keep empty to use EasyOCR defaults.
 OCR_EASYOCR_MODEL_DIR = ""
 OCR_EASYOCR_USER_NETWORK_DIR = ""
-OCR_EASYOCR_GPU = False
+# "auto" picks the best available device in this order: CUDA -> MPS -> CPU.
+# You can force a specific backend with "cpu", "mps", or "cuda".
+OCR_EASYOCR_GPU = "auto"
 # Keep False for strict offline behavior (no model downloads at runtime).
 OCR_EASYOCR_DOWNLOAD_ENABLED = False
 # Keep OCR runtime fully asleep until the first OCR import click.

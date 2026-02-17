@@ -301,6 +301,18 @@ def _ocr_runtime_cfg_snapshot(mw) -> dict:
             values.append(value)
         return values
 
+    def _parse_easyocr_gpu_value(raw) -> str:
+        if isinstance(raw, str):
+            token = raw.strip().lower()
+            if token in {"", "auto", "best", "gpu", "true", "1", "yes", "on"}:
+                return "auto"
+            if token in {"cpu", "false", "0", "off", "no"}:
+                return "cpu"
+            if token in {"mps", "cuda"}:
+                return token
+            return "auto"
+        return "auto" if bool(raw) else "cpu"
+
     engine = str(mw._cfg("OCR_ENGINE", "easyocr")).strip().casefold()
     if engine in {"easy", "easy-ocr", "easy_ocr"}:
         engine = "easyocr"
@@ -341,6 +353,7 @@ def _ocr_runtime_cfg_snapshot(mw) -> dict:
         debug_include_report_text = False
         debug_log_to_file = False
         debug_line_analysis = False
+    quiet_mode = bool(mw._cfg("QUIET", False))
 
     easyocr_lang = str(mw._cfg("OCR_EASYOCR_LANG", "en")).strip() or None
     selected_lang = easyocr_lang
@@ -358,8 +371,9 @@ def _ocr_runtime_cfg_snapshot(mw) -> dict:
         "easyocr_lang": easyocr_lang,
         "easyocr_model_dir": str(mw._cfg("OCR_EASYOCR_MODEL_DIR", "")).strip() or None,
         "easyocr_user_network_dir": str(mw._cfg("OCR_EASYOCR_USER_NETWORK_DIR", "")).strip() or None,
-        "easyocr_gpu": bool(mw._cfg("OCR_EASYOCR_GPU", False)),
+        "easyocr_gpu": _parse_easyocr_gpu_value(mw._cfg("OCR_EASYOCR_GPU", "auto")),
         "easyocr_download_enabled": bool(mw._cfg("OCR_EASYOCR_DOWNLOAD_ENABLED", False)),
+        "quiet_mode": quiet_mode,
         "timeout_s": timeout_s,
         "debug_show_report": debug_show_report,
         "debug_include_report_text": debug_include_report_text,
@@ -558,8 +572,9 @@ def _run_ocr_pass(
                 stop_on_first_success=stop_after_variant_success,
                 easyocr_model_dir=cfg.get("easyocr_model_dir"),
                 easyocr_user_network_dir=cfg.get("easyocr_user_network_dir"),
-                easyocr_gpu=bool(cfg.get("easyocr_gpu", False)),
+                easyocr_gpu=cfg.get("easyocr_gpu", "auto"),
                 easyocr_download_enabled=bool(cfg.get("easyocr_download_enabled", False)),
+                easyocr_quiet=bool(cfg.get("quiet_mode", False)),
             )
         else:
             # Backward compatibility for legacy test stubs / callers.
@@ -1251,8 +1266,9 @@ def _run_row_segmentation_pass(
                     stop_on_first_success=False,
                     easyocr_model_dir=cfg.get("easyocr_model_dir"),
                     easyocr_user_network_dir=cfg.get("easyocr_user_network_dir"),
-                    easyocr_gpu=bool(cfg.get("easyocr_gpu", False)),
+                    easyocr_gpu=cfg.get("easyocr_gpu", "auto"),
                     easyocr_download_enabled=bool(cfg.get("easyocr_download_enabled", False)),
+                    easyocr_quiet=bool(cfg.get("quiet_mode", False)),
                 )
                 text = str(run_result.text or "").strip()
                 line_entries = list(getattr(run_result, "lines", ()) or [])
@@ -1862,8 +1878,9 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
                     lang=runtime_cfg.get("easyocr_lang"),
                     model_dir=runtime_cfg.get("easyocr_model_dir"),
                     user_network_dir=runtime_cfg.get("easyocr_user_network_dir"),
-                    gpu=bool(runtime_cfg.get("easyocr_gpu", False)),
+                    gpu=runtime_cfg.get("easyocr_gpu", "auto"),
                     download_enabled=bool(runtime_cfg.get("easyocr_download_enabled", False)),
+                    quiet=bool(runtime_cfg.get("quiet_mode", False)),
                 )
             )
         else:
@@ -1876,8 +1893,9 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
                         lang=runtime_cfg.get("easyocr_lang"),
                         model_dir=runtime_cfg.get("easyocr_model_dir"),
                         user_network_dir=runtime_cfg.get("easyocr_user_network_dir"),
-                        gpu=bool(runtime_cfg.get("easyocr_gpu", False)),
+                        gpu=runtime_cfg.get("easyocr_gpu", "auto"),
                         download_enabled=bool(runtime_cfg.get("easyocr_download_enabled", False)),
+                        quiet=bool(runtime_cfg.get("quiet_mode", False)),
                     )
                 )
             else:

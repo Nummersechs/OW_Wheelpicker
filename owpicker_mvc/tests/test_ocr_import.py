@@ -1,17 +1,21 @@
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
 from controller.ocr_import import (
     OCRRunResult,
+    _normalize_easyocr_gpu_mode,
+    _resolve_easyocr_device,
     clear_ocr_runtime_caches,
     extract_candidate_names,
     extract_candidate_names_debug,
     extract_candidate_names_multi,
     resolve_tesseract_cmd,
     resolve_tessdata_dir,
+    run_easyocr,
     run_ocr_multi,
 )
 
@@ -338,6 +342,87 @@ class TestOCRImport(unittest.TestCase):
         self.assertEqual(result.text, "Aero")
         easy_mock.assert_called_once()
         tess_mock.assert_not_called()
+
+    def test_gpu_mode_normalization(self):
+        self.assertEqual(_normalize_easyocr_gpu_mode(False), "cpu")
+        self.assertEqual(_normalize_easyocr_gpu_mode(True), "auto")
+        self.assertEqual(_normalize_easyocr_gpu_mode("cpu"), "cpu")
+        self.assertEqual(_normalize_easyocr_gpu_mode("mps"), "mps")
+        self.assertEqual(_normalize_easyocr_gpu_mode("cuda"), "cuda")
+        self.assertEqual(_normalize_easyocr_gpu_mode("auto"), "auto")
+        self.assertEqual(_normalize_easyocr_gpu_mode("unexpected"), "auto")
+
+    def test_resolve_easyocr_device_auto_prefers_accelerator(self):
+        with patch("controller.ocr_import._torch_device_support", return_value=(False, False)):
+            self.assertEqual(_resolve_easyocr_device("auto"), "cpu")
+        with patch("controller.ocr_import._torch_device_support", return_value=(False, True)):
+            self.assertEqual(_resolve_easyocr_device("auto"), "mps")
+        with patch("controller.ocr_import._torch_device_support", return_value=(True, True)):
+            self.assertEqual(_resolve_easyocr_device("auto"), "cuda")
+
+    def test_run_ocr_multi_passes_gpu_mode_through(self):
+        with (
+            patch("controller.ocr_import.run_easyocr", return_value=OCRRunResult("Aero")) as easy_mock,
+            patch("controller.ocr_import.run_tesseract_multi") as tess_mock,
+        ):
+            result = run_ocr_multi(Path("dummy.png"), easyocr_gpu="mps")
+        self.assertEqual(result.text, "Aero")
+        easy_mock.assert_called_once()
+        kwargs = easy_mock.call_args.kwargs
+        self.assertEqual(kwargs.get("gpu"), "mps")
+        tess_mock.assert_not_called()
+
+    def test_run_easyocr_disables_pin_memory_patch_for_non_cuda_device(self):
+        class _Reader:
+            device = "mps"
+
+            def readtext(self, *_args, **_kwargs):
+                return []
+
+        patch_calls: list[bool] = []
+
+        @contextmanager
+        def _fake_patch(enabled: bool):
+            patch_calls.append(bool(enabled))
+            yield
+
+        with tempfile.TemporaryDirectory() as tmp:
+            img = Path(tmp) / "sample.png"
+            img.write_bytes(b"stub")
+            with (
+                patch("controller.ocr_import._resolve_easyocr_reader", return_value=(_Reader(), None)),
+                patch("controller.ocr_import._patch_dataloader_pin_memory", side_effect=_fake_patch),
+            ):
+                result = run_easyocr(img)
+
+        self.assertEqual(result.text, "")
+        self.assertEqual(patch_calls, [True])
+
+    def test_run_easyocr_keeps_pin_memory_patch_off_for_cuda_device(self):
+        class _Reader:
+            device = "cuda"
+
+            def readtext(self, *_args, **_kwargs):
+                return []
+
+        patch_calls: list[bool] = []
+
+        @contextmanager
+        def _fake_patch(enabled: bool):
+            patch_calls.append(bool(enabled))
+            yield
+
+        with tempfile.TemporaryDirectory() as tmp:
+            img = Path(tmp) / "sample.png"
+            img.write_bytes(b"stub")
+            with (
+                patch("controller.ocr_import._resolve_easyocr_reader", return_value=(_Reader(), None)),
+                patch("controller.ocr_import._patch_dataloader_pin_memory", side_effect=_fake_patch),
+            ):
+                result = run_easyocr(img)
+
+        self.assertEqual(result.text, "")
+        self.assertEqual(patch_calls, [False])
 
 
 if __name__ == "__main__":

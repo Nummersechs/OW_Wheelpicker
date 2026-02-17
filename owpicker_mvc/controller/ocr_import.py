@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -10,6 +11,7 @@ import re
 import shutil
 import subprocess
 import sys
+import warnings
 from typing import Any, Iterable
 from logic.name_normalization import normalize_name_alnum_key, normalize_name_tokens
 
@@ -34,6 +36,7 @@ _EASYOCR_LANG_ALIAS: dict[str, str] = {
     "ger": "de",
     "de": "de",
 }
+_TORCH_WARN_FILTERS_APPLIED = False
 
 
 def _normalize_ocr_engine_name(value: str | None) -> str:
@@ -81,6 +84,106 @@ def _parse_easyocr_langs(lang: str | None) -> tuple[str, ...]:
     if not normalized:
         return ("en",)
     return tuple(normalized)
+
+
+def _normalize_easyocr_gpu_mode(value: bool | str | None) -> str:
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in {"", "auto", "best", "gpu", "true", "1", "yes", "on"}:
+            return "auto"
+        if token in {"cpu", "false", "0", "no", "off"}:
+            return "cpu"
+        if token in {"cuda", "mps"}:
+            return token
+        return "auto"
+    return "auto" if bool(value) else "cpu"
+
+
+@lru_cache(maxsize=1)
+def _torch_device_support() -> tuple[bool, bool]:
+    try:
+        import torch  # type: ignore
+    except Exception:
+        return (False, False)
+    has_cuda = False
+    has_mps = False
+    try:
+        has_cuda = bool(torch.cuda.is_available())
+    except Exception:
+        has_cuda = False
+    try:
+        has_mps = bool(torch.backends.mps.is_available())
+    except Exception:
+        has_mps = False
+    return (has_cuda, has_mps)
+
+
+def _resolve_easyocr_device(mode: str) -> str:
+    normalized = _normalize_easyocr_gpu_mode(mode)
+    has_cuda, has_mps = _torch_device_support()
+    if normalized == "cpu":
+        return "cpu"
+    if normalized == "cuda":
+        return "cuda" if has_cuda else "cpu"
+    if normalized == "mps":
+        return "mps" if has_mps else "cpu"
+    if has_cuda:
+        return "cuda"
+    if has_mps:
+        return "mps"
+    return "cpu"
+
+
+def _apply_torch_warning_filters(quiet: bool) -> None:
+    global _TORCH_WARN_FILTERS_APPLIED
+    if not bool(quiet):
+        return
+    if _TORCH_WARN_FILTERS_APPLIED:
+        return
+    warnings.filterwarnings(
+        "ignore",
+        message=r".*'pin_memory' argument is set as true but not supported on MPS now.*",
+        category=UserWarning,
+    )
+    _TORCH_WARN_FILTERS_APPLIED = True
+
+
+@contextmanager
+def _patch_dataloader_pin_memory(enable: bool):
+    """
+    EasyOCR hard-codes pin_memory=True in its DataLoader construction.
+    On non-CUDA backends (CPU/MPS) this is unnecessary and may emit warnings.
+    Patch only for the OCR call scope and restore afterwards.
+    """
+    if not bool(enable):
+        yield
+        return
+    try:
+        import torch  # type: ignore
+    except Exception:
+        yield
+        return
+    data_ns = getattr(getattr(torch, "utils", None), "data", None)
+    original_loader = getattr(data_ns, "DataLoader", None) if data_ns is not None else None
+    if original_loader is None:
+        yield
+        return
+
+    def _patched_loader(*args, **kwargs):
+        if kwargs.get("pin_memory") is True:
+            kwargs = dict(kwargs)
+            kwargs["pin_memory"] = False
+        return original_loader(*args, **kwargs)
+
+    setattr(data_ns, "DataLoader", _patched_loader)
+    try:
+        yield
+    finally:
+        try:
+            if getattr(data_ns, "DataLoader", None) is _patched_loader:
+                setattr(data_ns, "DataLoader", original_loader)
+        except Exception:
+            pass
 
 
 def _resolve_optional_directory(value: str | None) -> str | None:
@@ -385,9 +488,11 @@ def _cached_easyocr_reader(
     langs_key: str,
     model_dir: str,
     user_network_dir: str,
-    gpu: bool,
+    gpu_device: str,
     download_enabled: bool,
+    quiet: bool,
 ):
+    _apply_torch_warning_filters(bool(quiet))
     easyocr, import_error = _import_easyocr_module()
     if easyocr is None:
         raise RuntimeError(import_error or "easyocr-import-error")
@@ -396,8 +501,9 @@ def _cached_easyocr_reader(
         lang_list = ["en"]
     reader_kwargs: dict[str, Any] = {
         "lang_list": lang_list,
-        "gpu": bool(gpu),
+        "gpu": False if str(gpu_device).strip().lower() == "cpu" else str(gpu_device).strip().lower(),
         "download_enabled": bool(download_enabled),
+        "verbose": not bool(quiet),
     }
     if model_dir:
         reader_kwargs["model_storage_directory"] = str(model_dir)
@@ -411,8 +517,9 @@ def _resolve_easyocr_reader(
     lang: str | None,
     model_dir: str | None,
     user_network_dir: str | None,
-    gpu: bool,
+    gpu: bool | str,
     download_enabled: bool,
+    quiet: bool = False,
 ) -> tuple[Any | None, str | None]:
     langs = _parse_easyocr_langs(lang)
     langs_key = "|".join(langs)
@@ -426,13 +533,15 @@ def _resolve_easyocr_reader(
     resolved_user_network_dir = _resolve_optional_directory(user_network_dir)
     model_key = str(resolved_model_dir or "")
     user_network_key = str(resolved_user_network_dir or "")
+    gpu_device = _resolve_easyocr_device(_normalize_easyocr_gpu_mode(gpu))
     try:
         reader = _cached_easyocr_reader(
             langs_key,
             model_key,
             user_network_key,
-            bool(gpu),
+            gpu_device,
             bool(download_enabled),
+            bool(quiet),
         )
     except Exception as exc:
         return None, f"easyocr-init-error:{exc}"
@@ -444,8 +553,9 @@ def easyocr_resolution_diagnostics(
     lang: str | None = None,
     model_dir: str | None = None,
     user_network_dir: str | None = None,
-    gpu: bool = False,
+    gpu: bool | str = "auto",
     download_enabled: bool = False,
+    quiet: bool = False,
 ) -> str:
     requested_lang = str(lang or "").strip() or "-"
     parsed_langs = _parse_easyocr_langs(lang)
@@ -457,6 +567,8 @@ def easyocr_resolution_diagnostics(
     auto_model_dir = _discover_easyocr_model_dir() if not resolved_model_dir else None
     effective_model_dir = resolved_model_dir or auto_model_dir
     resolved_user_network_dir = _resolve_optional_directory(user_network_dir)
+    gpu_mode = _normalize_easyocr_gpu_mode(gpu)
+    gpu_device = _resolve_easyocr_device(gpu_mode)
     easyocr_mod, import_error = _import_easyocr_module()
     lines = [
         f"engine=easyocr",
@@ -464,12 +576,19 @@ def easyocr_resolution_diagnostics(
         f"normalized_langs={'+'.join(parsed_langs)}",
         f"model_dir={effective_model_dir or '-'}",
         f"user_network_dir={resolved_user_network_dir or '-'}",
-        f"gpu={bool(gpu)}",
+        f"gpu_requested={gpu}",
+        f"gpu_mode={gpu_mode}",
+        f"gpu_device={gpu_device}",
+        f"quiet={bool(quiet)}",
         f"download_enabled={bool(download_enabled)}",
         f"import={'ok' if easyocr_mod is not None else 'failed'}",
     ]
     if import_error:
         lines.append(f"import_error={import_error}")
+        err_l = str(import_error).lower()
+        if "no module named" in err_l and "easyocr" in err_l:
+            lines.append("hint=install local OCR dependencies")
+            lines.append("hint_cmd=pip install -r requirements-ocr-local.txt")
     if auto_model_dir and not resolved_model_dir:
         lines.append("model_dir_source=auto-discovered")
     reader, reader_error = _resolve_easyocr_reader(
@@ -478,10 +597,24 @@ def easyocr_resolution_diagnostics(
         user_network_dir=user_network_dir,
         gpu=gpu,
         download_enabled=download_enabled,
+        quiet=quiet,
     )
     lines.append(f"reader={'ready' if reader is not None else 'failed'}")
     if reader_error:
         lines.append(f"reader_error={reader_error}")
+        reader_err_l = str(reader_error).lower()
+        if "certificate verify failed" in reader_err_l:
+            lines.append("hint=python SSL trust store failed for HTTPS model download")
+            lines.append("hint_action=run Install Certificates.command or set SSL_CERT_FILE to certifi bundle")
+        if "nodename nor servname provided" in reader_err_l or "temporary failure in name resolution" in reader_err_l:
+            lines.append("hint=network or DNS unavailable for model download")
+            lines.append("hint_action=check internet/proxy or place model files manually in ~/.EasyOCR/model")
+        if (
+            bool(download_enabled) is False
+            and (effective_model_dir is None or str(effective_model_dir).strip() == "")
+        ):
+            lines.append("hint=offline mode active and no model directory resolved")
+            lines.append("hint_action=set OCR_EASYOCR_MODEL_DIR or enable OCR_EASYOCR_DOWNLOAD_ENABLED")
     return "\n".join(lines)
 
 
@@ -490,8 +623,9 @@ def easyocr_available(
     lang: str | None = None,
     model_dir: str | None = None,
     user_network_dir: str | None = None,
-    gpu: bool = False,
+    gpu: bool | str = "auto",
     download_enabled: bool = False,
+    quiet: bool = False,
 ) -> bool:
     reader, _ = _resolve_easyocr_reader(
         lang=lang,
@@ -499,6 +633,7 @@ def easyocr_available(
         user_network_dir=user_network_dir,
         gpu=gpu,
         download_enabled=download_enabled,
+        quiet=quiet,
     )
     return reader is not None
 
@@ -857,8 +992,9 @@ def run_easyocr(
     lang: str | None = None,
     model_dir: str | None = None,
     user_network_dir: str | None = None,
-    gpu: bool = False,
+    gpu: bool | str = "auto",
     download_enabled: bool = False,
+    quiet: bool = False,
 ) -> OCRRunResult:
     if not image_path.exists():
         return OCRRunResult("", error=f"image-not-found:{image_path}")
@@ -868,11 +1004,16 @@ def run_easyocr(
         user_network_dir=user_network_dir,
         gpu=gpu,
         download_enabled=download_enabled,
+        quiet=quiet,
     )
     if reader is None:
         return OCRRunResult("", error=reader_error or "easyocr-reader-not-ready")
     try:
-        detections = reader.readtext(str(image_path), detail=1, paragraph=False)
+        _apply_torch_warning_filters(bool(quiet))
+        device = str(getattr(reader, "device", "") or "").strip().lower()
+        disable_pin_memory = device != "cuda"
+        with _patch_dataloader_pin_memory(disable_pin_memory):
+            detections = reader.readtext(str(image_path), detail=1, paragraph=False)
     except Exception as exc:
         return OCRRunResult("", error=f"easyocr-run-error:{exc}")
     if not detections:
@@ -970,8 +1111,9 @@ def run_ocr_multi(
     stop_on_first_success: bool = False,
     easyocr_model_dir: str | None = None,
     easyocr_user_network_dir: str | None = None,
-    easyocr_gpu: bool = False,
+    easyocr_gpu: bool | str = "auto",
     easyocr_download_enabled: bool = False,
+    easyocr_quiet: bool = False,
 ) -> OCRRunResult:
     _ = (
         engine,
@@ -987,6 +1129,7 @@ def run_ocr_multi(
         user_network_dir=easyocr_user_network_dir,
         gpu=easyocr_gpu,
         download_enabled=easyocr_download_enabled,
+        quiet=easyocr_quiet,
     )
 
 
