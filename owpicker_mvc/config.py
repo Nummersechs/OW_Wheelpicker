@@ -3,13 +3,25 @@ Zentrale Konfiguration für das Overwatch-Tool.
 Hier kannst du das Verhalten und die Startdaten des Programms anpassen.
 """
 
-# ---------- Logging/Debug ----------
+# ---------- Runtime / Logging ----------
 DEBUG = False
 # Master-Schalter für Release/EXE:
 # - unterdrückt Konsole/Qt-Logs (siehe main.py)
 # - deaktiviert zusätzlich alle internen Debug-/Trace-Logs
 # - Save-State bleibt davon unberührt
 QUIET = False
+
+
+def _disable_flags_if_quiet(*flag_names: str) -> None:
+    """Setzt angegebene bool-Flags auf False, wenn QUIET aktiv ist."""
+    if not QUIET:
+        return
+    g = globals()
+    for name in flag_names:
+        g[name] = False
+
+
+# Trace / Focus
 TRACE_FLOW = False
 TRACE_SHUTDOWN = False
 TRACE_FOCUS = False
@@ -24,19 +36,21 @@ FOCUS_TRACE_SNAPSHOT_INTERVAL_MS = 200
 FOCUS_TRACE_SNAPSHOT_COUNT = 20
 HOVER_TRACE_MAX_EVENTS = 200
 HOVER_TRACE_BUDGET_PER_VIEW = 20
-HOVER_POKE_ON_REARM = True
+HOVER_POKE_ON_REARM = False
 # Nur aktivieren, wenn Hover auf einem Zielsystem sonst nicht zuverlässig ist.
 # Globales MouseMove-Forwarding erhöht Event-Last deutlich.
 HOVER_FORWARD_MOUSEMOVE = False
 HOVER_FORWARD_INTERVAL_MS = 50
+
+# Startup interaction / input-guard
 STARTUP_DROP_CHOICE_POINTER_EVENTS = True
 MODE_CHOICE_INPUT_GUARD_MS = 260
 STARTUP_FINALIZE_DELAY_MS = 60
-STARTUP_WARMUP_COOLDOWN_MS = 500
-STARTUP_INPUT_DRAIN_MS = 180
+STARTUP_WARMUP_COOLDOWN_MS = 0
+STARTUP_INPUT_DRAIN_MS = 0
 # Minimum startup lock duration for global input filtering.
 # Set to 0 to disable this additional lock window.
-STARTUP_MIN_BLOCK_INPUT_MS = 2000
+STARTUP_MIN_BLOCK_INPUT_MS = 0
 # While startup input lock is active, immediately clear focus/activation
 # events so the window cannot be interacted with accidentally.
 STARTUP_CLEAR_FOCUS_WHILE_BLOCKED = True
@@ -45,26 +59,30 @@ STARTUP_CLEAR_FOCUS_WHILE_BLOCKED = True
 STARTUP_VISUAL_FINALIZE_DEFERRED = True
 STARTUP_VISUAL_FINALIZE_DELAY_MS = 280
 STARTUP_VISUAL_FINALIZE_BUSY_RETRY_MS = 250
+# Delay used when deferred post-choice initialization must be retried because
+# the wheel is currently spinning.
+POST_CHOICE_INIT_BUSY_RETRY_MS = 220
 # Für schnelleren Start standardmäßig Platform-Style nutzen.
 FORCE_FUSION_STYLE = False
 HOVER_PUMP_ON_START = False
 # 0 = kein Timeout (läuft bis echte Hover-Events erkannt werden)
 HOVER_PUMP_DURATION_MS = 0
 HOVER_PUMP_INTERVAL_MS = 90
-HOVER_WATCHDOG_ON = True
+HOVER_WATCHDOG_ON = False
 HOVER_WATCHDOG_INTERVAL_MS = 350
 HOVER_WATCHDOG_STALE_MS = 900
 HOVER_WATCHDOG_COOLDOWN_MS = 700
 HOVER_WATCHDOG_REQUIRE_MOVE_MS = 0
 
 # QUIET erzwingt "silent runtime" für alle Debug-/Trace-Kanäle.
-if QUIET:
-    DEBUG = False
-    TRACE_FLOW = False
-    TRACE_SHUTDOWN = False
-    TRACE_FOCUS = False
-    TRACE_HOVER = False
-    TRACE_CLEAR_ON_START = False
+_disable_flags_if_quiet(
+    "DEBUG",
+    "TRACE_FLOW",
+    "TRACE_SHUTDOWN",
+    "TRACE_FOCUS",
+    "TRACE_HOVER",
+    "TRACE_CLEAR_ON_START",
+)
 
 # ---------- Performance / Resource policy ----------
 MAP_PREBUILD_ON_START = False
@@ -85,15 +103,12 @@ WHEEL_CACHE_WARMUP_RETRY_MS = 180
 # Suspend optional background UI services while spinning to keep animation smooth.
 PAUSE_BACKGROUND_UI_SERVICES_DURING_SPIN = True
 
-# ---------- OCR Import (prototype) ----------
+# ---------- OCR Import ----------
 # OCR engine (local/offline):
 # - "easyocr" is the active/default backend.
 OCR_ENGINE = "easyocr"
-# OCR language packs are the biggest speed factor.
-# Keep this minimal for fast OCR; add more languages only when needed.
-# English-first default for in-game player names.
-OCR_TESSERACT_LANG = "eng"
 # EasyOCR language list (comma/plus separated), e.g. "en" or "en,de".
+# Keep this minimal for fast OCR; add more languages only when needed.
 OCR_EASYOCR_LANG = "en"
 # Local model paths for EasyOCR (optional). Keep empty to use EasyOCR defaults.
 OCR_EASYOCR_MODEL_DIR = ""
@@ -113,6 +128,8 @@ OCR_IDLE_CACHE_RELEASE_BUSY_RETRY_MS = 2500
 # Keep cache release on spin disabled by default to avoid UI-thread spikes at
 # spin start when OCR runtimes were initialized before.
 OCR_RELEASE_CACHE_ON_SPIN = False
+# The following names keep legacy compatibility with existing code paths/tests
+# even though the runtime backend is EasyOCR.
 OCR_TESSERACT_PSM = 11
 OCR_TESSERACT_FALLBACK_PSM = 6
 OCR_TESSERACT_RETRY_EXTRA_PSMS = [7, 13]
@@ -178,11 +195,12 @@ OCR_DEBUG_LOG_MAX_CHARS = 200000
 OCR_DEBUG_LINE_ANALYSIS = False
 OCR_DEBUG_LINE_MAX_ENTRIES_PER_RUN = 60
 # QUIET erzwingt zusätzlich: keine OCR-Debug-Reports/Dateilogs.
-if QUIET:
-    OCR_DEBUG_SHOW_REPORT = False
-    OCR_DEBUG_INCLUDE_REPORT_TEXT = False
-    OCR_DEBUG_LOG_TO_FILE = False
-    OCR_DEBUG_LINE_ANALYSIS = False
+_disable_flags_if_quiet(
+    "OCR_DEBUG_SHOW_REPORT",
+    "OCR_DEBUG_INCLUDE_REPORT_TEXT",
+    "OCR_DEBUG_LOG_TO_FILE",
+    "OCR_DEBUG_LINE_ANALYSIS",
+)
 # Optional manual vocabulary that improves OCR correction for known player names.
 # Keep disabled by default to avoid bias from hardcoded names.
 OCR_USE_NAME_HINTS = False
@@ -235,8 +253,6 @@ WHEEL_RADIUS = 136
 MIN_DURATION_MS = 0
 MAX_DURATION_MS = 10000
 DEFAULT_DURATION_MS = 3000
-# Upper repaint rate for explicit spin repaint requests (<=0 disables throttling).
-SPIN_REPAINT_MAX_FPS = 45
 # Spin fallback watchdogs for overloaded systems.
 SPIN_WATCHDOG_ENABLED = False
 SPIN_WATCHDOG_SCALE = 1.8
@@ -264,7 +280,7 @@ DEFAULT_NAMES = {
     "Support": ["blue", "Nummersechs", "Tillinski", "Internetwaffel"],
 }
 
-# Helden-Defaults nach Rolle (2026 Season 1)
+# Helden-Defaults nach Rolle
 DEFAULT_HEROES = {
     "Tank": [
         "D.Va", "Domina", "Doomfist", "Hazard", "Junker Queen", "Mauga",
@@ -300,12 +316,43 @@ MAP_CATEGORIES = [
 
 # Basis-Map-Pools pro Kategorie
 DEFAULT_MAPS = {
-    "Control": ["Antarctic Peninsula", "Busan", "Ilios", "Lijiang Tower", "Nepal", "Oasis", "Samoa"],
-    "Escort": ["Circuit Royal", "Dorado", "Havana", "Junkertown", "Rialto", "Route 66", "Shambali Monastery", "Watchpoint: Gibraltar"],
-    "Hybrid": ["Blizzard World", "Eichenwalde", "Hollywood", "King's Row", "Midtown", "Numbani", "Paraíso"],
+    "Control": [
+        "Antarctic Peninsula",
+        "Busan",
+        "Ilios",
+        "Lijiang Tower",
+        "Nepal",
+        "Oasis",
+        "Samoa",
+    ],
+    "Escort": [
+        "Circuit Royal",
+        "Dorado",
+        "Havana",
+        "Junkertown",
+        "Rialto",
+        "Route 66",
+        "Shambali Monastery",
+        "Watchpoint: Gibraltar",
+    ],
+    "Hybrid": [
+        "Blizzard World",
+        "Eichenwalde",
+        "Hollywood",
+        "King's Row",
+        "Midtown",
+        "Numbani",
+        "Paraíso",
+    ],
     "Push": ["Colosseo", "Esperança", "New Queen Street", "Runasapi"],
     "Flashpoint": ["Aatlis", "New Junk City", "Suravasa"],
-    "Assault": ["Hanamura", "Horizon Lunar Colony", "Paris", "Temple of Anubis", "Volskaya Industries"],
+    "Assault": [
+        "Hanamura",
+        "Horizon Lunar Colony",
+        "Paris",
+        "Temple of Anubis",
+        "Volskaya Industries",
+    ],
     "Clash": ["Hanaoka", "Throne of Anubis"],
 }
 # Welche Map-Kategorien beim Start aktiviert sein sollen.
@@ -321,5 +368,4 @@ MAP_INCLUDE_DEFAULTS = [
 ]
 
 # ---------- Server ----------
-#API_BASE_URL = "https://wddys-macbook-air.tail455d76.ts.net/" 
 API_BASE_URL = "http://localhost:5326"

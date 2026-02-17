@@ -1086,10 +1086,26 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             tasks.append(("tooltip_cache", self._startup_task_tooltips))
         if self._cfg("MAP_PREBUILD_ON_START", False):
             tasks.append(("map_prebuild", self._startup_task_map_prebuild))
+        min_block_ms = max(0, int(self._cfg("STARTUP_MIN_BLOCK_INPUT_MS", 0)))
+        # Fast-path for normal startup: no warmup tasks and no explicit lock.
+        if not tasks and min_block_ms <= 0:
+            self._startup_task_queue = []
+            self._startup_warmup_running = False
+            self._startup_warmup_done = True
+            self._startup_block_input = False
+            self._startup_block_input_until = None
+            self._startup_drain_active = False
+            self._trace_event("startup_warmup:skipped")
+            self._refresh_app_event_filter_state()
+            try:
+                if hasattr(self, "overlay"):
+                    self.overlay.set_choice_enabled(True)
+            except Exception:
+                pass
+            return
         self._startup_task_queue = tasks
         self._startup_warmup_running = True
         self._startup_block_input = True
-        min_block_ms = max(0, int(self._cfg("STARTUP_MIN_BLOCK_INPUT_MS", 0)))
         if min_block_ms > 0:
             self._startup_block_input_until = time.monotonic() + (min_block_ms / 1000.0)
         else:
@@ -2135,9 +2151,15 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
     def _prepare_spin_request(self, source: str) -> bool:
         self._recover_stale_pending_if_idle(source=source)
         if not bool(getattr(self, "_post_choice_init_done", True)):
-            self._ensure_post_choice_ready()
-            if not bool(getattr(self, "_post_choice_init_done", False)):
-                self._trace_event(f"{source}_preinit_fallback")
+            # Keep the spin click-path minimal. Deferred startup/UI tasks are
+            # scheduled asynchronously and never forced inline here.
+            self._trace_event(f"{source}_preinit_fallback")
+            schedule = getattr(self, "_schedule_post_choice_init", None)
+            if callable(schedule):
+                try:
+                    schedule(0)
+                except Exception:
+                    pass
         if bool(getattr(self, "_restoring_state", False)):
             self._trace_event(f"{source}_ignored", reason="state_restore_active")
             return False
@@ -2680,6 +2702,19 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
         if getattr(self, "_post_choice_init_done", False):
             return
         if self._overlay_choice_active():
+            return
+        if (
+            int(getattr(self, "pending", 0) or 0) > 0
+            or bool(getattr(self, "_background_services_paused", False))
+            or self._has_active_spin_animations(include_internal_flags=True)
+        ):
+            retry_ms = max(20, int(self._cfg("POST_CHOICE_INIT_BUSY_RETRY_MS", 220)))
+            self._trace_event(
+                "run_post_choice_init:defer_busy",
+                pending=int(getattr(self, "pending", 0) or 0),
+                retry_ms=retry_ms,
+            )
+            self._schedule_post_choice_init(retry_ms)
             return
         self._trace_event("run_post_choice_init:start")
         self._set_tooltips_ready(True)
