@@ -59,6 +59,9 @@ STARTUP_CLEAR_FOCUS_WHILE_BLOCKED = True
 STARTUP_VISUAL_FINALIZE_DEFERRED = True
 STARTUP_VISUAL_FINALIZE_DELAY_MS = 280
 STARTUP_VISUAL_FINALIZE_BUSY_RETRY_MS = 250
+# Kurze Abschluss-Einblendung beim Beenden anzeigen.
+SHUTDOWN_OVERLAY_ENABLED = True
+SHUTDOWN_OVERLAY_DELAY_MS = 320
 # Delay used when deferred post-choice initialization must be retried because
 # the wheel is currently spinning.
 POST_CHOICE_INIT_BUSY_RETRY_MS = 220

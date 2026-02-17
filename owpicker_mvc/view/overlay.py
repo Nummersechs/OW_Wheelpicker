@@ -272,6 +272,23 @@ class ResultOverlay(QtWidgets.QWidget):
         }
         self._show()
 
+    def show_status_message(self, title, lines):
+        """Show a modal status card without action buttons (e.g. shutdown notice)."""
+        self._apply_button_labels()
+        self.title.setText(escape(title))
+        self._set_info_labels_visible(tank=True, dps=True, sup=True)
+        texts = list(lines) + ["", "", ""]
+        self.lab_tank.setText(escape(texts[0]))
+        self.lab_dps.setText(escape(texts[1]))
+        self.lab_sup.setText(escape(texts[2]))
+        self.ocr_names_panel.setVisible(False)
+        self._set_action_buttons_visible()
+        self._last_view = {
+            "type": "status_message",
+            "data": (title, list(lines)),
+        }
+        self._show()
+
     def show_online_choice(self):
         """Overlay zur Wahl von Online/Offline anzeigen."""
         self._apply_button_labels()
@@ -462,6 +479,9 @@ class ResultOverlay(QtWidgets.QWidget):
                 lines,
                 show_disable_button=bool(self._last_view.get("show_disable_button", False)),
             )
+        elif kind == "status_message" and len(data) == 2:
+            title, lines = data
+            self.show_status_message(title, lines)
         elif kind == "online_choice":
             self.show_online_choice()
             if prev_choice_enabled:
