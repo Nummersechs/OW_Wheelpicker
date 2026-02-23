@@ -110,6 +110,18 @@ class DummyOpenQueue:
             ("Support", self._mw.support, 1),
         ]
 
+    def names(self):
+        names: list[str] = []
+        seen: set[str] = set()
+        for wheel in (self._mw.tank, self._mw.dps, self._mw.support):
+            for entry in wheel._active_entries():
+                name = entry.get("name", "").strip()
+                if not name or name in seen:
+                    continue
+                seen.add(name)
+                names.append(name)
+        return names
+
     def begin_spin_override(self, entries_by_wheel, *, mode_overrides=None):
         self.entries_by_wheel = dict(entries_by_wheel)
         self.mode_overrides = dict(mode_overrides or {})
@@ -314,6 +326,30 @@ class TestSpinServiceHelpers(unittest.TestCase):
         self.assertEqual(mw.spin_watchdog_armed, [2700])
         self.assertFalse(mw.controls_enabled)
         self.assertEqual(mw.cancel_updates, 1)
+
+    def test_spin_open_queue_uses_open_queue_name_pool(self):
+        mw = DummyMWOpenQueue()
+        mw.tank._entries = [{"name": "TankOnly", "active": True, "subroles": []}]
+        mw.dps._entries = [{"name": "DpsOnly", "active": True, "subroles": []}]
+        mw.support._entries = [{"name": "SupportOnly", "active": True, "subroles": []}]
+
+        class DummyOpenQueueTwoSlots(DummyOpenQueue):
+            def slot_plan(self):
+                return [
+                    ("Tank", self._mw.tank, 1),
+                    ("Damage", self._mw.dps, 1),
+                    ("Support", self._mw.support, 0),
+                ]
+
+        mw.open_queue = DummyOpenQueueTwoSlots(mw)
+
+        with patch("controller.spin_service.random.shuffle", side_effect=lambda vals: None):
+            spin_service.spin_open_queue(mw)
+
+        tank_names = [entry["name"] for entry in mw.open_queue.entries_by_wheel[mw.tank]]
+        dps_names = [entry["name"] for entry in mw.open_queue.entries_by_wheel[mw.dps]]
+        self.assertIn("SupportOnly", tank_names)
+        self.assertIn("SupportOnly", dps_names)
 
     def test_spin_all_spins_available_roles_when_one_role_has_no_candidates(self):
         mw = DummyMWRoleSpin()

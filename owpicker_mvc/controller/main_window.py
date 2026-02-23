@@ -1366,6 +1366,8 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             w.stateChanged.connect(self._update_spin_all_enabled)
             w.stateChanged.connect(self._on_wheel_state_changed)
             w.btn_include_in_all.toggled.connect(self._on_role_include_toggled)
+            if getattr(w, "toggle", None) is not None:
+                w.toggle.stateChanged.connect(self._update_spin_all_enabled)
         if hasattr(self, "map_lists"):
             for w in self.map_lists.values():
                 w.stateChanged.connect(self.state_sync.save_state)
@@ -1631,13 +1633,23 @@ class MainWindow(MainWindowOCRMixin, MainWindowInputMixin, QtWidgets.QMainWindow
             has_candidates = bool(self.map_ui.combined_names() if hasattr(self, "map_ui") else [])
             self.btn_spin_all.setEnabled(any_selected and has_candidates and self.pending == 0)
         elif self.open_queue.is_mode_active():
-            self.open_queue.apply_slider_combination()
+            sender = self.sender()
+            slider_sender = getattr(self, "open_count_slider", None)
+            toggle_sender = getattr(self, "spin_mode_toggle", None)
+            if self.open_queue.is_applying_combination():
+                pass
+            elif sender is None or sender is slider_sender or sender is toggle_sender:
+                self.open_queue.apply_slider_combination()
+            else:
+                self.open_queue.sync_player_count_from_wheels()
             slot_plan = self.open_queue.slot_plan()
             slots = sum(slots for _role, _wheel, slots in slot_plan)
             open_names = self.open_queue.names()
             has_candidates = bool(slot_plan) and slots > 0 and len(open_names) >= slots
             self.btn_spin_all.setEnabled(has_candidates and self.pending == 0)
         else:
+            if self.open_queue.spin_mode_allowed():
+                self.open_queue.sync_player_count_from_wheels()
             # Nur aktiv, wenn allgemein erlaubt UND mindestens ein Rad ausgewählt
             self.btn_spin_all.setEnabled(self.role_mode.can_spin_all())
         self._update_spin_mode_ui()

@@ -33,10 +33,17 @@ class OpenQueueController:
     def selected_wheels(self) -> list[WheelView]:
         return [wheel for _role, wheel in role_wheels(self._mw) if wheel.is_selected_for_global_spin()]
 
-    def names(self) -> list[str]:
+    def all_wheels(self) -> list[WheelView]:
+        return [wheel for _role, wheel in role_wheels(self._mw)]
+
+    def is_applying_combination(self) -> bool:
+        return bool(self._applying_open_combination)
+
+    def names(self, *, include_selected_only: bool = False) -> list[str]:
         names: list[str] = []
         seen: set[str] = set()
-        for wheel in self.selected_wheels():
+        wheels = self.selected_wheels() if include_selected_only else self.all_wheels()
+        for wheel in wheels:
             disabled_labels = set(getattr(wheel, "_disabled_labels", set()) or set())
             for entry in wheel._active_entries():
                 name = entry.get("name", "").strip()
@@ -49,6 +56,34 @@ class OpenQueueController:
 
     def slots(self) -> int:
         return sum(slots for _role, _wheel, slots in self.slot_plan())
+
+    def _slots_from_wheel_state(self) -> dict[str, int]:
+        slots_by_role: dict[str, int] = {}
+        for role, wheel in self._all_role_wheels():
+            include = bool(wheel.is_selected_for_global_spin())
+            pair_mode = bool(getattr(wheel, "pair_mode", False))
+            toggle = getattr(wheel, "toggle", None)
+            if toggle is not None:
+                pair_mode = bool(toggle.isChecked())
+            slots_by_role[role] = 2 if include and pair_mode else (1 if include else 0)
+        return slots_by_role
+
+    def infer_player_count_from_wheels(self) -> int:
+        current = self._slots_from_wheel_state()
+        max_allowed = max(self.OPEN_MIN_PLAYERS, int(self.max_slots_capacity()))
+        for requested in range(self.OPEN_MIN_PLAYERS, max_allowed + 1):
+            plan = self.slot_plan(requested=requested)
+            plan_slots = {role: int(slots) for role, _wheel, slots in plan}
+            if all(int(plan_slots.get(role, 0)) == int(current.get(role, 0)) for role in current):
+                return requested
+        total_slots = sum(int(v) for v in current.values())
+        if total_slots <= 0:
+            return self.OPEN_MIN_PLAYERS
+        return max(self.OPEN_MIN_PLAYERS, min(max_allowed, int(total_slots)))
+
+    def sync_player_count_from_wheels(self) -> bool:
+        inferred = self.infer_player_count_from_wheels()
+        return self.set_player_count(inferred, max_allowed=self.max_slots_capacity())
 
     def max_slots_capacity(self) -> int:
         return max(0, min(self.OPEN_MAX_PLAYERS, 2 * len(self._all_role_wheels())))
@@ -151,7 +186,7 @@ class OpenQueueController:
         if self._spin_active:
             return
         names = combined_names if combined_names is not None else self.names()
-        for wheel in (self._mw.tank, self._mw.dps, self._mw.support):
+        for _role, wheel in self._all_role_wheels():
             entry = self._preview_restore.get(wheel)
             if entry is None:
                 entry = {

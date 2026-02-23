@@ -605,6 +605,103 @@ class TestMainWindowInputFilter(unittest.TestCase):
         self.assertEqual(traces[0][0], "mode_button_clicked")
         self.assertEqual(traces[1][0], "mode_switch_ignored")
 
+    def test_update_spin_all_enabled_syncs_open_slider_count_in_role_mode(self):
+        class _SetEnabledButton:
+            def __init__(self):
+                self.enabled = None
+
+            def setEnabled(self, enabled: bool):
+                self.enabled = bool(enabled)
+
+        class _OpenQueue:
+            def __init__(self):
+                self.sync_calls = 0
+                self.preview_calls = 0
+
+            def is_mode_active(self):
+                return False
+
+            def spin_mode_allowed(self):
+                return True
+
+            def sync_player_count_from_wheels(self):
+                self.sync_calls += 1
+
+            def apply_preview(self, _names):
+                self.preview_calls += 1
+
+        class _RoleMode:
+            def can_spin_all(self):
+                return True
+
+        mw = MainWindow.__new__(MainWindow)
+        mw.hero_ban_active = False
+        mw.current_mode = "players"
+        mw.pending = 0
+        mw.open_queue = _OpenQueue()
+        mw.role_mode = _RoleMode()
+        mw.btn_spin_all = _SetEnabledButton()
+        mw._update_spin_mode_ui = lambda: None
+        mw._update_cancel_enabled = lambda: None
+        mw._update_role_ocr_buttons_enabled = lambda: None
+
+        mw._update_spin_all_enabled()
+
+        self.assertEqual(mw.open_queue.sync_calls, 1)
+        self.assertEqual(mw.open_queue.preview_calls, 1)
+        self.assertTrue(mw.btn_spin_all.enabled)
+
+    def test_update_spin_all_enabled_in_open_mode_applies_preview(self):
+        class _SetEnabledButton:
+            def __init__(self):
+                self.enabled = None
+
+            def setEnabled(self, enabled: bool):
+                self.enabled = bool(enabled)
+
+        class _OpenQueue:
+            def __init__(self):
+                self.preview_calls = 0
+                self.clear_calls = 0
+
+            def is_mode_active(self):
+                return True
+
+            def is_applying_combination(self):
+                return False
+
+            def apply_slider_combination(self):
+                return None
+
+            def slot_plan(self):
+                return [("Tank", object(), 1)]
+
+            def names(self):
+                return ["A"]
+
+            def clear_preview(self, *, force: bool = False):
+                self.clear_calls += 1
+
+            def apply_preview(self, _names):
+                self.preview_calls += 1
+
+        mw = MainWindow.__new__(MainWindow)
+        mw.hero_ban_active = False
+        mw.current_mode = "players"
+        mw.pending = 0
+        mw.open_queue = _OpenQueue()
+        mw.btn_spin_all = _SetEnabledButton()
+        mw.sender = lambda: None
+        mw._update_spin_mode_ui = lambda: None
+        mw._update_cancel_enabled = lambda: None
+        mw._update_role_ocr_buttons_enabled = lambda: None
+
+        mw._update_spin_all_enabled()
+
+        self.assertEqual(mw.open_queue.clear_calls, 0)
+        self.assertEqual(mw.open_queue.preview_calls, 1)
+        self.assertTrue(mw.btn_spin_all.enabled)
+
 
 if __name__ == "__main__":
     unittest.main()

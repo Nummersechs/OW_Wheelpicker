@@ -321,14 +321,7 @@ def spin_open_queue(mw):
         _show_not_enough(mw)
         return
 
-    combined_names: list[str] = []
-    seen: set[str] = set()
-    for _role, wheel, _slots in used_plan:
-        for entry in wheel._active_entries():
-            name = entry.get("name", "").strip()
-            if name and name not in seen:
-                seen.add(name)
-                combined_names.append(name)
+    combined_names = list(mw.open_queue.names())
 
     if not combined_names or total_slots <= 0 or len(combined_names) < total_slots:
         _show_not_enough(mw)

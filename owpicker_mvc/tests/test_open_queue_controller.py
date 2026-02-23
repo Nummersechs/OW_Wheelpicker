@@ -68,17 +68,49 @@ class TestOpenQueueController(unittest.TestCase):
         self.assertFalse(ctrl.spin_mode_allowed())
         self.assertFalse(ctrl.is_mode_active())
 
-    def test_names_dedupes_and_excludes_disabled_labels(self):
+    def test_names_dedupes_across_all_roles_and_excludes_disabled_labels(self):
         mw = DummyMW()
         mw.dps._disabled_labels = {"Cass"}
         ctrl = OpenQueueController(mw)
-        self.assertEqual(ctrl.names(), ["Ana", "Bap"])
+        self.assertEqual(ctrl.names(), ["Ana", "Bap", "Moira"])
 
     def test_slots_count_pair_modes(self):
         mw = DummyMW()
         ctrl = OpenQueueController(mw)
         # tank=1, dps(pair)=2, support deselected -> total 3
         self.assertEqual(ctrl.slots(), 3)
+
+    def test_sync_player_count_from_wheels_matches_open_plan(self):
+        mw = DummyMW()
+        mw.tank._selected = True
+        mw.tank.pair_mode = False
+        mw.dps._selected = True
+        mw.dps.pair_mode = False
+        mw.support._selected = False
+        mw.support.pair_mode = False
+        ctrl = OpenQueueController(mw)
+        ctrl.set_player_count(6)
+
+        changed = ctrl.sync_player_count_from_wheels()
+
+        self.assertTrue(changed)
+        self.assertEqual(ctrl.player_count(), 2)
+
+    def test_sync_player_count_from_wheels_falls_back_to_total_slots(self):
+        mw = DummyMW()
+        mw.tank._selected = False
+        mw.tank.pair_mode = False
+        mw.dps._selected = True
+        mw.dps.pair_mode = True
+        mw.support._selected = False
+        mw.support.pair_mode = False
+        ctrl = OpenQueueController(mw)
+        ctrl.set_player_count(6)
+
+        changed = ctrl.sync_player_count_from_wheels()
+
+        self.assertTrue(changed)
+        self.assertEqual(ctrl.player_count(), 2)
 
     def test_apply_preview_builds_override_entries_and_reuses_same_key(self):
         mw = DummyMW()
@@ -95,6 +127,23 @@ class TestOpenQueueController(unittest.TestCase):
         ctrl.apply_preview(["Ana", "Bap"])
         self.assertEqual(mw.tank.override_calls, 1)
         self.assertEqual(mw.dps.override_calls, 1)
+
+    def test_apply_preview_applies_to_all_roles_independent_of_slot_plan(self):
+        mw = DummyMW()
+        ctrl = OpenQueueController(mw)
+
+        # player_count=3 -> Tank, Damage, Support all receive preview overrides
+        ctrl.apply_preview(["Ana", "Bap", "Cass"])
+        self.assertIsNotNone(mw.tank._override_entries)
+        self.assertIsNotNone(mw.dps._override_entries)
+        self.assertIsNotNone(mw.support._override_entries)
+
+        # player_count=1 -> still all roles get the Open merged preview
+        ctrl.set_player_count(1)
+        ctrl.apply_preview(["Ana", "Bap", "Cass"])
+        self.assertIsNotNone(mw.tank._override_entries)
+        self.assertIsNotNone(mw.dps._override_entries)
+        self.assertIsNotNone(mw.support._override_entries)
 
     def test_clear_preview_restores_original_state(self):
         mw = DummyMW()
