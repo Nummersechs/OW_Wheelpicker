@@ -19,6 +19,7 @@ from .main_window_input import MainWindowInputMixin
 from .main_window_background import MainWindowBackgroundMixin
 from .main_window_ocr import MainWindowOCRMixin
 from .main_window_sound import MainWindowSoundMixin
+from .main_window_startup import MainWindowStartupMixin
 from .main_window_spin import MainWindowSpinMixin
 from .ocr_role_import import PendingOCRImport
 from services import state_store
@@ -46,6 +47,7 @@ QWIDGETSIZE_MAX = getattr(QtWidgets, "QWIDGETSIZE_MAX", getattr(QtCore, "QWIDGET
 class MainWindow(
     MainWindowOCRMixin,
     MainWindowSoundMixin,
+    MainWindowStartupMixin,
     MainWindowBackgroundMixin,
     MainWindowSpinMixin,
     MainWindowInputMixin,
@@ -855,104 +857,6 @@ class MainWindow(
             return
         self._install_window_handle_filter()
 
-    def _schedule_finalize_startup(self, delay_ms: int | None = None) -> None:
-        if getattr(self, "_startup_finalize_done", False):
-            return
-        if getattr(self, "_startup_finalize_scheduled", False):
-            return
-        self._startup_finalize_scheduled = True
-        if delay_ms is None:
-            delay_ms = int(self._cfg("STARTUP_FINALIZE_DELAY_MS", 60))
-        QtCore.QTimer.singleShot(max(0, int(delay_ms)), self._run_finalize_startup)
-
-    def _run_finalize_startup(self) -> None:
-        self._startup_finalize_scheduled = False
-        if getattr(self, "_startup_finalize_done", False):
-            return
-        self._finalize_startup()
-
-    def _schedule_startup_visual_finalize(self, delay_ms: int | None = None) -> None:
-        if getattr(self, "_closing", False):
-            return
-        if not bool(getattr(self, "_startup_visual_finalize_pending", False)):
-            return
-        timer = getattr(self, "_startup_visual_finalize_timer", None)
-        if timer is None:
-            return
-        if delay_ms is None:
-            delay_ms = int(self._cfg("STARTUP_VISUAL_FINALIZE_DELAY_MS", 280))
-        timer.start(max(0, int(delay_ms)))
-
-    def _startup_visual_finalize_block_reason(self) -> str | None:
-        if getattr(self, "_closing", False):
-            return "closing"
-        if self._overlay_choice_active():
-            return "overlay_choice"
-        try:
-            if int(getattr(self, "pending", 0) or 0) > 0:
-                return "spin_pending"
-        except Exception:
-            pass
-        if bool(getattr(self, "_background_services_paused", False)):
-            return "background_services_paused"
-        if bool(getattr(self, "_stack_switching", False)):
-            return "stack_switching"
-        return None
-
-    def _run_startup_visual_finalize(self) -> None:
-        if getattr(self, "_closing", False):
-            return
-        if not bool(getattr(self, "_startup_visual_finalize_pending", False)):
-            return
-        block_reason = self._startup_visual_finalize_block_reason()
-        if block_reason:
-            retry_ms = max(120, int(self._cfg("STARTUP_VISUAL_FINALIZE_BUSY_RETRY_MS", 250)))
-            self._trace_event(
-                "startup_visual_finalize:defer",
-                reason=block_reason,
-                retry_ms=retry_ms,
-            )
-            self._schedule_startup_visual_finalize(delay_ms=retry_ms)
-            return
-        self._startup_visual_finalize_pending = False
-        self._trace_event("startup_visual_finalize:start")
-        self._apply_theme(defer_heavy=True)
-        self._apply_language(defer_heavy=True)
-        self._flush_startup_visual_finalize_pending_heavy()
-        self._trace_event("startup_visual_finalize:done")
-
-    def _flush_startup_visual_finalize_pending_heavy(self) -> None:
-        """
-        Apply deferred heavy theme/language updates immediately when startup warmup
-        is already done. Without this, dark-mode wheel styling can stay stale until
-        a later explicit theme toggle.
-        """
-        warmup_done = bool(getattr(self, "_startup_warmup_done", False))
-        post_choice_done = bool(getattr(self, "_post_choice_init_done", False))
-        if not (warmup_done or post_choice_done):
-            return
-        if self._overlay_choice_active():
-            return
-        did_work = self._flush_pending_heavy_ui_updates(step_ms=int(getattr(self, "_post_choice_step_ms", 15)))
-        if did_work:
-            self._trace_event("startup_visual_finalize:flushed_heavy")
-
-    def _flush_pending_heavy_ui_updates(self, step_ms: int | None = None) -> bool:
-        if step_ms is None:
-            step_ms = int(getattr(self, "_post_choice_step_ms", 15))
-        did_work = False
-        self._set_heavy_ui_updates_enabled(True)
-        if bool(getattr(self, "_language_heavy_pending", False)):
-            self._apply_language_heavy()
-            self._language_heavy_pending = False
-            did_work = True
-        if bool(getattr(self, "_theme_heavy_pending", False)):
-            theme = theme_util.get_theme(getattr(self, "theme", "light"))
-            self._apply_theme_heavy(theme, step_ms=int(step_ms))
-            self._theme_heavy_pending = False
-            did_work = True
-        return did_work
-
     def _ensure_deferred_hover_rearm_timer(self) -> QtCore.QTimer:
         timer = getattr(self, "_deferred_hover_rearm_timer", None)
         if timer is not None:
@@ -1050,116 +954,6 @@ class MainWindow(
             if hasattr(self, "_timers"):
                 self._timers.register(self._focus_trace_snapshot_timer)
         self._focus_trace_snapshot_timer.start(max(40, self._focus_trace_snapshot_interval_ms))
-
-    def _show_mode_choice(self) -> None:
-        """Direkt beim Start Modus wählen lassen."""
-        self._set_controls_enabled(False)
-        self._set_heavy_ui_updates_enabled(False)
-        self.overlay.show_online_choice()
-        self.overlay.set_choice_enabled(False)
-        self._choice_shown_at = time.monotonic()
-        self._trace_event("show_mode_choice")
-        self._start_startup_warmup()
-        self._refresh_app_event_filter_state()
-
-    def _start_startup_warmup(self) -> None:
-        if getattr(self, "_startup_warmup_done", False) or getattr(self, "_startup_warmup_running", False):
-            try:
-                if hasattr(self, "overlay"):
-                    self.overlay.set_choice_enabled(True)
-            except Exception:
-                pass
-            return
-        tasks: list[tuple[str, callable]] = []
-        if self._cfg("SOUND_WARMUP_ON_START", False):
-            tasks.append(("sound_warmup", self._startup_task_sound))
-        if self._cfg("TOOLTIP_CACHE_ON_START", False) and not self._cfg("DISABLE_TOOLTIPS", False):
-            tasks.append(("tooltip_cache", self._startup_task_tooltips))
-        if self._cfg("MAP_PREBUILD_ON_START", False):
-            tasks.append(("map_prebuild", self._startup_task_map_prebuild))
-        min_block_ms = max(0, int(self._cfg("STARTUP_MIN_BLOCK_INPUT_MS", 0)))
-        # Fast-path for normal startup: no warmup tasks and no explicit lock.
-        if not tasks and min_block_ms <= 0:
-            self._startup_task_queue = []
-            self._startup_warmup_running = False
-            self._startup_warmup_done = True
-            self._startup_block_input = False
-            self._startup_block_input_until = None
-            self._startup_drain_active = False
-            self._trace_event("startup_warmup:skipped")
-            self._refresh_app_event_filter_state()
-            try:
-                if hasattr(self, "overlay"):
-                    self.overlay.set_choice_enabled(True)
-            except Exception:
-                pass
-            return
-        self._startup_task_queue = tasks
-        self._startup_warmup_running = True
-        self._startup_block_input = True
-        if min_block_ms > 0:
-            self._startup_block_input_until = time.monotonic() + (min_block_ms / 1000.0)
-        else:
-            self._startup_block_input_until = None
-        self._refresh_app_event_filter_state()
-        self._trace_event("startup_warmup:start", tasks=[name for name, _ in tasks], min_block_ms=min_block_ms)
-        if not tasks:
-            self._finish_startup_warmup()
-            return
-        self._run_next_startup_task()
-
-    def _run_next_startup_task(self) -> None:
-        if not self._startup_task_queue:
-            self._finish_startup_warmup()
-            return
-        name, fn = self._startup_task_queue.pop(0)
-        self._startup_current_task = name
-        self._trace_event("startup_warmup:task_start", task=name)
-        QtCore.QTimer.singleShot(0, fn)
-
-    def _startup_task_done(self, name: str | None = None) -> None:
-        task = name or getattr(self, "_startup_current_task", None)
-        if task:
-            self._trace_event("startup_warmup:task_done", task=task)
-        self._startup_current_task = None
-        QtCore.QTimer.singleShot(0, self._run_next_startup_task)
-
-    def _finish_startup_warmup(self) -> None:
-        if getattr(self, "_startup_warmup_done", False):
-            return
-        if getattr(self, "_startup_warmup_finalize_scheduled", False):
-            return
-        self._startup_warmup_finalize_scheduled = True
-        extra_ms = max(0, int(self._cfg("STARTUP_WARMUP_COOLDOWN_MS", 500)))
-        remaining_lock_ms = 0
-        block_until = getattr(self, "_startup_block_input_until", None)
-        if block_until is not None:
-            remaining_lock_ms = max(0, int((float(block_until) - time.monotonic()) * 1000.0))
-            extra_ms = max(extra_ms, remaining_lock_ms)
-        self._trace_event("startup_warmup:cooldown", delay_ms=extra_ms, remaining_lock_ms=remaining_lock_ms)
-        QtCore.QTimer.singleShot(extra_ms, self._finalize_startup_warmup)
-
-    def _finalize_startup_warmup(self) -> None:
-        if getattr(self, "_startup_warmup_done", False):
-            return
-        self._startup_warmup_running = False
-        self._startup_warmup_done = True
-        self._flush_posted_events("startup_warmup_done")
-        self._startup_block_input = False
-        self._startup_block_input_until = None
-        self._startup_drain_active = True
-        self._refresh_app_event_filter_state()
-        self._restart_startup_drain_timer()
-        self._startup_task_queue = []
-        self._startup_current_task = None
-        self._startup_waiting_for_map = False
-        # Heavy UI updates were deferred; apply once warmup is done.
-        self._flush_pending_heavy_ui_updates(step_ms=int(self._post_choice_step_ms))
-        self._sync_mode_stack()
-        self._trace_event("startup_warmup:done")
-        self._rearm_hover_tracking(reason="startup_warmup:done")
-        if not self._cfg("DISABLE_TOOLTIPS", False) and not self._cfg("TOOLTIP_CACHE_ON_START", False):
-            self._refresh_tooltip_caches_async(reason="startup_warmup_done")
 
     def _record_blocked_input_event(self, etype: int) -> None:
         now = time.monotonic()
@@ -1311,28 +1105,6 @@ class MainWindow(
             return False
         return False
 
-    def _startup_task_tooltips(self) -> None:
-        if self._cfg("DISABLE_TOOLTIPS", False):
-            self._startup_task_done("tooltip_cache")
-            return
-        if not self._cfg("TOOLTIP_CACHE_ON_START", False):
-            self._startup_task_done("tooltip_cache")
-            return
-        self._refresh_tooltip_caches_async(
-            delay_step_ms=int(self._post_choice_step_ms),
-            on_done=lambda: self._startup_task_done("tooltip_cache"),
-        )
-
-    def _startup_task_map_prebuild(self) -> None:
-        if not self._cfg("MAP_PREBUILD_ON_START", False):
-            self._startup_task_done("map_prebuild")
-            return
-        if getattr(self, "_map_initialized", False) and getattr(self, "_map_lists_ready", False):
-            self._startup_task_done("map_prebuild")
-            return
-        self._startup_waiting_for_map = True
-        self._schedule_map_prebuild()
-
     def _connect_state_signals(self) -> None:
         # JETZT: Save-Hooks anschließen
         for _role, w in self._role_wheels():
@@ -1351,32 +1123,6 @@ class MainWindow(
                 # Sicherstellen, dass Buttons aktiv bleiben (nicht wie disabled im UI aussehen)
                 w.btn_local_spin.setEnabled(True)
                 w.btn_include_in_all.setEnabled(True)
-
-    def _finalize_startup(self) -> None:
-        if getattr(self, "_startup_finalize_done", False):
-            return
-        # jetzt darf gespeichert werden
-        self._restoring_state = False
-
-        # Buttons initial updaten (nutzt schon include_in_all)
-        self._update_spin_all_enabled()
-        self._update_cancel_enabled()
-        self._apply_mode_results(self._mode_key())
-        if bool(self._cfg("STARTUP_VISUAL_FINALIZE_DEFERRED", True)):
-            # Keep first paint/input responsive; visual finalize runs once the
-            # overlay is gone and the UI is idle.
-            self._startup_visual_finalize_pending = True
-            # Apply lightweight theme/language updates immediately so widgets
-            # don't temporarily render with stale startup colors.
-            self._apply_theme(defer_heavy=True)
-            self._apply_language(defer_heavy=True)
-            self._schedule_startup_visual_finalize()
-        else:
-            self._apply_theme(defer_heavy=True)
-            self._apply_language(defer_heavy=True)
-        # Tooltips sofort erlauben (werden später noch einmal frisch berechnet)
-        self._set_tooltips_ready(True)
-        self._startup_finalize_done = True
 
     def _on_overlay_closed(self):
         if self.pending <= 0:
@@ -2009,94 +1755,6 @@ class MainWindow(
             return False
         view = getattr(overlay, "_last_view", {}) or {}
         return view.get("type") == "online_choice"
-
-    def _schedule_post_choice_init(self, delay_ms: int) -> None:
-        if getattr(self, "_closing", False):
-            return
-        if not hasattr(self, "_post_choice_timer"):
-            return
-        self._trace_event("schedule_post_choice_init", delay_ms=delay_ms)
-        self._post_choice_timer.start(max(0, int(delay_ms)))
-
-    def _ensure_post_choice_ready(self) -> None:
-        """Run deferred init immediately after the mode choice if the user interacts fast."""
-        self._trace_event("ensure_post_choice_ready")
-        if self._post_choice_init_done:
-            return
-        if hasattr(self, "_post_choice_timer") and self._post_choice_timer.isActive():
-            self._post_choice_timer.stop()
-        self._run_post_choice_init()
-
-    def _run_post_choice_init(self) -> None:
-        if getattr(self, "_closing", False):
-            return
-        if getattr(self, "_post_choice_init_done", False):
-            return
-        if self._overlay_choice_active():
-            return
-        if (
-            int(getattr(self, "pending", 0) or 0) > 0
-            or bool(getattr(self, "_background_services_paused", False))
-            or self._has_active_spin_animations(include_internal_flags=True)
-        ):
-            retry_ms = max(20, int(self._cfg("POST_CHOICE_INIT_BUSY_RETRY_MS", 220)))
-            self._trace_event(
-                "run_post_choice_init:defer_busy",
-                pending=int(getattr(self, "pending", 0) or 0),
-                retry_ms=retry_ms,
-            )
-            self._schedule_post_choice_init(retry_ms)
-            return
-        self._trace_event("run_post_choice_init:start")
-        self._set_tooltips_ready(True)
-        self._flush_pending_heavy_ui_updates(step_ms=int(self._post_choice_step_ms))
-        self._warmup_sound_async_if_enabled(step_ms=int(self._post_choice_warmup_step_ms))
-        if self._cfg("TOOLTIP_CACHE_ON_START", False) and not self._cfg("DISABLE_TOOLTIPS", False):
-            self._refresh_tooltip_caches_async(delay_step_ms=int(self._post_choice_step_ms))
-        self._schedule_map_prebuild()
-        self._post_choice_init_done = True
-        self._schedule_wheel_cache_warmup(delay_ms=0)
-        self._sync_mode_stack()
-        self._trace_event("run_post_choice_init:done")
-        self._refresh_app_event_filter_state()
-
-    def _schedule_map_prebuild(self, force: bool = False) -> None:
-        if getattr(self, "_closing", False):
-            return
-        if not self._cfg("MAP_PREBUILD_ON_START", False) and not force:
-            return
-        if getattr(self, "_map_initialized", False) or getattr(self, "_map_prebuild_in_progress", False):
-            return
-        self._set_map_button_enabled(False)
-        self._set_map_button_loading(True, reason="prebuild_start")
-        self._map_prebuild_in_progress = True
-        QtCore.QTimer.singleShot(0, self._run_map_prebuild)
-
-    def _run_map_prebuild(self) -> None:
-        if getattr(self, "_closing", False):
-            return
-        if getattr(self, "_map_initialized", False):
-            self._set_map_button_enabled(True)
-            self._map_prebuild_in_progress = False
-            return
-        self._trace_event("map_prebuild:start")
-        self._ensure_map_ui()
-        # map_lists_ready will flip once listsBuilt fires
-
-    def _on_map_lists_ready(self) -> None:
-        self._map_lists_ready = True
-        self._map_prebuild_in_progress = False
-        self._set_map_button_loading(False, reason="lists_ready")
-        self._set_map_button_enabled(True)
-        self._trace_event("map_prebuild:done")
-        self._apply_focus_policy_defaults()
-        self._rearm_hover_tracking(reason="map_prebuild:done")
-        if getattr(self, "_pending_map_mode_switch", False):
-            self._pending_map_mode_switch = False
-            QtCore.QTimer.singleShot(0, lambda: self._on_mode_button_clicked("maps"))
-        if getattr(self, "_startup_waiting_for_map", False):
-            self._startup_waiting_for_map = False
-            self._startup_task_done("map_prebuild")
 
     def _set_map_button_enabled(self, enabled: bool) -> None:
         if hasattr(self, "btn_mode_maps"):
