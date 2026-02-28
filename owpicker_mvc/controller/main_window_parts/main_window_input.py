@@ -5,7 +5,7 @@ import time
 from PySide6 import QtCore, QtGui, QtWidgets
 
 import i18n
-from . import hover_tooltip_ops, runtime_tracing
+from .. import hover_tooltip_ops, runtime_tracing
 
 _MOUSE_CLICK_EVENT_TYPES = (
     int(QtCore.QEvent.MouseButtonPress),

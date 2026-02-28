@@ -8,7 +8,7 @@ import i18n
 from model.role_keys import role_for_wheel
 from view.wheel_view import WheelView
 
-from . import spin_service
+from .. import spin_service
 
 
 class MainWindowSpinMixin:

@@ -6,7 +6,7 @@ from PySide6 import QtCore, QtWidgets
 
 import i18n
 from logic.name_normalization import normalize_name_alnum_key
-from .ocr_role_import import (
+from ..ocr_role_import import (
     PendingOCRImport,
     normalize_name_key as normalize_ocr_name_key,
     resolve_selected_candidates as resolve_selected_ocr_candidates,
@@ -345,7 +345,7 @@ class MainWindowOCRMixin:
                     pass
             return
         try:
-            from . import ocr_import
+            from .. import ocr_import
         except Exception:
             return
         release_fn = getattr(ocr_import, "clear_ocr_runtime_caches", None)
@@ -370,7 +370,7 @@ class MainWindowOCRMixin:
             self._schedule_ocr_runtime_cache_release()
             return
         try:
-            from . import ocr_import
+            from .. import ocr_import
         except Exception:
             return
         release_fn = getattr(ocr_import, "clear_ocr_runtime_caches", None)

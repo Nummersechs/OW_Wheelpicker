@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
-from controller.state_sync import StateSyncController
+from ..state_sync import StateSyncController
 
 
 class MainWindowStateMixin:
@@ -15,7 +15,7 @@ class MainWindowStateMixin:
         """
         if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
             return Path(sys._MEIPASS)  # type: ignore[attr-defined]
-        return Path(__file__).resolve().parent.parent
+        return Path(__file__).resolve().parent.parent.parent
 
     def _state_base_dir(self) -> Path:
         """
@@ -25,7 +25,7 @@ class MainWindowStateMixin:
         """
         if getattr(sys, "frozen", False):
             return Path(sys.executable).resolve().parent
-        return Path(__file__).resolve().parent.parent
+        return Path(__file__).resolve().parent.parent.parent
 
     def _get_state_file(self) -> Path:
         """Gibt den Pfad zur saved_state.json zurück."""

@@ -4,7 +4,7 @@ import config
 import i18n
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from . import mode_manager
+from .. import mode_manager
 from utils import flag_icons, theme as theme_util, ui_helpers
 from view import style_helpers
 

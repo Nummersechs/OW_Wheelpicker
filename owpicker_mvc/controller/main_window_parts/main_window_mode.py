@@ -5,7 +5,7 @@ import time
 from PySide6 import QtCore
 
 import config
-from . import mode_manager
+from .. import mode_manager
 from model.role_keys import role_wheel_map
 
 

@@ -6,7 +6,7 @@ from PySide6 import QtCore, QtGui
 
 import i18n
 
-from . import shutdown_manager
+from .. import shutdown_manager
 
 
 class MainWindowShutdownMixin:

@@ -12,16 +12,16 @@ from . import (
     result_state_ops,
     runtime_tracing,
 )
-from .main_window_input import MainWindowInputMixin
-from .main_window_appearance import MainWindowAppearanceMixin
-from .main_window_background import MainWindowBackgroundMixin
-from .main_window_mode import MainWindowModeMixin
-from .main_window_ocr import MainWindowOCRMixin
-from .main_window_shutdown import MainWindowShutdownMixin
-from .main_window_sound import MainWindowSoundMixin
-from .main_window_startup import MainWindowStartupMixin
-from .main_window_state import MainWindowStateMixin
-from .main_window_spin import MainWindowSpinMixin
+from .main_window_parts.main_window_input import MainWindowInputMixin
+from .main_window_parts.main_window_appearance import MainWindowAppearanceMixin
+from .main_window_parts.main_window_background import MainWindowBackgroundMixin
+from .main_window_parts.main_window_mode import MainWindowModeMixin
+from .main_window_parts.main_window_ocr import MainWindowOCRMixin
+from .main_window_parts.main_window_shutdown import MainWindowShutdownMixin
+from .main_window_parts.main_window_sound import MainWindowSoundMixin
+from .main_window_parts.main_window_startup import MainWindowStartupMixin
+from .main_window_parts.main_window_state import MainWindowStateMixin
+from .main_window_parts.main_window_spin import MainWindowSpinMixin
 from .ocr_role_import import PendingOCRImport
 from services import state_store
 from services.app_settings import AppSettings
