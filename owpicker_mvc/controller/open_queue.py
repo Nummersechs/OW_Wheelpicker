@@ -8,6 +8,7 @@ class OpenQueueController:
     """Handle Open Queue preview/override state outside MainWindow."""
     OPEN_MIN_PLAYERS = 1
     OPEN_MAX_PLAYERS = 6
+    _OPEN_FILL_ORDER = ("Tank", "Damage", "Support", "Support", "Damage", "Tank")
 
     def __init__(self, main_window) -> None:
         self._mw = main_window
@@ -73,13 +74,13 @@ class OpenQueueController:
         max_allowed = max(self.OPEN_MIN_PLAYERS, int(self.max_slots_capacity()))
         for requested in range(self.OPEN_MIN_PLAYERS, max_allowed + 1):
             plan = self.slot_plan(requested=requested)
-            plan_slots = {role: int(slots) for role, _wheel, slots in plan}
-            if all(int(plan_slots.get(role, 0)) == int(current.get(role, 0)) for role in current):
+            plan_slots = {role: slots for role, _wheel, slots in plan}
+            if all(plan_slots.get(role, 0) == slots for role, slots in current.items()):
                 return requested
-        total_slots = sum(int(v) for v in current.values())
+        total_slots = sum(current.values())
         if total_slots <= 0:
             return self.OPEN_MIN_PLAYERS
-        return max(self.OPEN_MIN_PLAYERS, min(max_allowed, int(total_slots)))
+        return self._clamp_player_count(total_slots, max_allowed=max_allowed)
 
     def sync_player_count_from_wheels(self) -> bool:
         inferred = self.infer_player_count_from_wheels()
@@ -88,20 +89,50 @@ class OpenQueueController:
     def max_slots_capacity(self) -> int:
         return max(0, min(self.OPEN_MAX_PLAYERS, 2 * len(self._all_role_wheels())))
 
+    def _clamp_player_count(self, value: int, *, max_allowed: int | None = None) -> int:
+        clamped = max(self.OPEN_MIN_PLAYERS, min(self.OPEN_MAX_PLAYERS, int(value)))
+        if max_allowed is None:
+            return clamped
+        return min(clamped, max(self.OPEN_MIN_PLAYERS, int(max_allowed)))
+
+    def _wheel_subroles(self, wheel: WheelView) -> list[str]:
+        if bool(getattr(wheel, "use_subrole_filter", False)) and len(getattr(wheel, "subrole_labels", [])) >= 2:
+            return list(wheel.subrole_labels[:2])
+        return []
+
+    def _wheel_mode_state(self, wheel: WheelView) -> tuple[bool, bool]:
+        wheel_state = getattr(wheel, "_wheel_state", None)
+        pair_mode = bool(getattr(wheel_state, "pair_mode", getattr(wheel, "pair_mode", False)))
+        use_subroles = bool(
+            getattr(
+                wheel_state,
+                "use_subrole_filter",
+                getattr(wheel, "use_subrole_filter", False),
+            )
+        )
+        return pair_mode, use_subroles
+
+    def _apply_wheel_mode_state(
+        self,
+        wheel: WheelView,
+        *,
+        pair_mode: bool,
+        use_subroles: bool,
+    ) -> None:
+        wheel_state = getattr(wheel, "_wheel_state", None)
+        if wheel_state is not None:
+            wheel_state.pair_mode = bool(pair_mode)
+            wheel_state.use_subrole_filter = bool(use_subroles)
+        if hasattr(wheel, "pair_mode"):
+            wheel.pair_mode = bool(pair_mode)
+        if hasattr(wheel, "use_subrole_filter"):
+            wheel.use_subrole_filter = bool(use_subroles)
+
     def player_count(self, *, max_allowed: int | None = None) -> int:
-        value = int(self._open_player_count)
-        value = max(self.OPEN_MIN_PLAYERS, min(self.OPEN_MAX_PLAYERS, value))
-        if max_allowed is not None:
-            cap = max(self.OPEN_MIN_PLAYERS, int(max_allowed))
-            value = min(value, cap)
-        return value
+        return self._clamp_player_count(self._open_player_count, max_allowed=max_allowed)
 
     def set_player_count(self, value: int, *, max_allowed: int | None = None) -> bool:
-        next_value = int(value)
-        next_value = max(self.OPEN_MIN_PLAYERS, min(self.OPEN_MAX_PLAYERS, next_value))
-        if max_allowed is not None:
-            cap = max(self.OPEN_MIN_PLAYERS, int(max_allowed))
-            next_value = min(next_value, cap)
+        next_value = self._clamp_player_count(value, max_allowed=max_allowed)
         if next_value == self._open_player_count:
             return False
         self._open_player_count = next_value
@@ -119,8 +150,7 @@ class OpenQueueController:
             return []
 
         capacity = 2 * len(role_wheels_all)
-        desired = self.player_count(max_allowed=capacity) if requested is None else int(requested)
-        desired = max(self.OPEN_MIN_PLAYERS, min(self.OPEN_MAX_PLAYERS, desired))
+        desired = self.player_count(max_allowed=capacity) if requested is None else self._clamp_player_count(requested)
         if desired > capacity:
             return []
 
@@ -132,11 +162,10 @@ class OpenQueueController:
         # 4: T+D+S(pair)
         # 5: T+D(pair)+S(pair)
         # 6: T(pair)+D(pair)+S(pair)
-        fill_order = ("Tank", "Damage", "Support", "Support", "Damage", "Tank")
-        for idx in range(min(desired, len(fill_order))):
-            slots_by_role[fill_order[idx]] = int(slots_by_role[fill_order[idx]]) + 1
+        for role in self._OPEN_FILL_ORDER[:desired]:
+            slots_by_role[role] += 1
 
-        return [(role, wheel, int(slots_by_role.get(role, 0))) for role, wheel in role_wheels_all]
+        return [(role, wheel, slots_by_role.get(role, 0)) for role, wheel in role_wheels_all]
 
     def apply_slider_combination(self) -> None:
         if self._applying_open_combination:
@@ -165,15 +194,11 @@ class OpenQueueController:
 
     def _view_key(self, wheel: WheelView, names: list[str]) -> tuple:
         use_subroles = bool(getattr(wheel, "use_subrole_filter", False))
-        subroles: tuple[str, str] | tuple = ()
-        if use_subroles and len(getattr(wheel, "subrole_labels", [])) >= 2:
-            subroles = tuple(wheel.subrole_labels[:2])
+        subroles = tuple(self._wheel_subroles(wheel)) if use_subroles else ()
         return (tuple(names), use_subroles, subroles)
 
     def _entries_for_wheel(self, wheel: WheelView, names: list[str]) -> list[dict]:
-        subroles: list[str] = []
-        if getattr(wheel, "use_subrole_filter", False) and len(getattr(wheel, "subrole_labels", [])) >= 2:
-            subroles = list(wheel.subrole_labels[:2])
+        subroles = self._wheel_subroles(wheel)
         return [{"name": n, "subroles": list(subroles), "active": True} for n in names]
 
     def apply_preview(self, combined_names: list[str] | None = None) -> None:
@@ -236,50 +261,27 @@ class OpenQueueController:
         *,
         mode_overrides: dict[WheelView, dict[str, bool]] | None = None,
     ) -> None:
+        mode_overrides = mode_overrides or {}
         self._spin_restore = []
         for wheel, entries in entries_by_wheel.items():
-            wheel_state = getattr(wheel, "_wheel_state", None)
+            current_pair_mode, current_use_subroles = self._wheel_mode_state(wheel)
             self._spin_restore.append(
                 {
                     "wheel": wheel,
                     "override_entries": getattr(wheel, "_override_entries", None),
-                    "pair_mode_state": bool(
-                        getattr(wheel_state, "pair_mode", getattr(wheel, "pair_mode", False))
-                    ),
-                    "use_subroles_state": bool(
-                        getattr(
-                            wheel_state,
-                            "use_subrole_filter",
-                            getattr(wheel, "use_subrole_filter", False),
-                        )
-                    ),
+                    "pair_mode_state": current_pair_mode,
+                    "use_subroles_state": current_use_subroles,
                     "disabled_indices": set(getattr(wheel, "_disabled_indices", set())),
                 }
             )
-            override = (mode_overrides or {}).get(wheel) or {}
-            next_pair_mode = bool(
-                override.get(
-                    "pair_mode",
-                    getattr(wheel_state, "pair_mode", getattr(wheel, "pair_mode", False)),
-                )
+            override = mode_overrides.get(wheel) or {}
+            next_pair_mode = bool(override.get("pair_mode", current_pair_mode))
+            next_use_subroles = bool(override.get("use_subroles", current_use_subroles))
+            self._apply_wheel_mode_state(
+                wheel,
+                pair_mode=next_pair_mode,
+                use_subroles=next_use_subroles,
             )
-            next_use_subroles = bool(
-                override.get(
-                    "use_subroles",
-                    getattr(
-                        wheel_state,
-                        "use_subrole_filter",
-                        getattr(wheel, "use_subrole_filter", False),
-                    ),
-                )
-            )
-            if wheel_state is not None:
-                wheel_state.pair_mode = next_pair_mode
-                wheel_state.use_subrole_filter = next_use_subroles
-            if hasattr(wheel, "pair_mode"):
-                wheel.pair_mode = next_pair_mode
-            if hasattr(wheel, "use_subrole_filter"):
-                wheel.use_subrole_filter = next_use_subroles
             wheel.set_override_entries(entries)
         self._spin_active = True
 
@@ -291,20 +293,14 @@ class OpenQueueController:
             wheel = entry.get("wheel")
             if not wheel:
                 continue
-            wheel_state = getattr(wheel, "_wheel_state", None)
-            restored_pair_mode = bool(
-                entry.get("pair_mode_state", getattr(wheel, "pair_mode", False))
+            default_pair_mode, default_use_subroles = self._wheel_mode_state(wheel)
+            restored_pair_mode = bool(entry.get("pair_mode_state", default_pair_mode))
+            restored_use_subroles = bool(entry.get("use_subroles_state", default_use_subroles))
+            self._apply_wheel_mode_state(
+                wheel,
+                pair_mode=restored_pair_mode,
+                use_subroles=restored_use_subroles,
             )
-            restored_use_subroles = bool(
-                entry.get("use_subroles_state", getattr(wheel, "use_subrole_filter", False))
-            )
-            if wheel_state is not None:
-                wheel_state.pair_mode = restored_pair_mode
-                wheel_state.use_subrole_filter = restored_use_subroles
-            if hasattr(wheel, "pair_mode"):
-                wheel.pair_mode = restored_pair_mode
-            if hasattr(wheel, "use_subrole_filter"):
-                wheel.use_subrole_filter = restored_use_subroles
             wheel.set_override_entries(entry.get("override_entries"))
             wheel._disabled_indices = set(entry.get("disabled_indices", set()))
             wheel._refresh_disabled_indices()

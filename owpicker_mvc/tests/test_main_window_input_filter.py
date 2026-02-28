@@ -35,6 +35,18 @@ class _FakeOverlay:
         return self._visible
 
 
+class _FakeSender:
+    def __init__(self, object_name: str, text: str = ""):
+        self._object_name = str(object_name)
+        self._text = str(text)
+
+    def objectName(self) -> str:
+        return self._object_name
+
+    def text(self) -> str:
+        return self._text
+
+
 class TestMainWindowInputFilter(unittest.TestCase):
     def _make_window(self, *, startup_block: bool, startup_drain: bool, overlay: _FakeOverlay) -> MainWindow:
         mw = MainWindow.__new__(MainWindow)
@@ -545,6 +557,34 @@ class TestMainWindowInputFilter(unittest.TestCase):
 
         self.assertEqual(mw.pending, 2)
         self.assertTrue(any(name == "spin_cancel_ignored" for name, _extra in traces))
+
+    def test_cancel_spin_guard_does_not_block_cancel_button_click(self):
+        class _Overlay:
+            def show_message(self, *_args, **_kwargs):
+                return None
+
+        mw = MainWindow.__new__(MainWindow)
+        mw.pending = 2
+        mw._spin_started_at_monotonic = time.monotonic()
+        mw._cfg = lambda key, default=None: 1100 if key == "SPIN_CANCEL_GUARD_MS" else default
+        traces: list[tuple[str, dict]] = []
+        mw._trace_event = lambda name, **extra: traces.append((name, extra))
+        mw.sender = lambda: _FakeSender("btn_cancel_spin", "Cancel")
+        mw._disarm_spin_watchdog = lambda: None
+        mw._clear_spin_started = lambda: setattr(mw, "_spin_started_at_monotonic", None)
+        mw._stop_spin_audio = lambda: None
+        mw._stop_all_wheels = lambda: None
+        mw._restore_results_snapshot = lambda: None
+        mw._restore_open_queue_spin_overrides_if_active = lambda: None
+        mw.overlay = _Overlay()
+        mw._set_controls_enabled = lambda _enabled: None
+        mw._update_cancel_enabled = lambda: None
+
+        mw._cancel_spin()
+
+        self.assertEqual(mw.pending, 0)
+        self.assertTrue(any(name == "spin_cancel_requested" for name, _extra in traces))
+        self.assertFalse(any(name == "spin_cancel_ignored" for name, _extra in traces))
 
     def test_watchdog_forces_finish_for_stalled_wheels_before_recovery(self):
         class _FakeWheel:

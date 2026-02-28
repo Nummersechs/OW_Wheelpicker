@@ -265,6 +265,9 @@ SPIN_WATCHDOG_SCALE = 1.8
 SPIN_WATCHDOG_SLACK_MS = 2500
 SPIN_WATCHDOG_MIN_MS = 2500
 WHEEL_SPIN_GUARD_ENABLED = True
+# Guard window for cancel clicks right after spin start.
+# 0 disables the guard so the first cancel click is applied immediately.
+SPIN_CANCEL_GUARD_MS = 0
 # Fast stale-pending recovery guard: if no wheel is actually spinning/running,
 # pending can be reset after this short grace period.
 SPIN_STALE_RECOVERY_GRACE_MS = 250
