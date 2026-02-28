@@ -986,6 +986,213 @@ def _easyocr_sort_key(detection: Any) -> tuple[float, float]:
     return (min(ys), min(xs))
 
 
+def _easyocr_detection_to_token(detection: Any) -> dict[str, float | str] | None:
+    try:
+        text = str(detection[1] or "").strip()
+    except Exception:
+        text = ""
+    if not text:
+        return None
+    try:
+        raw_conf = float(detection[2])
+        confidence = raw_conf * 100.0 if raw_conf <= 1.0 else raw_conf
+    except Exception:
+        confidence = -1.0
+
+    y0, x0 = _easyocr_sort_key(detection)
+    x1 = x0
+    y1 = y0
+    try:
+        bbox = detection[0]
+    except Exception:
+        bbox = ()
+    xs: list[float] = []
+    ys: list[float] = []
+    try:
+        for point in bbox or ():
+            if not isinstance(point, (list, tuple)) or len(point) < 2:
+                continue
+            xs.append(float(point[0]))
+            ys.append(float(point[1]))
+    except Exception:
+        xs = []
+        ys = []
+    if xs:
+        x0 = min(xs)
+        x1 = max(xs)
+    if ys:
+        y0 = min(ys)
+        y1 = max(ys)
+    if x1 < x0:
+        x1 = x0
+    if y1 < y0:
+        y1 = y0
+    return {
+        "text": text,
+        "confidence": float(confidence),
+        "x0": float(x0),
+        "x1": float(x1),
+        "y0": float(y0),
+        "y1": float(y1),
+    }
+
+
+def _easyocr_group_tokens_to_lines(tokens: Iterable[dict[str, float | str]]) -> tuple[OCRLineResult, ...]:
+    prepared: list[dict[str, float | str]] = []
+    for token in tokens:
+        text = str(token.get("text", "") or "").strip()
+        if not text:
+            continue
+        try:
+            x0 = float(token.get("x0", 0.0))
+            x1 = float(token.get("x1", x0))
+            y0 = float(token.get("y0", 0.0))
+            y1 = float(token.get("y1", y0))
+            confidence = float(token.get("confidence", -1.0))
+        except Exception:
+            continue
+        if x1 < x0:
+            x1 = x0
+        if y1 < y0:
+            y1 = y0
+        prepared.append(
+            {
+                "text": text,
+                "x0": x0,
+                "x1": x1,
+                "y0": y0,
+                "y1": y1,
+                "confidence": confidence,
+            }
+        )
+    if not prepared:
+        return ()
+
+    token_heights = sorted(max(1.0, float(item["y1"]) - float(item["y0"])) for item in prepared)
+    median_height = token_heights[len(token_heights) // 2] if token_heights else 12.0
+    # Avoid chaining nearby rows into one giant line on noisy detections.
+    max_line_height = max(8.0, median_height * 1.85)
+
+    prepared.sort(key=lambda item: (float(item["y0"]), float(item["x0"])))
+    line_groups: list[dict[str, Any]] = []
+
+    for token in prepared:
+        token_y0 = float(token["y0"])
+        token_y1 = float(token["y1"])
+        token_h = max(1.0, token_y1 - token_y0)
+        token_center = (token_y0 + token_y1) * 0.5
+
+        best_idx = -1
+        best_score = float("-inf")
+        for idx, line in enumerate(line_groups):
+            line_y0 = float(line["y0"])
+            line_y1 = float(line["y1"])
+            line_h = max(1.0, line_y1 - line_y0)
+            line_center = float(line["center"])
+
+            prospective_h = max(line_y1, token_y1) - min(line_y0, token_y0)
+            if len(line["tokens"]) >= 1 and prospective_h > max_line_height:
+                continue
+
+            overlap = max(0.0, min(token_y1, line_y1) - max(token_y0, line_y0))
+            overlap_ratio = overlap / max(1.0, min(token_h, line_h))
+            center_delta = abs(token_center - line_center)
+            center_limit = max(token_h, line_h) * 0.55 + 1.0
+            if overlap_ratio < 0.34 and center_delta > center_limit:
+                continue
+
+            score = (overlap_ratio * 2.0) - (center_delta / max(1.0, center_limit))
+            if score > best_score:
+                best_score = score
+                best_idx = idx
+
+        if best_idx < 0:
+            line_groups.append(
+                {
+                    "y0": token_y0,
+                    "y1": token_y1,
+                    "center": token_center,
+                    "tokens": [token],
+                }
+            )
+            continue
+
+        line = line_groups[best_idx]
+        line["tokens"].append(token)
+        line["y0"] = min(float(line["y0"]), token_y0)
+        line["y1"] = max(float(line["y1"]), token_y1)
+        line["center"] = (float(line["y0"]) + float(line["y1"])) * 0.5
+
+    line_groups.sort(key=lambda item: float(item["y0"]))
+    lines: list[OCRLineResult] = []
+    for line in line_groups:
+        ordered_tokens = sorted(line["tokens"], key=lambda item: float(item["x0"]))
+        merged_tokens: list[dict[str, float | str]] = []
+        for token in ordered_tokens:
+            token_text = str(token.get("text", "") or "").strip()
+            if not token_text:
+                continue
+            token_key = normalize_name_alnum_key(token_text)
+            if merged_tokens:
+                prev = merged_tokens[-1]
+                prev_text = str(prev.get("text", "") or "").strip()
+                prev_key = normalize_name_alnum_key(prev_text)
+                try:
+                    token_x0 = float(token.get("x0", 0.0))
+                    token_x1 = float(token.get("x1", token_x0))
+                    prev_x0 = float(prev.get("x0", 0.0))
+                    prev_x1 = float(prev.get("x1", prev_x0))
+                    overlap = max(0.0, min(token_x1, prev_x1) - max(token_x0, prev_x0))
+                    min_width = max(1.0, min(token_x1 - token_x0, prev_x1 - prev_x0))
+                    overlap_ratio = overlap / min_width
+                except Exception:
+                    overlap_ratio = 0.0
+                if token_key and token_key == prev_key and overlap_ratio >= 0.45:
+                    if float(token.get("confidence", -1.0)) > float(prev.get("confidence", -1.0)):
+                        merged_tokens[-1] = token
+                    continue
+            merged_tokens.append(token)
+
+        if not merged_tokens:
+            continue
+
+        text = " ".join(str(item.get("text", "") or "").strip() for item in merged_tokens).strip()
+        text = re.sub(r"\s+", " ", text)
+        if not text:
+            continue
+        conf_sum = 0.0
+        conf_weight = 0.0
+        for item in merged_tokens:
+            conf = float(item.get("confidence", -1.0))
+            if conf < 0.0:
+                continue
+            weight = max(1.0, float(len(str(item.get("text", "") or "").strip())))
+            conf_sum += conf * weight
+            conf_weight += weight
+        confidence = (conf_sum / conf_weight) if conf_weight > 0.0 else -1.0
+        lines.append(OCRLineResult(text=text, confidence=confidence))
+
+    if not lines:
+        return ()
+
+    deduped_lines: list[OCRLineResult] = []
+    seen_index_by_key: dict[str, int] = {}
+    for line in lines:
+        text = str(line.text or "").strip()
+        if not text:
+            continue
+        key = text.lower()
+        existing_idx = seen_index_by_key.get(key)
+        if existing_idx is None:
+            seen_index_by_key[key] = len(deduped_lines)
+            deduped_lines.append(line)
+            continue
+        existing = deduped_lines[existing_idx]
+        if float(line.confidence) > float(existing.confidence):
+            deduped_lines[existing_idx] = line
+    return tuple(deduped_lines)
+
+
 def run_easyocr(
     image_path: Path,
     *,
@@ -1020,20 +1227,23 @@ def run_easyocr(
         return OCRRunResult("")
     ordered = list(detections)
     ordered.sort(key=_easyocr_sort_key)
-    lines: list[OCRLineResult] = []
+    tokens: list[dict[str, float | str]] = []
     for detection in ordered:
-        try:
-            text = str(detection[1] or "").strip()
-        except Exception:
-            text = ""
-        if not text:
-            continue
-        try:
-            raw_conf = float(detection[2])
-            conf = raw_conf * 100.0 if raw_conf <= 1.0 else raw_conf
-        except Exception:
-            conf = -1.0
-        lines.append(OCRLineResult(text=text, confidence=conf))
+        token = _easyocr_detection_to_token(detection)
+        if token is not None:
+            tokens.append(token)
+
+    lines = _easyocr_group_tokens_to_lines(tokens)
+    if not lines and tokens:
+        lines = tuple(
+            OCRLineResult(
+                text=str(token.get("text", "") or "").strip(),
+                confidence=float(token.get("confidence", -1.0)),
+            )
+            for token in tokens
+            if str(token.get("text", "") or "").strip()
+        )
+
     merged_text = "\n".join(line.text for line in lines if str(line.text).strip())
     return OCRRunResult(merged_text, lines=tuple(lines))
 
@@ -1140,6 +1350,7 @@ _OCR_SPACE_RE = re.compile(r"\s+")
 _OCR_ALLOWED_CHARS_RE = re.compile(r"[^\w .\-#]", flags=re.UNICODE)
 _OCR_HAS_ALPHA_RE = re.compile(r"[^\W\d_]", flags=re.UNICODE)
 _OCR_LEADING_ICON_RE = re.compile(r"^\s*[@©®™$%&*]+\s*")
+_OCR_TRAILING_PAREN_METADATA_RE = re.compile(r"\s*(?:[\(\[\{<][^\)\]\}>]{1,48}[\)\]\}>])+\s*$")
 _OCR_EMOJI_ICON_RE = re.compile(
     "["
     "\U0001F1E6-\U0001F1FF"
@@ -1160,6 +1371,43 @@ def _strip_after_first_emoji(value: str) -> str:
     if not match:
         return value
     return value[: match.start()].rstrip()
+
+
+def _strip_trailing_short_noise_suffix(line: str) -> str:
+    """
+    Drop OCR noise suffixes like trailing 'TK' in chat list lines
+    while keeping short all-caps names intact.
+    """
+    words = [tok for tok in str(line or "").split(" ") if tok]
+    if len(words) < 2:
+        return str(line or "")
+
+    tail_raw = words[-1].strip(" .-_")
+    if not tail_raw:
+        return str(line or "")
+    tail_key = "".join(ch for ch in tail_raw if ch.isalnum())
+    if not tail_key:
+        return str(line or "")
+    if len(tail_key) > 2:
+        return str(line or "")
+    if not any(ch.isalpha() for ch in tail_key):
+        return str(line or "")
+
+    tail_lower = tail_key.lower()
+    tail_is_noise = tail_raw.isupper() or tail_lower in {"k", "tk", "ik", "lk", "hk", "vk", "ok", "kk"}
+    if not tail_is_noise:
+        return str(line or "")
+
+    head = " ".join(words[:-1]).strip(" .-_")
+    if not head:
+        return str(line or "")
+    # Keep compact uppercase tags like "AJ TK" and only trim for longer
+    # human-like names where OCR often appends a stray short token.
+    if len(head) < 5:
+        return str(line or "")
+    if not any(ch.islower() for ch in head):
+        return str(line or "")
+    return head
 
 
 def _strip_metadata_suffix_ocr_token(line: str) -> str:
@@ -1240,6 +1488,20 @@ def _normalized_tokens(value: str) -> list[str]:
     return normalize_name_tokens(value)
 
 
+def _is_numeric_suffix_variant(left_key: str, right_key: str) -> bool:
+    left = str(left_key or "").strip()
+    right = str(right_key or "").strip()
+    if not left or not right or left == right:
+        return False
+    if left.startswith(right):
+        suffix = left[len(right):]
+    elif right.startswith(left):
+        suffix = right[len(left):]
+    else:
+        return False
+    return bool(suffix) and suffix.isdigit()
+
+
 def _find_near_duplicate_key(
     key: str,
     name: str,
@@ -1251,6 +1513,7 @@ def _find_near_duplicate_key(
     similarity: float,
     tail_min_chars: int,
     tail_head_similarity: float,
+    coexisting_keys: set[str] | None = None,
 ) -> str | None:
     if len(key) < max(1, int(min_chars)):
         return None
@@ -1266,6 +1529,14 @@ def _find_near_duplicate_key(
         current_name = display_names.get(current, "")
         if current == key:
             return current
+        if (
+            coexisting_keys
+            and current in coexisting_keys
+            and _is_numeric_suffix_variant(current, key)
+        ):
+            # Keep explicit numeric suffix variants when both appear in the
+            # same OCR text pass (likely distinct rows, e.g. Name / Name2).
+            continue
         if len(current) < max(1, int(min_chars)):
             continue
         score = 0.0
@@ -1339,6 +1610,8 @@ def _extract_candidate_names_impl(
         normalized = _strip_metadata_suffix_ocr_token(normalized)
         # Ignore everything after the first emoji/icon in a line.
         normalized = _strip_after_first_emoji(normalized)
+        normalized = _OCR_TRAILING_PAREN_METADATA_RE.sub("", normalized).strip()
+        normalized = _strip_trailing_short_noise_suffix(normalized).strip()
         if debug_entry is not None:
             debug_entry["after_metadata"] = str(normalized)
         if not normalized:
@@ -1457,14 +1730,20 @@ def extract_candidate_names_multi(
     for text in texts:
         if not text:
             continue
-        seen_in_text: set[str] = set()
-        for name in extract_candidate_names(
+        extracted_names = extract_candidate_names(
             text,
             min_chars=min_chars,
             max_chars=max_chars,
             max_words=max_words,
             max_digit_ratio=max_digit_ratio,
-        ):
+        )
+        coexisting_keys = {
+            _candidate_key(candidate)
+            for candidate in extracted_names
+            if _candidate_key(candidate)
+        }
+        seen_in_text: set[str] = set()
+        for name in extracted_names:
             key = _candidate_key(name)
             if key not in display_names:
                 near_key = _find_near_duplicate_key(
@@ -1477,6 +1756,7 @@ def extract_candidate_names_multi(
                     similarity=near_dup_similarity,
                     tail_min_chars=near_dup_tail_min_chars,
                     tail_head_similarity=near_dup_tail_head_similarity,
+                    coexisting_keys=coexisting_keys,
                 )
                 if near_key is not None:
                     key = near_key

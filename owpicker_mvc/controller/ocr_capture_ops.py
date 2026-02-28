@@ -951,6 +951,7 @@ def _build_final_names_from_runs(
     retry_names: list[str],
     row_names: list[str],
     all_runs: list[dict],
+    row_preferred: bool = False,
 ) -> list[str]:
     stats = _candidate_stats_from_runs(ocr_import, all_runs, cfg)
     for seed_name in list(preferred_names) + list(primary_names) + list(retry_names) + list(row_names):
@@ -1051,7 +1052,16 @@ def _build_final_names_from_runs(
         names = names[:max_candidates]
 
     expected = max(1, int(cfg.get("expected_candidates", 5)))
-    soft_cap = max(expected + 2, len(_dedupe_names_in_order(row_names)))
+    row_count = len(_dedupe_names_in_order(row_names))
+    if row_preferred and row_count >= max(3, expected - 1):
+        # If row pass was chosen and yields a plausible row count (e.g. 4 for
+        # a partially filled lobby), keep that size and avoid re-inflating with
+        # noise candidates from other OCR passes.
+        soft_cap = row_count
+    elif row_count >= 3:
+        soft_cap = min(expected + 1, row_count + 1)
+    else:
+        soft_cap = expected + 2
     if len(names) > soft_cap:
         names = names[:soft_cap]
 
@@ -1228,6 +1238,57 @@ def _name_display_quality(value: str) -> tuple[int, int]:
     text = str(value or "").strip()
     separators = sum(1 for ch in text if not ch.isalnum())
     return (separators, -len(text))
+
+
+def _select_row_names_from_ranked_votes(
+    ranked_votes: list[dict[str, object]],
+    *,
+    cfg: dict,
+    best_vote_count: int,
+) -> list[str]:
+    if not ranked_votes:
+        return []
+
+    def _display(entry: dict[str, object]) -> str:
+        return str(entry.get("display", "") or "").strip()
+
+    top_name = _display(ranked_votes[0])
+    if not top_name:
+        return []
+
+    min_vote_count = max(2, int(cfg.get("row_pass_multiline_min_vote_count", 2)))
+    if int(best_vote_count) < min_vote_count:
+        return [top_name]
+
+    max_names = max(1, int(cfg.get("row_pass_max_names_per_row", 5)))
+    min_avg_conf = float(cfg.get("row_pass_multiline_min_avg_conf", 40.0))
+    selected: list[str] = []
+    seen_keys: set[str] = set()
+
+    for entry in ranked_votes:
+        name = _display(entry)
+        if not name:
+            continue
+        key = _simple_name_key(name)
+        if not key or key in seen_keys:
+            continue
+        count = int(entry.get("count", 0))
+        if count < min_vote_count:
+            continue
+        conf_weight = float(entry.get("conf_weight", 0.0))
+        avg_conf = -1.0
+        if conf_weight > 0.0:
+            avg_conf = float(entry.get("conf_sum", 0.0)) / conf_weight
+        if avg_conf >= 0.0 and avg_conf < min_avg_conf:
+            continue
+        selected.append(name)
+        seen_keys.add(key)
+        if len(selected) >= max_names:
+            break
+
+    if selected:
+        return selected
+    return [top_name]
 
 
 def _run_row_segmentation_pass(
@@ -1407,8 +1468,12 @@ def _run_row_segmentation_pass(
                     _name_display_quality(str(entry.get("display", ""))),
                 ),
             )
-            best_name = str(ranked[0].get("display", "")).strip()
-            if best_name:
+            selected_names = _select_row_names_from_ranked_votes(
+                [dict(entry) for entry in ranked],
+                cfg=cfg,
+                best_vote_count=best_vote_count,
+            )
+            for best_name in selected_names:
                 key = _simple_name_key(best_name)
                 if key and key not in seen_keys:
                     seen_keys.add(key)
@@ -1692,7 +1757,8 @@ def _extract_names_from_ocr_files(
     if row_preferred:
         expected = max(1, int(cfg.get("expected_candidates", 5)))
         row_deduped = _dedupe_names_in_order(row_names)
-        if len(row_deduped) >= expected:
+        row_trust_floor = max(3, expected - 1)
+        if len(row_deduped) >= row_trust_floor:
             names = row_deduped
 
     all_runs = list(primary_runs) + list(retry_runs) + list(row_runs)
@@ -1704,6 +1770,7 @@ def _extract_names_from_ocr_files(
         retry_names=retry_names,
         row_names=row_names,
         all_runs=all_runs,
+        row_preferred=row_preferred,
     )
 
     merged_text = _merge_ocr_texts_unique_lines(merged_texts)

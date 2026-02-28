@@ -178,6 +178,41 @@ class TestOCRCaptureOps(unittest.TestCase):
             "row_pass_min_candidates": 5,
         }
 
+    def test_select_row_names_from_ranked_votes_single_when_best_vote_low(self):
+        cfg = {}
+        ranked = [
+            {"display": "Rontarou", "count": 1, "conf_sum": 80.0, "conf_weight": 1.0},
+            {"display": "The Bookseller", "count": 1, "conf_sum": 79.0, "conf_weight": 1.0},
+        ]
+        result = ocr_capture_ops._select_row_names_from_ranked_votes(
+            ranked,
+            cfg=cfg,
+            best_vote_count=1,
+        )
+        self.assertEqual(result, ["Rontarou"])
+
+    def test_select_row_names_from_ranked_votes_allows_multiline_candidates(self):
+        cfg = {
+            "row_pass_multiline_min_vote_count": 2,
+            "row_pass_max_names_per_row": 5,
+            "row_pass_multiline_min_avg_conf": 30.0,
+        }
+        ranked = [
+            {"display": "Mogojyan The Lacie Lover", "count": 2, "conf_sum": 170.0, "conf_weight": 2.0},
+            {"display": "Rontarou", "count": 2, "conf_sum": 168.0, "conf_weight": 2.0},
+            {"display": "The Bookseller", "count": 2, "conf_sum": 160.0, "conf_weight": 2.0},
+            {"display": "FWMC", "count": 1, "conf_sum": 95.0, "conf_weight": 1.0},
+        ]
+        result = ocr_capture_ops._select_row_names_from_ranked_votes(
+            ranked,
+            cfg=cfg,
+            best_vote_count=2,
+        )
+        self.assertEqual(
+            result,
+            ["Mogojyan The Lacie Lover", "Rontarou", "The Bookseller"],
+        )
+
     def test_extract_names_runs_retry_when_fast_mode_finds_too_few(self):
         calls: list[dict] = []
         outputs = [
@@ -558,6 +593,74 @@ class TestOCRCaptureOps(unittest.TestCase):
 
         self.assertEqual(names, row_names)
         self.assertIn("NIKEOS", merged_text)
+        self.assertIsNone(error)
+
+    def test_extract_names_row_preferred_does_not_reinflate_with_extra_candidates(self):
+        outputs = [
+            "Music\nJockie Music 1\nMogojyan The Lacie Lover\nRontarou\nThe Bookseller\nTK\nFWMC",
+        ]
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_tesseract_multi(
+                image_path,
+                *,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+            ):
+                text = outputs.pop(0) if outputs else ""
+                return SimpleNamespace(text=text, error=None)
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                return real_ocr_import.extract_candidate_names(text, **kwargs)
+
+            @staticmethod
+            def extract_candidate_names_multi(texts, **kwargs):
+                return real_ocr_import.extract_candidate_names_multi(texts, **kwargs)
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "recall_retry_enabled": False,
+                "row_pass_enabled": True,
+                "row_pass_min_candidates": 5,
+                "expected_candidates": 5,
+            }
+        )
+        row_names = ["Jockie Music 1", "Mogojyan The Lacie Lover", "Rontarou", "The Bookseller"]
+        row_texts = ["\n".join(row_names)]
+        row_runs = [
+            {
+                "pass": "row",
+                "image": "dummy.png#1[0:20]",
+                "psm_values": [7, 6, 13],
+                "timeout_s": 1.0,
+                "lang": "eng",
+                "fast_mode": False,
+                "text": row_texts[0],
+                "error": "",
+            }
+        ]
+
+        with (
+            patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+            patch(
+                "controller.ocr_capture_ops._run_row_segmentation_pass",
+                return_value=(row_names, row_texts, row_runs),
+            ),
+        ):
+            names, merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
+                [Path("dummy.png")],
+                ocr_cmd="auto",
+                cfg=cfg,
+            )
+
+        self.assertEqual(names, row_names)
+        self.assertIn("The Bookseller", merged_text)
         self.assertIsNone(error)
 
     def test_extract_names_filters_low_confidence_singletons(self):

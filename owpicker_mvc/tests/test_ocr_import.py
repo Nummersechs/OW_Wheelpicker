@@ -153,6 +153,20 @@ class TestOCRImport(unittest.TestCase):
             ["Massie", "Miliu"],
         )
 
+    def test_extract_candidate_names_trims_trailing_parenthetical_metadata(self):
+        text = "Rontarou (Best Gojo Main)\nThe Bookseller (The Food lover)\nMogojyan The Lacie Lover"
+        self.assertEqual(
+            extract_candidate_names(text, max_words=4),
+            ["Rontarou", "The Bookseller", "Mogojyan The Lacie Lover"],
+        )
+
+    def test_extract_candidate_names_trims_trailing_short_upper_noise_suffix(self):
+        text = "The Bookseller TK\nRontarou\nAJ TK"
+        self.assertEqual(
+            extract_candidate_names(text, max_words=4),
+            ["The Bookseller", "Rontarou", "AJ TK"],
+        )
+
     def test_extract_candidate_names_respects_min_length(self):
         text = "A\nBC\nD\nEF"
         self.assertEqual(extract_candidate_names(text, min_chars=2), ["BC", "EF"])
@@ -295,6 +309,131 @@ class TestOCRImport(unittest.TestCase):
             ),
             ["HIKEOS MNKE"],
         )
+
+    def test_extract_candidate_names_multi_keeps_numeric_suffix_names_from_same_text(self):
+        texts = [
+            "witzigerName\nwitzigerName2",
+        ]
+        self.assertEqual(
+            extract_candidate_names_multi(
+                texts,
+                high_count_threshold=99,
+                near_dup_min_chars=4,
+                near_dup_max_len_delta=1,
+                near_dup_similarity=0.9,
+            ),
+            ["witzigerName", "witzigerName2"],
+        )
+
+    def test_extract_candidate_names_multi_merges_numeric_suffix_variant_across_texts(self):
+        texts = [
+            "witzigerName",
+            "witzigerName2",
+        ]
+        result = extract_candidate_names_multi(
+            texts,
+            high_count_threshold=99,
+            near_dup_min_chars=4,
+            near_dup_max_len_delta=1,
+            near_dup_similarity=0.9,
+        )
+        self.assertEqual(len(result), 1)
+        self.assertIn(result[0], {"witzigerName", "witzigerName2"})
+
+    def test_run_easyocr_groups_same_row_tokens_into_one_line(self):
+        with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
+            image_path = Path(tmp.name)
+
+            class _Reader:
+                device = "cpu"
+
+                @staticmethod
+                def readtext(_path, detail=1, paragraph=False):
+                    _ = (detail, paragraph)
+                    return [
+                        (
+                            [(10, 10), (60, 10), (60, 24), (10, 24)],
+                            "Nummer",
+                            0.94,
+                        ),
+                        (
+                            [(70, 9), (118, 9), (118, 25), (70, 25)],
+                            "sechs",
+                            0.92,
+                        ),
+                        (
+                            [(9, 44), (68, 44), (68, 60), (9, 60)],
+                            "Massith",
+                            0.89,
+                        ),
+                    ]
+
+            with patch("controller.ocr_import._resolve_easyocr_reader", return_value=(_Reader(), None)):
+                result = run_easyocr(image_path, quiet=True)
+
+        self.assertIsNone(result.error)
+        self.assertEqual([line.text for line in result.lines], ["Nummer sechs", "Massith"])
+        self.assertEqual(result.text, "Nummer sechs\nMassith")
+
+    def test_run_easyocr_dedupes_identical_grouped_lines(self):
+        with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
+            image_path = Path(tmp.name)
+
+            class _Reader:
+                device = "cpu"
+
+                @staticmethod
+                def readtext(_path, detail=1, paragraph=False):
+                    _ = (detail, paragraph)
+                    return [
+                        (
+                            [(10, 10), (66, 10), (66, 25), (10, 25)],
+                            "Massith",
+                            0.80,
+                        ),
+                        (
+                            [(12, 11), (67, 11), (67, 26), (12, 26)],
+                            "Massith",
+                            0.93,
+                        ),
+                    ]
+
+            with patch("controller.ocr_import._resolve_easyocr_reader", return_value=(_Reader(), None)):
+                result = run_easyocr(image_path, quiet=True)
+
+        self.assertIsNone(result.error)
+        self.assertEqual([line.text for line in result.lines], ["Massith"])
+        self.assertEqual(result.text, "Massith")
+
+    def test_run_easyocr_prevents_cross_row_merge_on_tall_box_noise(self):
+        with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
+            image_path = Path(tmp.name)
+
+            class _Reader:
+                device = "cpu"
+
+                @staticmethod
+                def readtext(_path, detail=1, paragraph=False):
+                    _ = (detail, paragraph)
+                    return [
+                        (
+                            [(8, 10), (60, 10), (60, 44), (8, 44)],
+                            "Alpha",
+                            0.89,
+                        ),
+                        (
+                            [(8, 48), (62, 48), (62, 62), (8, 62)],
+                            "Bravo",
+                            0.90,
+                        ),
+                    ]
+
+            with patch("controller.ocr_import._resolve_easyocr_reader", return_value=(_Reader(), None)):
+                result = run_easyocr(image_path, quiet=True)
+
+        self.assertIsNone(result.error)
+        self.assertEqual([line.text for line in result.lines], ["Alpha", "Bravo"])
+        self.assertEqual(result.text, "Alpha\nBravo")
 
     def test_clear_ocr_runtime_caches_clears_cached_layers(self):
         with (

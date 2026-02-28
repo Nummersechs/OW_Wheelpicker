@@ -188,14 +188,14 @@ OCR_ROW_PASS_PSMS = [7, 13, 6]
 # OCR debug: shows a detailed report dialog after each OCR run.
 OCR_DEBUG_SHOW_REPORT = False
 # Keep enabled with OCR_DEBUG_SHOW_REPORT so the dialog receives the full report text.
-OCR_DEBUG_INCLUDE_REPORT_TEXT = False
+OCR_DEBUG_INCLUDE_REPORT_TEXT = True
 OCR_DEBUG_REPORT_MAX_CHARS = 24000
 # Persist OCR debug reports into a file for easier sharing/analysis.
-OCR_DEBUG_LOG_TO_FILE = False
+OCR_DEBUG_LOG_TO_FILE = True
 OCR_DEBUG_LOG_FILE = "ocr_debug.log"
 OCR_DEBUG_LOG_MAX_CHARS = 200000
 # Per-line parser diagnostics (accepted/dropped + reason) inside debug report.
-OCR_DEBUG_LINE_ANALYSIS = False
+OCR_DEBUG_LINE_ANALYSIS = True
 OCR_DEBUG_LINE_MAX_ENTRIES_PER_RUN = 60
 # QUIET erzwingt zusätzlich: keine OCR-Debug-Reports/Dateilogs.
 _disable_flags_if_quiet(
@@ -218,7 +218,7 @@ OCR_INCLUDE_MONO_VARIANTS = True
 OCR_SCALE_FACTOR = 3
 OCR_NAME_MIN_CHARS = 2
 OCR_NAME_MAX_CHARS = 24
-OCR_NAME_MAX_WORDS = 2
+OCR_NAME_MAX_WORDS = 4
 OCR_NAME_MAX_DIGIT_RATIO = 0.45
 OCR_NAME_MIN_SUPPORT = 1
 OCR_NAME_MIN_CONFIDENCE = 43.0
