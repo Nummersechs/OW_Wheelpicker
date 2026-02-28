@@ -17,11 +17,11 @@ from . import (
 )
 from .main_window_input import MainWindowInputMixin
 from .main_window_ocr import MainWindowOCRMixin
+from .main_window_sound import MainWindowSoundMixin
 from .main_window_spin import MainWindowSpinMixin
 from .ocr_role_import import PendingOCRImport
 from services import state_store
 from services.app_settings import AppSettings
-from services.sound import SoundManager
 from model.role_keys import role_wheel_map, role_wheels
 from utils import flag_icons, theme as theme_util, ui_helpers
 from view.overlay import ResultOverlay
@@ -42,7 +42,13 @@ from view import style_helpers
 QWIDGETSIZE_MAX = getattr(QtWidgets, "QWIDGETSIZE_MAX", getattr(QtCore, "QWIDGETSIZE_MAX", 16777215))
 
 
-class MainWindow(MainWindowOCRMixin, MainWindowSpinMixin, MainWindowInputMixin, QtWidgets.QMainWindow):
+class MainWindow(
+    MainWindowOCRMixin,
+    MainWindowSoundMixin,
+    MainWindowSpinMixin,
+    MainWindowInputMixin,
+    QtWidgets.QMainWindow,
+):
     def __init__(self):
         super().__init__()
         # Basisverzeichnisse bestimmen (Assets vs. writable state) und gespeicherten Zustand laden
@@ -67,10 +73,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowSpinMixin, MainWindowInputMixin, 
 
         self.setWindowTitle(i18n.t("app.title.main"))
         self.resize(1200, 650)
-        self.sound = SoundManager(base_dir=self._asset_dir)
-        # Ensure clean audio state on startup (no lingering backend playback).
-        self.sound.stop_spin()
-        self.sound.stop_ding()
+        self._init_sound_manager()
 
         self._restoring_state = True   # während des Aufbaus nicht speichern
         self._player_profile_combo_syncing = False
@@ -1306,19 +1309,6 @@ class MainWindow(MainWindowOCRMixin, MainWindowSpinMixin, MainWindowInputMixin, 
             return False
         return False
 
-    def _startup_task_sound(self) -> None:
-        if not self._cfg("SOUND_WARMUP_ON_START", False):
-            self._startup_task_done("sound_warmup")
-            return
-        try:
-            self.sound.warmup_async(
-                self,
-                step_ms=int(self._post_choice_warmup_step_ms),
-                on_done=lambda: self._startup_task_done("sound_warmup"),
-            )
-        except Exception:
-            self._startup_task_done("sound_warmup")
-
     def _startup_task_tooltips(self) -> None:
         if self._cfg("DISABLE_TOOLTIPS", False):
             self._startup_task_done("tooltip_cache")
@@ -1693,13 +1683,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowSpinMixin, MainWindowInputMixin, 
                 self._cancel_ocr_runtime_cache_release()
             except Exception:
                 pass
-        if bool(self._cfg("PAUSE_SOUND_WARMUP_DURING_SPIN", True)):
-            sound = getattr(self, "sound", None)
-            if sound is not None and hasattr(sound, "pause_background_warmup"):
-                try:
-                    sound.pause_background_warmup()
-                except Exception:
-                    pass
+        self._pause_sound_background_warmup()
 
     def _resume_background_ui_services(self) -> None:
         if not bool(self._cfg("PAUSE_BACKGROUND_UI_SERVICES_DURING_SPIN", True)):
@@ -1753,13 +1737,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowSpinMixin, MainWindowInputMixin, 
                 pass
         if bool(getattr(self, "_startup_visual_finalize_pending", False)):
             self._schedule_startup_visual_finalize(delay_ms=0)
-        if bool(self._cfg("PAUSE_SOUND_WARMUP_DURING_SPIN", True)):
-            sound = getattr(self, "sound", None)
-            if sound is not None and hasattr(sound, "resume_background_warmup"):
-                try:
-                    sound.resume_background_warmup()
-                except Exception:
-                    pass
+        self._resume_sound_background_warmup()
 
     def _set_hero_ban_visuals(self, active: bool):
         """Delegiert an den Mode-Manager und sperrt Breiten in Hero-Ban."""
@@ -1867,49 +1845,6 @@ class MainWindow(MainWindowOCRMixin, MainWindowSpinMixin, MainWindowInputMixin, 
         """Gibt den Pfad zur saved_state.json zurück."""
         return StateSyncController.state_file(self._state_dir)
 
-    def _on_volume_changed(self, value: int):
-        factor = max(0.0, min(1.0, value / 100.0))
-        try:
-            self.sound.set_master_volume(factor)
-        except Exception:
-            # Keep UI responsive even if an audio backend call fails.
-            pass
-        self._update_volume_icon(value)
-        # Wenn per Slider verändert, aktuell nicht mehr stumm gespeichert
-        self._last_volume_before_mute = value if value > 0 else self._last_volume_before_mute
-        if not getattr(self, "_restoring_state", False):
-            self.state_sync.save_state()
-    def _update_volume_icon(self, value: int):
-        if value <= 0:
-            icon = "🔇"
-        elif value <= 30:
-            icon = "🔈"
-        elif value <= 70:
-            icon = "🔉"
-        else:
-            icon = "🔊"
-        self.lbl_volume_icon.setText(icon)
-    def _play_volume_preview(self):
-        if getattr(self, "pending", 0) > 0:
-            return
-        if self.volume_slider.value() > 0:
-            self.sound.play_preview()
-    def _on_volume_icon_clicked(self):
-        current = self.volume_slider.value()
-        if current > 0:
-            # mute und Wert merken
-            self._last_volume_before_mute = current
-            self.volume_slider.blockSignals(True)
-            self.volume_slider.setValue(0)
-            self.volume_slider.blockSignals(False)
-            self._on_volume_changed(0)
-        else:
-            # unmute auf letzten Wert oder Default 100
-            new_val = self._last_volume_before_mute if self._last_volume_before_mute > 0 else 100
-            self.volume_slider.blockSignals(True)
-            self.volume_slider.setValue(new_val)
-            self.volume_slider.blockSignals(False)
-            self._on_volume_changed(new_val)
     def _load_mode_into_wheels(self, mode: str, hero_ban: bool = False):
         """Wendet den gespeicherten Zustand eines Modus auf die UI an."""
         state = self._state_store.get_mode_state(mode)
@@ -2286,8 +2221,7 @@ class MainWindow(MainWindowOCRMixin, MainWindowSpinMixin, MainWindowInputMixin, 
         self._trace_event("run_post_choice_init:start")
         self._set_tooltips_ready(True)
         self._flush_pending_heavy_ui_updates(step_ms=int(self._post_choice_step_ms))
-        if self._cfg("SOUND_WARMUP_ON_START", False):
-            self.sound.warmup_async(self, step_ms=int(self._post_choice_warmup_step_ms))
+        self._warmup_sound_async_if_enabled(step_ms=int(self._post_choice_warmup_step_ms))
         if self._cfg("TOOLTIP_CACHE_ON_START", False) and not self._cfg("DISABLE_TOOLTIPS", False):
             self._refresh_tooltip_caches_async(delay_step_ms=int(self._post_choice_step_ms))
         self._schedule_map_prebuild()
