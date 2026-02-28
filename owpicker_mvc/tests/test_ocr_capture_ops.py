@@ -642,6 +642,72 @@ class TestOCRCaptureOps(unittest.TestCase):
             self.assertIn("candidates=2", content)
             self.assertIn("[OCR Debug Report]", content)
 
+    def test_show_ocr_busy_overlay_uses_status_message_style(self):
+        class _DummyOverlay:
+            def __init__(self) -> None:
+                self.status_calls: list[tuple[str, list[str]]] = []
+                self.enabled_values: list[bool] = []
+                self._last_view = {}
+
+            def show_status_message(self, title, lines):
+                payload = (str(title), list(lines))
+                self.status_calls.append(payload)
+                self._last_view = {"type": "status_message", "data": payload}
+
+            def setEnabled(self, enabled: bool):
+                self.enabled_values.append(bool(enabled))
+
+            def hide(self):
+                return None
+
+        overlay = _DummyOverlay()
+        mw = SimpleNamespace(
+            overlay=overlay,
+            _ocr_role_display_name=lambda role_key: "DPS" if role_key == "dps" else role_key.upper(),
+        )
+        with patch(
+            "controller.ocr_capture_ops.i18n.t",
+            side_effect=lambda key, **kwargs: {
+                "ocr.progress_title": "OCR in progress",
+                "ocr.progress_line_wait": "Please wait...",
+                "ocr.progress_line_all": "All roles",
+                "ocr.progress_line_role": f"Role {kwargs.get('role', '')}",
+            }.get(key, key),
+        ):
+            shown = ocr_capture_ops._show_ocr_busy_overlay(mw, "dps")
+
+        self.assertTrue(shown)
+        self.assertEqual(len(overlay.status_calls), 1)
+        self.assertEqual(overlay.status_calls[0][0], "OCR in progress")
+        self.assertEqual(overlay.enabled_values, [False])
+
+    def test_hide_ocr_busy_overlay_hides_only_matching_status_view(self):
+        class _DummyOverlay:
+            def __init__(self) -> None:
+                self.enabled_values: list[bool] = []
+                self.hide_calls = 0
+                self._last_view = {
+                    "type": "status_message",
+                    "data": ("OCR in progress", ["line1", "line2"]),
+                }
+
+            def setEnabled(self, enabled: bool):
+                self.enabled_values.append(bool(enabled))
+
+            def hide(self):
+                self.hide_calls += 1
+
+        overlay = _DummyOverlay()
+        mw = SimpleNamespace(overlay=overlay)
+        with patch(
+            "controller.ocr_capture_ops.i18n.t",
+            side_effect=lambda key, **kwargs: "OCR in progress" if key == "ocr.progress_title" else key,
+        ):
+            ocr_capture_ops._hide_ocr_busy_overlay(mw, active=True)
+
+        self.assertEqual(overlay.enabled_values, [True])
+        self.assertEqual(overlay.hide_calls, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

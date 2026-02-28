@@ -64,6 +64,62 @@ def _schedule_ocr_cache_release(mw) -> None:
             pass
 
 
+def _show_ocr_busy_overlay(mw, role: str) -> bool:
+    overlay = getattr(mw, "overlay", None)
+    if overlay is None:
+        return False
+    try:
+        normalized_role = str(role or "").strip().casefold()
+        if normalized_role == "all":
+            line1 = i18n.t("ocr.progress_line_all")
+        else:
+            role_name_fn = getattr(mw, "_ocr_role_display_name", None)
+            role_name = role_name_fn(normalized_role) if callable(role_name_fn) else normalized_role.upper()
+            line1 = i18n.t("ocr.progress_line_role", role=role_name)
+        overlay.show_status_message(
+            i18n.t("ocr.progress_title"),
+            [
+                line1,
+                i18n.t("ocr.progress_line_wait"),
+                "",
+            ],
+        )
+        overlay.setEnabled(False)
+        # Force a paint pass before CPU-heavy OCR checks/work so users see
+        # immediate feedback right after the screenshot selection.
+        try:
+            QtWidgets.QApplication.processEvents()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def _hide_ocr_busy_overlay(mw, *, active: bool) -> None:
+    if not active:
+        return
+    overlay = getattr(mw, "overlay", None)
+    if overlay is None:
+        return
+    try:
+        overlay.setEnabled(True)
+    except Exception:
+        pass
+    try:
+        last_view = getattr(overlay, "_last_view", {}) or {}
+        if last_view.get("type") != "status_message":
+            return
+        data = last_view.get("data") or ()
+        if not data:
+            return
+        if str(data[0]) != str(i18n.t("ocr.progress_title")):
+            return
+        overlay.hide()
+    except Exception:
+        pass
+
+
 def _mark_ocr_runtime_activated(mw) -> None:
     marker = getattr(mw, "_mark_ocr_runtime_activated", None)
     if callable(marker):
@@ -1849,26 +1905,16 @@ def _handle_ocr_selection_error(mw, select_error: str | None) -> bool:
     return True
 
 
-def on_role_ocr_import_clicked(mw, role_key: str) -> None:
-    role = str(role_key or "").strip().casefold()
-    if not mw._role_ocr_import_available(role):
-        return
-    if getattr(mw, "_ocr_async_job", None):
-        return
-    _mark_ocr_runtime_activated(mw)
-    _cancel_ocr_cache_release(mw)
-    mw._update_role_ocr_button_enabled(role)
-    btn = mw._role_ocr_buttons.get(role)
-    if btn is not None:
-        btn.setEnabled(False)
+def _start_ocr_async_import(
+    mw,
+    *,
+    role: str,
+    selected_pixmap: QtGui.QPixmap,
+    busy_overlay_shown: bool,
+) -> None:
     temp_paths: list[Path] = []
     async_started = False
     try:
-        selected_pixmap, select_error = capture_region_for_ocr(mw)
-        if selected_pixmap is None:
-            _handle_ocr_selection_error(mw, select_error)
-            return
-
         runtime_cfg = _ocr_runtime_cfg_snapshot(mw)
         ocr_import = _ocr_import_module()
         availability_fn = getattr(ocr_import, "easyocr_available", None)
@@ -1910,6 +1956,7 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
                 + "\n\n"
                 + diag,
             )
+            _hide_ocr_busy_overlay(mw, active=busy_overlay_shown)
             return
 
         temp_paths, prep_errors = _prepare_ocr_variant_files(mw, selected_pixmap, runtime_cfg)
@@ -1920,6 +1967,7 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
                 i18n.t("ocr.error_title"),
                 i18n.t("ocr.error_run_failed", reason=reason),
             )
+            _hide_ocr_busy_overlay(mw, active=busy_overlay_shown)
             return
 
         thread = QtCore.QThread(mw)
@@ -1941,6 +1989,7 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
                 return
             setattr(mw, "_ocr_async_job", None)
             _cleanup_temp_paths(list(job.get("paths") or []))
+            _hide_ocr_busy_overlay(mw, active=busy_overlay_shown)
             _restore_override_cursor()
             try:
                 if thread.isRunning() and QtCore.QThread.currentThread() is not thread:
@@ -2063,6 +2112,7 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
         return
     except Exception as exc:
         _cleanup_temp_paths(temp_paths)
+        _hide_ocr_busy_overlay(mw, active=busy_overlay_shown)
         _restore_override_cursor()
         setattr(mw, "_ocr_async_job", None)
         QtWidgets.QMessageBox.warning(
@@ -2074,4 +2124,51 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
         return
     finally:
         if not async_started and not getattr(mw, "_ocr_async_job", None):
+            _schedule_ocr_cache_release(mw)
+
+
+def on_role_ocr_import_clicked(mw, role_key: str) -> None:
+    role = str(role_key or "").strip().casefold()
+    if not mw._role_ocr_import_available(role):
+        return
+    if getattr(mw, "_ocr_async_job", None):
+        return
+    _mark_ocr_runtime_activated(mw)
+    _cancel_ocr_cache_release(mw)
+    mw._update_role_ocr_button_enabled(role)
+    btn = mw._role_ocr_buttons.get(role)
+    if btn is not None:
+        btn.setEnabled(False)
+
+    async_dispatched = False
+    try:
+        selected_pixmap, select_error = capture_region_for_ocr(mw)
+        if selected_pixmap is None:
+            _handle_ocr_selection_error(mw, select_error)
+            return
+
+        busy_overlay_shown = _show_ocr_busy_overlay(mw, role)
+        # Defer OCR setup to the next event-loop tick so the status overlay can
+        # be painted before any heavy OCR pre-processing starts.
+        QtCore.QTimer.singleShot(
+            0,
+            lambda role=role, pixmap=QtGui.QPixmap(selected_pixmap), shown=busy_overlay_shown: _start_ocr_async_import(
+                mw,
+                role=role,
+                selected_pixmap=pixmap,
+                busy_overlay_shown=shown,
+            ),
+        )
+        async_dispatched = True
+    except Exception as exc:
+        _restore_override_cursor()
+        setattr(mw, "_ocr_async_job", None)
+        QtWidgets.QMessageBox.warning(
+            mw,
+            i18n.t("ocr.error_title"),
+            i18n.t("ocr.error_unexpected", reason=repr(exc)),
+        )
+        mw._update_role_ocr_buttons_enabled()
+    finally:
+        if not async_dispatched and not getattr(mw, "_ocr_async_job", None):
             _schedule_ocr_cache_release(mw)
