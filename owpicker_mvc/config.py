@@ -220,6 +220,9 @@ OCR_NAME_MIN_CHARS = 2
 OCR_NAME_MAX_CHARS = 24
 OCR_NAME_MAX_WORDS = 4
 OCR_NAME_MAX_DIGIT_RATIO = 0.45
+# If True, OCR parsing aggressively trims on special characters/icons.
+# Disabled by default to avoid cutting player lines too early.
+OCR_NAME_SPECIAL_CHAR_CONSTRAINT = False
 OCR_NAME_MIN_SUPPORT = 1
 OCR_NAME_MIN_CONFIDENCE = 43.0
 OCR_NAME_LOW_CONFIDENCE_MIN_SUPPORT = 2

@@ -326,16 +326,28 @@ class ResultOverlay(QtWidgets.QWidget):
 
     def _apply_ocr_picker_compact_layout(self) -> None:
         names_list = self.ocr_names_panel.names
-        # Keep OCR rows compact: shorter name field + tighter per-row height.
+        # Keep OCR rows compact. For rows without subroles, avoid capping the
+        # edit width so long OCR strings stay visible.
         row_height = 18
         edit_height = 16
-        name_max_width = 164 if names_list.has_subroles else 188
+        if names_list.has_subroles:
+            name_max_width: int | None = 152
+            min_width_with_subroles = 146
+            min_width_without_subroles = 188
+        else:
+            name_max_width = None
+            min_width_with_subroles = 146
+            min_width_without_subroles = 260
         names_list.set_row_visual_profile(
             row_height=row_height,
             name_edit_height=edit_height,
-            name_min_width_with_subroles=min(name_max_width, 164),
-            name_min_width_without_subroles=min(name_max_width, 188),
+            name_min_width_with_subroles=min_width_with_subroles,
+            name_min_width_without_subroles=min_width_without_subroles,
             name_max_width=name_max_width,
+            subrole_group_left_margin=10,
+            subrole_group_right_margin=10,
+            subrole_check_spacing=10,
+            subrole_checkbox_horizontal_padding=3,
             read_only=False,
         )
 

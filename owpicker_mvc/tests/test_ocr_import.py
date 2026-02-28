@@ -132,6 +132,39 @@ class TestOCRImport(unittest.TestCase):
             ["Massith", "Mika", "Aero"],
         )
 
+    def test_extract_candidate_names_keeps_special_chars_when_constraint_disabled(self):
+        text = "Witziger|Name2\nMogojyan (Lacie) Lover"
+        self.assertEqual(
+            extract_candidate_names(
+                text,
+                max_words=4,
+                enforce_special_char_constraint=False,
+            ),
+            ["Witziger|Name2", "Mogojyan (Lacie) Lover"],
+        )
+
+    def test_extract_candidate_names_extracts_left_side_from_assignment_constants(self):
+        text = (
+            "MAP_PREBUILD_ON_START = False\n"
+            "SOUND_WARMUP_ON_START = False\n"
+            "TOOLTIP_CACHE_ON_START = False\n"
+            "SOUND_WARMUP_LAZY_STEP_MS = 25\n"
+        )
+        self.assertEqual(
+            extract_candidate_names(
+                text,
+                max_words=4,
+                max_chars=24,
+                enforce_special_char_constraint=False,
+            ),
+            [
+                "MAP_PREBUILD_ON_START",
+                "SOUND_WARMUP_ON_START",
+                "TOOLTIP_CACHE_ON_START",
+                "SOUND_WARMUP_LAZY_STEP_MS",
+            ],
+        )
+
     def test_extract_candidate_names_ignores_misread_separator_token(self):
         text = "Massith I Marc みのり\nMika l Moonbrew\nAero 1 AJAR"
         self.assertEqual(
@@ -339,6 +372,32 @@ class TestOCRImport(unittest.TestCase):
         )
         self.assertEqual(len(result), 1)
         self.assertIn(result[0], {"witzigerName", "witzigerName2"})
+
+    def test_extract_candidate_names_multi_merges_constant_prefix_truncation_variants(self):
+        texts = [
+            "MAP_PREBUILD_ON_ST",
+            "MAP_PREBUILD_ON_START",
+        ]
+        self.assertEqual(
+            extract_candidate_names_multi(
+                texts,
+                high_count_threshold=99,
+            ),
+            ["MAP_PREBUILD_ON_START"],
+        )
+
+    def test_extract_candidate_names_multi_prefers_longer_constant_variant_on_tie(self):
+        texts = [
+            "SOUND_WARMUP_LAZY_ST",
+            "SOUND_WARMUP_LAZY_STEP_MS",
+        ]
+        self.assertEqual(
+            extract_candidate_names_multi(
+                texts,
+                high_count_threshold=99,
+            ),
+            ["SOUND_WARMUP_LAZY_STEP_MS"],
+        )
 
     def test_run_easyocr_groups_same_row_tokens_into_one_line(self):
         with tempfile.NamedTemporaryFile(suffix=".png") as tmp:

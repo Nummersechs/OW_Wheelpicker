@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
+import re
 import sys
 import tempfile
 import time
@@ -258,10 +260,10 @@ def build_ocr_pixmap_variants(mw, source: QtGui.QPixmap) -> list[QtGui.QPixmap]:
         mono_gray = mono.convertToFormat(QtGui.QImage.Format_Grayscale8)
         return QtGui.QPixmap.fromImage(mono_gray)
 
-    # Fast-mode runs stop after the first successful variant. Start with the
-    # left name-column crop to reduce right-side metadata/name bleed-through.
-    _add_variant(_left_crop_variant(source))
+    # Start with full image first so right-side truncation is less likely for
+    # long identifiers. Left-crop is still used as an additional variant.
     _add_variant(source)
+    _add_variant(_left_crop_variant(source))
     scale_factor = max(1, int(mw._cfg("OCR_SCALE_FACTOR", 2)))
     if scale_factor > 1 and not source.isNull():
         scaled_smooth = source.scaled(
@@ -479,6 +481,9 @@ def _ocr_runtime_cfg_snapshot(mw) -> dict:
         "name_max_chars": int(mw._cfg("OCR_NAME_MAX_CHARS", 24)),
         "name_max_words": int(mw._cfg("OCR_NAME_MAX_WORDS", 2)),
         "name_max_digit_ratio": float(mw._cfg("OCR_NAME_MAX_DIGIT_RATIO", 0.45)),
+        "name_special_char_constraint": bool(
+            mw._cfg("OCR_NAME_SPECIAL_CHAR_CONSTRAINT", False)
+        ),
         "name_min_support": int(mw._cfg("OCR_NAME_MIN_SUPPORT", 1)),
         "name_min_confidence": float(mw._cfg("OCR_NAME_MIN_CONFIDENCE", 43.0)),
         "name_low_confidence_min_support": int(
@@ -570,6 +575,71 @@ def _simple_name_key(value: str) -> str:
     return "".join(ch.lower() for ch in str(value or "") if ch.isalnum())
 
 
+_IDENTIFIER_HINT_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,95}$")
+
+
+@lru_cache(maxsize=1)
+def _config_identifier_hints() -> tuple[str, ...]:
+    try:
+        import config as app_config
+    except Exception:
+        return ()
+    hints: set[str] = set()
+    for key in dir(app_config):
+        if not key.isupper():
+            continue
+        if _IDENTIFIER_HINT_RE.match(str(key)):
+            hints.add(str(key))
+    return tuple(sorted(hints))
+
+
+def _normalize_identifier_candidate(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_ ]+", " ", str(value or ""))
+    tokens = [tok for tok in re.split(r"[\s_]+", cleaned) if tok]
+    if not tokens:
+        return ""
+    return "_".join(tokens).upper()
+
+
+def _looks_like_identifier_candidate(value: str, normalized: str) -> bool:
+    if not normalized or normalized.count("_") < 1:
+        return False
+    if len(normalized) < 6:
+        return False
+    letters = [ch for ch in str(value or "") if ch.isalpha()]
+    if not letters:
+        return False
+    upper_ratio = sum(1 for ch in letters if ch.isupper()) / max(1, len(letters))
+    return upper_ratio >= 0.7
+
+
+def _expand_config_identifier_prefixes(names: list[str]) -> list[str]:
+    hints = _config_identifier_hints()
+    if not hints:
+        return list(names or [])
+    hint_set = set(hints)
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for raw_name in list(names or []):
+        candidate = str(raw_name or "").strip()
+        if not candidate:
+            continue
+        normalized = _normalize_identifier_candidate(candidate)
+        if _looks_like_identifier_candidate(candidate, normalized):
+            if normalized in hint_set:
+                candidate = normalized
+            else:
+                matches = [hint for hint in hints if hint.startswith(normalized)]
+                if len(matches) == 1:
+                    candidate = matches[0]
+        key = _simple_name_key(candidate)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        resolved.append(candidate)
+    return resolved
+
+
 def _extract_names_from_texts(ocr_import, texts: list[str], cfg: dict) -> list[str]:
     return ocr_import.extract_candidate_names_multi(
         texts,
@@ -577,6 +647,7 @@ def _extract_names_from_texts(ocr_import, texts: list[str], cfg: dict) -> list[s
         max_chars=int(cfg.get("name_max_chars", 24)),
         max_words=int(cfg.get("name_max_words", 2)),
         max_digit_ratio=float(cfg.get("name_max_digit_ratio", 0.45)),
+        enforce_special_char_constraint=bool(cfg.get("name_special_char_constraint", True)),
         min_support=int(cfg.get("name_min_support", 1)),
         high_count_threshold=int(cfg.get("name_high_count_threshold", 8)),
         high_count_min_support=int(cfg.get("name_high_count_min_support", 2)),
@@ -699,6 +770,7 @@ def _extract_line_debug_for_text(ocr_import, text: str, cfg: dict) -> tuple[list
             max_chars=int(cfg.get("name_max_chars", 24)),
             max_words=int(cfg.get("name_max_words", 2)),
             max_digit_ratio=float(cfg.get("name_max_digit_ratio", 0.45)),
+            enforce_special_char_constraint=bool(cfg.get("name_special_char_constraint", True)),
         )
     except Exception:
         return [], []
@@ -738,6 +810,7 @@ def _candidate_stats_from_runs(ocr_import, runs: list[dict], cfg: dict) -> dict[
                 max_chars=max_chars,
                 max_words=max_words,
                 max_digit_ratio=max_digit_ratio,
+                enforce_special_char_constraint=bool(cfg.get("name_special_char_constraint", True)),
             )
             for parsed in parsed_names:
                 key = _simple_name_key(parsed)
@@ -1403,6 +1476,9 @@ def _run_row_segmentation_pass(
                         max_chars=int(cfg.get("name_max_chars", 24)),
                         max_words=int(cfg.get("name_max_words", 2)),
                         max_digit_ratio=float(cfg.get("name_max_digit_ratio", 0.45)),
+                        enforce_special_char_constraint=bool(
+                            cfg.get("name_special_char_constraint", True)
+                        ),
                     )
                     if not parsed_names:
                         continue
@@ -1772,6 +1848,7 @@ def _extract_names_from_ocr_files(
         all_runs=all_runs,
         row_preferred=row_preferred,
     )
+    names = _expand_config_identifier_prefixes(names)
 
     merged_text = _merge_ocr_texts_unique_lines(merged_texts)
     debug_requested = (
@@ -2212,6 +2289,7 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
         selected_pixmap, select_error = capture_region_for_ocr(mw)
         if selected_pixmap is None:
             _handle_ocr_selection_error(mw, select_error)
+            mw._update_role_ocr_buttons_enabled()
             return
 
         busy_overlay_shown = _show_ocr_busy_overlay(mw, role)

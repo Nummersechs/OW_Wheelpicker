@@ -12,6 +12,9 @@ DELETE_MARK_ROW_RIGHT_MARGIN = 0
 NAME_LIST_ROW_HEIGHT = 20
 NAME_EDIT_HEIGHT = 18
 SUBROLE_CHECK_SPACING = 8
+SUBROLE_GROUP_LEFT_MARGIN = 6
+SUBROLE_GROUP_RIGHT_MARGIN = 0
+SUBROLE_CHECKBOX_HORIZONTAL_PADDING = 0
 NAME_EDIT_MAX_WIDTH_WITH_SUBROLES = 188
 _DELETE_MARKED_STYLE_CACHE: dict[str, str] = {}
 
@@ -109,6 +112,10 @@ class NamesList(QtWidgets.QListWidget):
         self._name_min_width_with_subroles = 188
         self._name_min_width_without_subroles = 196
         self._subrole_controls_layout_visible = bool(self.has_subroles)
+        self._subrole_group_left_margin = SUBROLE_GROUP_LEFT_MARGIN
+        self._subrole_group_right_margin = SUBROLE_GROUP_RIGHT_MARGIN
+        self._subrole_check_spacing = SUBROLE_CHECK_SPACING
+        self._subrole_checkbox_horizontal_padding = SUBROLE_CHECKBOX_HORIZONTAL_PADDING
         # Keep subrole rows compact and stable even after list rebuild/sort.
         self._name_max_width: int | None = (
             NAME_EDIT_MAX_WIDTH_WITH_SUBROLES if self.has_subroles else None
@@ -248,6 +255,12 @@ class NamesList(QtWidgets.QListWidget):
             row_widget.edit.setMaximumWidth(self._name_max_width)
         else:
             row_widget.edit.setMaximumWidth(16777215)
+        row_widget.apply_subrole_visual_profile(
+            left_margin=max(0, int(self._subrole_group_left_margin)),
+            right_margin=max(0, int(self._subrole_group_right_margin)),
+            spacing=max(0, int(self._subrole_check_spacing)),
+            checkbox_hpadding=max(0, int(self._subrole_checkbox_horizontal_padding)),
+        )
         if self._name_rows_read_only:
             row_widget.edit.setReadOnly(True)
             row_widget.edit.setFocusPolicy(QtCore.Qt.NoFocus)
@@ -270,6 +283,10 @@ class NamesList(QtWidgets.QListWidget):
         name_min_width_with_subroles: int | None = None,
         name_min_width_without_subroles: int | None = None,
         name_max_width: int | None = None,
+        subrole_group_left_margin: int | None = None,
+        subrole_group_right_margin: int | None = None,
+        subrole_check_spacing: int | None = None,
+        subrole_checkbox_horizontal_padding: int | None = None,
         read_only: bool | None = None,
     ) -> None:
         if row_height is not None:
@@ -281,6 +298,14 @@ class NamesList(QtWidgets.QListWidget):
         if name_min_width_without_subroles is not None:
             self._name_min_width_without_subroles = max(1, int(name_min_width_without_subroles))
         self._name_max_width = None if name_max_width is None else max(1, int(name_max_width))
+        if subrole_group_left_margin is not None:
+            self._subrole_group_left_margin = max(0, int(subrole_group_left_margin))
+        if subrole_group_right_margin is not None:
+            self._subrole_group_right_margin = max(0, int(subrole_group_right_margin))
+        if subrole_check_spacing is not None:
+            self._subrole_check_spacing = max(0, int(subrole_check_spacing))
+        if subrole_checkbox_horizontal_padding is not None:
+            self._subrole_checkbox_horizontal_padding = max(0, int(subrole_checkbox_horizontal_padding))
         if read_only is not None:
             self._name_rows_read_only = bool(read_only)
         self._apply_visual_profile_to_all_rows()
@@ -541,6 +566,7 @@ class NameRowWidget(QtWidgets.QWidget):
 
         self.edit = NameLineEdit()
         self.edit.setText(item.text())
+        self.edit.setToolTip(str(item.text() or ""))
         # Keep field flexible, but avoid forcing row overflow with subrole checkboxes.
         if subrole_labels:
             min_name_width = int(getattr(list_widget, "_name_min_width_with_subroles", 188))
@@ -562,13 +588,20 @@ class NameRowWidget(QtWidgets.QWidget):
 
         self.subrole_checks: list[QtWidgets.QCheckBox] = []
         self._subrole_group: QtWidgets.QWidget | None = None
+        self._subrole_layout: QtWidgets.QHBoxLayout | None = None
         if subrole_labels:
             self._subrole_group = QtWidgets.QWidget(self)
             group_policy = self._subrole_group.sizePolicy()
             group_policy.setRetainSizeWhenHidden(True)
             self._subrole_group.setSizePolicy(group_policy)
             subrole_layout = QtWidgets.QHBoxLayout(self._subrole_group)
-            subrole_layout.setContentsMargins(6, 0, 0, 0)
+            self._subrole_layout = subrole_layout
+            subrole_layout.setContentsMargins(
+                SUBROLE_GROUP_LEFT_MARGIN,
+                0,
+                SUBROLE_GROUP_RIGHT_MARGIN,
+                0,
+            )
             subrole_layout.setSpacing(SUBROLE_CHECK_SPACING)
             for lbl in subrole_labels:
                 cb = QtWidgets.QCheckBox(lbl)
@@ -604,6 +637,34 @@ class NameRowWidget(QtWidgets.QWidget):
             layout.addWidget(delete_cell, 0, QtCore.Qt.AlignVCenter)
         # Kein automatischer Fokus auf neue/leer Zeilen
 
+    def apply_subrole_visual_profile(
+        self,
+        *,
+        left_margin: int,
+        right_margin: int,
+        spacing: int,
+        checkbox_hpadding: int,
+    ) -> None:
+        if self._subrole_layout is not None:
+            self._subrole_layout.setContentsMargins(
+                max(0, int(left_margin)),
+                0,
+                max(0, int(right_margin)),
+                0,
+            )
+            self._subrole_layout.setSpacing(max(0, int(spacing)))
+        if checkbox_hpadding > 0:
+            style = (
+                "QCheckBox { "
+                f"padding-left: {int(checkbox_hpadding)}px; "
+                f"padding-right: {int(checkbox_hpadding)}px; "
+                "}"
+            )
+        else:
+            style = ""
+        for cb in self.subrole_checks:
+            cb.setStyleSheet(style)
+
     def focus_name(self, force: bool = False):
         if force:
             self.edit.setFocus(QtCore.Qt.OtherFocusReason)
@@ -635,6 +696,7 @@ class NameRowWidget(QtWidgets.QWidget):
     def _on_text_changed(self, text: str):
         old_text = self.item.text().strip()
         new_text = text.strip()
+        self.edit.setToolTip(new_text)
         if not old_text and new_text:
             self.item.setCheckState(QtCore.Qt.Checked)
             self.chk_active.setChecked(True)

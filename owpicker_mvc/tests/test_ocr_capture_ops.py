@@ -663,6 +663,33 @@ class TestOCRCaptureOps(unittest.TestCase):
         self.assertIn("The Bookseller", merged_text)
         self.assertIsNone(error)
 
+    def test_expand_config_identifier_prefixes_completes_unique_prefixes(self):
+        names = [
+            "TOOLTIP_CACHE_ON_STA",
+            "SOUND_WARMUP_LAZY_ST",
+            "MAP_PREBUILD_ON_ST",
+            "SOUND WARMUP ON ST",
+        ]
+        with patch(
+            "controller.ocr_capture_ops._config_identifier_hints",
+            return_value=(
+                "TOOLTIP_CACHE_ON_START",
+                "SOUND_WARMUP_LAZY_STEP_MS",
+                "MAP_PREBUILD_ON_START",
+                "SOUND_WARMUP_ON_START",
+            ),
+        ):
+            resolved = ocr_capture_ops._expand_config_identifier_prefixes(names)
+        self.assertEqual(
+            resolved,
+            [
+                "TOOLTIP_CACHE_ON_START",
+                "SOUND_WARMUP_LAZY_STEP_MS",
+                "MAP_PREBUILD_ON_START",
+                "SOUND_WARMUP_ON_START",
+            ],
+        )
+
     def test_extract_names_filters_low_confidence_singletons(self):
         outputs = [
             "Aero\nAJAR\nMassith\nMika\nMNKE",
@@ -744,6 +771,45 @@ class TestOCRCaptureOps(unittest.TestCase):
             self.assertIn("role=DPS", content)
             self.assertIn("candidates=2", content)
             self.assertIn("[OCR Debug Report]", content)
+
+    def test_on_role_ocr_import_reenables_buttons_when_capture_is_cancelled(self):
+        class _DummyButton:
+            def __init__(self) -> None:
+                self.enabled = True
+                self.states: list[bool] = []
+
+            def setEnabled(self, enabled: bool) -> None:
+                self.enabled = bool(enabled)
+                self.states.append(self.enabled)
+
+        btn = _DummyButton()
+        update_calls = {"count": 0}
+
+        def _update_all_buttons() -> None:
+            update_calls["count"] += 1
+            btn.setEnabled(True)
+
+        mw = SimpleNamespace(
+            _role_ocr_import_available=lambda role_key: True,
+            _ocr_async_job=None,
+            _update_role_ocr_button_enabled=lambda role_key: btn.setEnabled(True),
+            _update_role_ocr_buttons_enabled=_update_all_buttons,
+            _role_ocr_buttons={"dps": btn},
+        )
+
+        with (
+            patch("controller.ocr_capture_ops._mark_ocr_runtime_activated"),
+            patch("controller.ocr_capture_ops._cancel_ocr_cache_release"),
+            patch("controller.ocr_capture_ops.capture_region_for_ocr", return_value=(None, "cancelled")),
+            patch("controller.ocr_capture_ops._handle_ocr_selection_error", return_value=True),
+            patch("controller.ocr_capture_ops._schedule_ocr_cache_release") as schedule_mock,
+        ):
+            ocr_capture_ops.on_role_ocr_import_clicked(mw, "dps")
+
+        self.assertIn(False, btn.states)
+        self.assertTrue(btn.enabled)
+        self.assertEqual(update_calls["count"], 1)
+        schedule_mock.assert_called_once_with(mw)
 
     def test_show_ocr_busy_overlay_uses_status_message_style(self):
         class _DummyOverlay:

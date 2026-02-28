@@ -119,6 +119,8 @@ def _names_list_style(theme: theme_util.Theme) -> str:
     cached = _NAMES_LIST_STYLE_CACHE.get(theme.key)
     if cached is not None:
         return cached
+    name_edit_border = theme.frame_border if theme.key == "dark" else theme.border
+    name_edit_focus_border = theme.border if theme.key == "dark" else theme.primary_hover
     dark_checkbox_overrides = ""
     if theme.key == "dark":
         # Improve state visibility in dark mode without affecting light/base.
@@ -152,6 +154,14 @@ def _names_list_style(theme: theme_util.Theme) -> str:
         "}"
         f"QListWidget::item {{ color:{theme.text}; }}"
         f"QListWidget::item:selected {{ background:{theme.alt_base}; color:{theme.text}; }}"
+        "QListWidget QLineEdit {"
+        f" background:{theme.base}; color:{theme.text};"
+        f" border:1px solid {name_edit_border}; border-radius:4px; padding:0 4px;"
+        f" selection-background-color:{theme.primary}; selection-color:{theme.button_text};"
+        "}"
+        "QListWidget QLineEdit:focus {"
+        f" border:1px solid {name_edit_focus_border};"
+        "}"
         f"{dark_checkbox_overrides}"
     )
     _NAMES_LIST_STYLE_CACHE[theme.key] = cached

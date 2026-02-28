@@ -1348,6 +1348,7 @@ _OCR_BULLET_RE = re.compile(r"^\s*[-*•|]+\s*")
 _OCR_METADATA_PIPE_RE = re.compile(r"\s*[|¦｜┃│┆┇╎╏]+\s*")
 _OCR_SPACE_RE = re.compile(r"\s+")
 _OCR_ALLOWED_CHARS_RE = re.compile(r"[^\w .\-#]", flags=re.UNICODE)
+_OCR_ASSIGNMENT_SPLIT_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]{2,95})\s*(?::=|=)\s*(.+?)\s*$")
 _OCR_HAS_ALPHA_RE = re.compile(r"[^\W\d_]", flags=re.UNICODE)
 _OCR_LEADING_ICON_RE = re.compile(r"^\s*[@©®™$%&*]+\s*")
 _OCR_TRAILING_PAREN_METADATA_RE = re.compile(r"\s*(?:[\(\[\{<][^\)\]\}>]{1,48}[\)\]\}>])+\s*$")
@@ -1434,6 +1435,39 @@ def _strip_metadata_suffix_ocr_token(line: str) -> str:
     return head or line
 
 
+def _looks_like_constant_identifier(value: str) -> bool:
+    token = str(value or "").strip(" .-_")
+    if "_" not in token:
+        return False
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{2,95}", token):
+        return False
+    alpha = [ch for ch in token if ch.isalpha()]
+    if not alpha:
+        return False
+    upper_ratio = sum(1 for ch in alpha if ch.isupper()) / max(1, len(alpha))
+    return upper_ratio >= 0.8
+
+
+def _strip_assignment_suffix_ocr_token(line: str) -> str:
+    """
+    Convert assignment-like OCR lines into their left identifier, e.g.
+    'MAP_PREBUILD_ON_START = False' -> 'MAP_PREBUILD_ON_START'.
+    """
+    text = str(line or "").strip()
+    if not text:
+        return text
+    match = _OCR_ASSIGNMENT_SPLIT_RE.match(text)
+    if not match:
+        return text
+    left = str(match.group(1) or "").strip()
+    right = str(match.group(2) or "").strip()
+    if not left or not right:
+        return text
+    if not _looks_like_constant_identifier(left):
+        return text
+    return left
+
+
 def _looks_like_name(
     value: str,
     *,
@@ -1484,6 +1518,21 @@ def _display_name_quality(value: str) -> tuple[int, int]:
     return (separators, -len(value))
 
 
+def _should_prefer_display_name(current_name: str, candidate_name: str) -> bool:
+    current = str(current_name or "").strip()
+    candidate = str(candidate_name or "").strip()
+    if not candidate:
+        return False
+    if not current:
+        return True
+    if _is_constant_prefix_variant(current, candidate):
+        return len(candidate) > len(current)
+    if _looks_like_constant_identifier(current) and _looks_like_constant_identifier(candidate):
+        if len(candidate) != len(current):
+            return len(candidate) > len(current)
+    return _display_name_quality(candidate) < _display_name_quality(current)
+
+
 def _normalized_tokens(value: str) -> list[str]:
     return normalize_name_tokens(value)
 
@@ -1500,6 +1549,19 @@ def _is_numeric_suffix_variant(left_key: str, right_key: str) -> bool:
     else:
         return False
     return bool(suffix) and suffix.isdigit()
+
+
+def _is_constant_prefix_variant(left_name: str, right_name: str) -> bool:
+    left = str(left_name or "").strip()
+    right = str(right_name or "").strip()
+    if not left or not right or left == right:
+        return False
+    if not (_looks_like_constant_identifier(left) and _looks_like_constant_identifier(right)):
+        return False
+    shorter, longer = (left, right) if len(left) <= len(right) else (right, left)
+    if len(longer) - len(shorter) > 8:
+        return False
+    return longer.startswith(shorter)
 
 
 def _find_near_duplicate_key(
@@ -1537,6 +1599,9 @@ def _find_near_duplicate_key(
             # Keep explicit numeric suffix variants when both appear in the
             # same OCR text pass (likely distinct rows, e.g. Name / Name2).
             continue
+        if _is_constant_prefix_variant(current_name, name):
+            # Merge OCR truncation variants like *_ON_ST and *_ON_START.
+            return current
         if len(current) < max(1, int(min_chars)):
             continue
         score = 0.0
@@ -1573,6 +1638,7 @@ def _extract_candidate_names_impl(
     max_chars: int = 24,
     max_words: int = 2,
     max_digit_ratio: float = 0.45,
+    enforce_special_char_constraint: bool = True,
     include_debug: bool = False,
 ) -> tuple[list[str], list[dict]]:
     if not text:
@@ -1604,14 +1670,15 @@ def _extract_candidate_names_impl(
         normalized = _OCR_BULLET_RE.sub("", normalized)
         had_leading_icon = bool(_OCR_LEADING_ICON_RE.match(normalized))
         normalized = _OCR_LEADING_ICON_RE.sub("", normalized)
-        # The OCR list is expected to be line-based. Ignore metadata suffix after
-        # common pipe-like separators ("|", "¦", "｜", ...).
-        normalized = _OCR_METADATA_PIPE_RE.split(normalized, 1)[0].strip()
-        normalized = _strip_metadata_suffix_ocr_token(normalized)
-        # Ignore everything after the first emoji/icon in a line.
-        normalized = _strip_after_first_emoji(normalized)
-        normalized = _OCR_TRAILING_PAREN_METADATA_RE.sub("", normalized).strip()
-        normalized = _strip_trailing_short_noise_suffix(normalized).strip()
+        if enforce_special_char_constraint:
+            # The OCR list is expected to be line-based. Ignore metadata suffix
+            # after common pipe-like separators ("|", "¦", "｜", ...).
+            normalized = _OCR_METADATA_PIPE_RE.split(normalized, 1)[0].strip()
+            normalized = _strip_metadata_suffix_ocr_token(normalized)
+            # Ignore everything after the first emoji/icon in a line.
+            normalized = _strip_after_first_emoji(normalized)
+            normalized = _OCR_TRAILING_PAREN_METADATA_RE.sub("", normalized).strip()
+            normalized = _strip_trailing_short_noise_suffix(normalized).strip()
         if debug_entry is not None:
             debug_entry["after_metadata"] = str(normalized)
         if not normalized:
@@ -1620,9 +1687,13 @@ def _extract_candidate_names_impl(
                 debug_entry["reason"] = "empty-after-metadata-trim"
                 line_debug.append(debug_entry)
             continue
-        normalized = _OCR_EMOJI_ICON_RE.sub(" ", normalized)
-        part = _OCR_ALLOWED_CHARS_RE.sub(" ", normalized)
+        if enforce_special_char_constraint:
+            normalized = _OCR_EMOJI_ICON_RE.sub(" ", normalized)
+            part = _OCR_ALLOWED_CHARS_RE.sub(" ", normalized)
+        else:
+            part = normalized
         part = _OCR_SPACE_RE.sub(" ", part).strip(" .-_")
+        part = _strip_assignment_suffix_ocr_token(part)
         if debug_entry is not None:
             debug_entry["cleaned"] = str(part)
         if not part:
@@ -1637,10 +1708,14 @@ def _extract_candidate_names_impl(
                 debug_entry["reason"] = "icon-prefixed-short-upper"
                 line_debug.append(debug_entry)
             continue
+        effective_max_len = max_len
+        if _looks_like_constant_identifier(part):
+            # Config-like identifiers can be longer than player-name defaults.
+            effective_max_len = max(max_len, 64)
         if not _looks_like_name(
             part,
             min_chars=min_len,
-            max_chars=max_len,
+            max_chars=effective_max_len,
             max_words=word_limit,
             max_digit_ratio=digit_ratio,
         ):
@@ -1675,6 +1750,7 @@ def extract_candidate_names(
     max_chars: int = 24,
     max_words: int = 2,
     max_digit_ratio: float = 0.45,
+    enforce_special_char_constraint: bool = True,
 ) -> list[str]:
     found, _ = _extract_candidate_names_impl(
         text,
@@ -1682,6 +1758,7 @@ def extract_candidate_names(
         max_chars=max_chars,
         max_words=max_words,
         max_digit_ratio=max_digit_ratio,
+        enforce_special_char_constraint=enforce_special_char_constraint,
         include_debug=False,
     )
     return found
@@ -1694,6 +1771,7 @@ def extract_candidate_names_debug(
     max_chars: int = 24,
     max_words: int = 2,
     max_digit_ratio: float = 0.45,
+    enforce_special_char_constraint: bool = True,
 ) -> tuple[list[str], list[dict]]:
     return _extract_candidate_names_impl(
         text,
@@ -1701,6 +1779,7 @@ def extract_candidate_names_debug(
         max_chars=max_chars,
         max_words=max_words,
         max_digit_ratio=max_digit_ratio,
+        enforce_special_char_constraint=enforce_special_char_constraint,
         include_debug=True,
     )
 
@@ -1712,6 +1791,7 @@ def extract_candidate_names_multi(
     max_chars: int = 24,
     max_words: int = 2,
     max_digit_ratio: float = 0.45,
+    enforce_special_char_constraint: bool = True,
     min_support: int = 1,
     high_count_threshold: int = 8,
     high_count_min_support: int = 2,
@@ -1736,6 +1816,7 @@ def extract_candidate_names_multi(
             max_chars=max_chars,
             max_words=max_words,
             max_digit_ratio=max_digit_ratio,
+            enforce_special_char_constraint=enforce_special_char_constraint,
         )
         coexisting_keys = {
             _candidate_key(candidate)
@@ -1772,7 +1853,7 @@ def extract_candidate_names_multi(
                 new_count > current_count
                 or (
                     new_count == current_count
-                    and _display_name_quality(name) < _display_name_quality(current_name)
+                    and _should_prefer_display_name(current_name, name)
                 )
             ):
                 display_names[key] = name
