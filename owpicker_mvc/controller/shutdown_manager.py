@@ -147,4 +147,7 @@ def handle_close_event(mw, event: QtGui.QCloseEvent) -> None:
     if bool(_cfg(mw, "TRACE_SHUTDOWN", False)):
         mw._trace_event("shutdown_snapshot", stage="pre_super", **shutdown_resource_snapshot(mw))
 
-    super(type(mw), mw).closeEvent(event)
+    # After MainWindow was split into mixins, `super(type(mw), mw)` resolves
+    # back to MainWindowShutdownMixin.closeEvent and recurses.
+    # Call the Qt base implementation directly to finish close safely.
+    QtWidgets.QMainWindow.closeEvent(mw, event)
