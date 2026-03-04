@@ -464,6 +464,9 @@ def _ocr_runtime_cfg_snapshot(mw) -> dict:
         "row_pass_max_rows": int(mw._cfg("OCR_ROW_PASS_MAX_ROWS", 12)),
         "row_pass_pad_px": int(mw._cfg("OCR_ROW_PASS_PAD_PX", 2)),
         "row_pass_name_x_ratio": float(mw._cfg("OCR_ROW_PASS_NAME_X_RATIO", 0.58)),
+        "row_pass_full_width_fallback": bool(
+            mw._cfg("OCR_ROW_PASS_FULL_WIDTH_FALLBACK", True)
+        ),
         "row_pass_projection_x_start_ratio": float(
             mw._cfg("OCR_ROW_PASS_PROJECTION_X_START_RATIO", 0.08)
         ),
@@ -640,14 +643,19 @@ def _expand_config_identifier_prefixes(names: list[str]) -> list[str]:
     return resolved
 
 
-def _extract_names_from_texts(ocr_import, texts: list[str], cfg: dict) -> list[str]:
-    return ocr_import.extract_candidate_names_multi(
-        texts,
-        min_chars=int(cfg.get("name_min_chars", 2)),
-        max_chars=int(cfg.get("name_max_chars", 24)),
-        max_words=int(cfg.get("name_max_words", 2)),
-        max_digit_ratio=float(cfg.get("name_max_digit_ratio", 0.45)),
-        enforce_special_char_constraint=bool(cfg.get("name_special_char_constraint", True)),
+def _line_extractor_kwargs(cfg: dict) -> dict[str, object]:
+    return {
+        "min_chars": int(cfg.get("name_min_chars", 2)),
+        "max_chars": int(cfg.get("name_max_chars", 24)),
+        "max_words": int(cfg.get("name_max_words", 2)),
+        "max_digit_ratio": float(cfg.get("name_max_digit_ratio", 0.45)),
+        "enforce_special_char_constraint": bool(cfg.get("name_special_char_constraint", True)),
+    }
+
+
+def _multi_extractor_kwargs(cfg: dict) -> dict[str, object]:
+    kwargs = _line_extractor_kwargs(cfg)
+    kwargs.update(
         min_support=int(cfg.get("name_min_support", 1)),
         high_count_threshold=int(cfg.get("name_high_count_threshold", 8)),
         high_count_min_support=int(cfg.get("name_high_count_min_support", 2)),
@@ -658,6 +666,108 @@ def _extract_names_from_texts(ocr_import, texts: list[str], cfg: dict) -> list[s
         near_dup_tail_min_chars=int(cfg.get("name_near_dup_tail_min_chars", 3)),
         near_dup_tail_head_similarity=float(cfg.get("name_near_dup_tail_head_similarity", 0.70)),
     )
+    return kwargs
+
+
+def _line_entry_text(value) -> str:
+    if isinstance(value, dict):
+        return str(value.get("text", "") or "").strip()
+    return str(getattr(value, "text", "") or "").strip()
+
+
+def _line_entry_conf(value) -> float:
+    try:
+        if isinstance(value, dict):
+            return float(value.get("conf", value.get("confidence", -1.0)))
+        return float(getattr(value, "confidence", -1.0))
+    except Exception:
+        return -1.0
+
+
+def _line_entries_from_run_result(run_result) -> list[dict]:
+    line_entries: list[dict] = []
+    for entry in tuple(getattr(run_result, "lines", ()) or ()):
+        line_text = _line_entry_text(entry)
+        if not line_text:
+            continue
+        line_entries.append({"text": line_text, "conf": _line_entry_conf(entry)})
+    if line_entries:
+        return line_entries
+    for raw_line in str(getattr(run_result, "text", "") or "").splitlines():
+        line_text = raw_line.strip()
+        if line_text:
+            line_entries.append({"text": line_text, "conf": -1.0})
+    return line_entries
+
+
+class _OCRLineParseContext:
+    """Caches OCR line parsing/debug extraction for one import run."""
+
+    def __init__(self, ocr_import, cfg: dict):
+        self._ocr_import = ocr_import
+        self._line_kwargs = _line_extractor_kwargs(cfg)
+        self._line_cache: dict[str, tuple[str, ...]] = {}
+        self._debug_cache: dict[str, tuple[list[str], list[dict]]] = {}
+
+    def extract_line_candidates(self, line_text: str) -> list[str]:
+        text = str(line_text or "").strip()
+        if not text:
+            return []
+        cached = self._line_cache.get(text)
+        if cached is not None:
+            return list(cached)
+        extractor = getattr(self._ocr_import, "extract_candidate_names", None)
+        if not callable(extractor):
+            self._line_cache[text] = ()
+            return []
+        try:
+            parsed = [
+                str(value).strip()
+                for value in list(extractor(text, **self._line_kwargs) or [])
+                if str(value).strip()
+            ]
+        except Exception:
+            parsed = []
+        cached_value = tuple(parsed)
+        self._line_cache[text] = cached_value
+        return list(cached_value)
+
+    def extract_debug_for_text(self, text: str) -> tuple[list[str], list[dict]]:
+        normalized = str(text or "")
+        cached = self._debug_cache.get(normalized)
+        if cached is not None:
+            return list(cached[0]), [dict(entry) for entry in cached[1]]
+        extractor = getattr(self._ocr_import, "extract_candidate_names_debug", None)
+        if not callable(extractor):
+            self._debug_cache[normalized] = ([], [])
+            return [], []
+        try:
+            names, entries = extractor(normalized, **self._line_kwargs)
+            resolved_names = [str(name).strip() for name in list(names or []) if str(name).strip()]
+            resolved_entries = [dict(entry) for entry in list(entries or []) if isinstance(entry, dict)]
+        except Exception:
+            resolved_names, resolved_entries = [], []
+        self._debug_cache[normalized] = (list(resolved_names), list(resolved_entries))
+        return list(resolved_names), [dict(entry) for entry in resolved_entries]
+
+
+def _extract_names_from_texts(ocr_import, texts: list[str], cfg: dict) -> list[str]:
+    extractor = getattr(ocr_import, "extract_candidate_names_multi", None)
+    if callable(extractor):
+        return extractor(texts, **_multi_extractor_kwargs(cfg))
+    # Legacy fallback for lightweight test stubs without multi support.
+    line_ctx = _OCRLineParseContext(ocr_import, cfg)
+    seen: set[str] = set()
+    resolved: list[str] = []
+    for text in list(texts or []):
+        for raw_line in str(text or "").splitlines():
+            for candidate in line_ctx.extract_line_candidates(raw_line):
+                key = _simple_name_key(candidate)
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                resolved.append(candidate)
+    return resolved
 
 
 def _run_ocr_pass(
@@ -713,22 +823,7 @@ def _run_ocr_pass(
                 lang=lang,
                 stop_on_first_success=stop_after_variant_success,
             )
-        line_entries: list[dict] = []
-        for line_entry in tuple(getattr(run_result, "lines", ()) or ()):
-            line_text = str(getattr(line_entry, "text", "") or "").strip()
-            if not line_text:
-                continue
-            try:
-                conf_value = float(getattr(line_entry, "confidence", -1.0))
-            except Exception:
-                conf_value = -1.0
-            line_entries.append({"text": line_text, "conf": conf_value})
-        if not line_entries:
-            for raw_line in str(run_result.text or "").splitlines():
-                line_text = raw_line.strip()
-                if not line_text:
-                    continue
-                line_entries.append({"text": line_text, "conf": -1.0})
+        line_entries = _line_entries_from_run_result(run_result)
         runs.append(
             {
                 "pass": str(pass_label),
@@ -738,17 +833,17 @@ def _run_ocr_pass(
                 "timeout_s": timeout_s,
                 "lang": str(lang or ""),
                 "fast_mode": bool(fast_mode),
-                "text": str(run_result.text or ""),
-                "error": str(run_result.error or ""),
+                "text": str(getattr(run_result, "text", "") or ""),
+                "error": str(getattr(run_result, "error", "") or ""),
                 "lines": line_entries,
             }
         )
-        if run_result.text:
-            all_texts.append(run_result.text)
+        if getattr(run_result, "text", ""):
+            all_texts.append(str(getattr(run_result, "text", "")))
             if stop_after_variant_success:
                 break
-        elif run_result.error:
-            errors.append(run_result.error)
+        elif getattr(run_result, "error", ""):
+            errors.append(str(getattr(run_result, "error", "")))
     return all_texts, errors, runs
 
 
@@ -759,33 +854,15 @@ def _truncate_report_text(value: str, max_chars: int) -> str:
     return text[:max_chars].rstrip() + "\n...<truncated>"
 
 
-def _extract_line_debug_for_text(ocr_import, text: str, cfg: dict) -> tuple[list[str], list[dict]]:
-    extractor = getattr(ocr_import, "extract_candidate_names_debug", None)
-    if not callable(extractor):
-        return [], []
-    try:
-        names, entries = extractor(
-            text,
-            min_chars=int(cfg.get("name_min_chars", 2)),
-            max_chars=int(cfg.get("name_max_chars", 24)),
-            max_words=int(cfg.get("name_max_words", 2)),
-            max_digit_ratio=float(cfg.get("name_max_digit_ratio", 0.45)),
-            enforce_special_char_constraint=bool(cfg.get("name_special_char_constraint", True)),
-        )
-    except Exception:
-        return [], []
-    return list(names or []), list(entries or [])
+def _extract_line_debug_for_text(parse_ctx: _OCRLineParseContext, text: str) -> tuple[list[str], list[dict]]:
+    return parse_ctx.extract_debug_for_text(text)
 
 
-def _candidate_stats_from_runs(ocr_import, runs: list[dict], cfg: dict) -> dict[str, dict[str, float | int | str]]:
-    extractor = getattr(ocr_import, "extract_candidate_names", None)
-    if not callable(extractor):
-        return {}
+def _candidate_stats_from_runs(
+    runs: list[dict],
+    parse_ctx: _OCRLineParseContext,
+) -> dict[str, dict[str, float | int | str]]:
     stats: dict[str, dict[str, float | int | str]] = {}
-    min_chars = int(cfg.get("name_min_chars", 2))
-    max_chars = int(cfg.get("name_max_chars", 24))
-    max_words = int(cfg.get("name_max_words", 2))
-    max_digit_ratio = float(cfg.get("name_max_digit_ratio", 0.45))
 
     for run_idx, run in enumerate(runs):
         seen_in_run: set[str] = set()
@@ -804,14 +881,7 @@ def _candidate_stats_from_runs(ocr_import, runs: list[dict], cfg: dict) -> dict[
                 line_conf = float(line.get("conf", -1.0))
             except Exception:
                 line_conf = -1.0
-            parsed_names = extractor(
-                line_text,
-                min_chars=min_chars,
-                max_chars=max_chars,
-                max_words=max_words,
-                max_digit_ratio=max_digit_ratio,
-                enforce_special_char_constraint=bool(cfg.get("name_special_char_constraint", True)),
-            )
+            parsed_names = parse_ctx.extract_line_candidates(line_text)
             for parsed in parsed_names:
                 key = _simple_name_key(parsed)
                 if not key:
@@ -867,14 +937,12 @@ def _candidate_set_looks_noisy(names: list[str], cfg: dict) -> bool:
 
 
 def _filter_low_confidence_candidates(
-    ocr_import,
     names: list[str],
-    runs: list[dict],
     cfg: dict,
+    stats: dict[str, dict[str, float | int | str]],
 ) -> list[str]:
     if not names:
         return []
-    stats = _candidate_stats_from_runs(ocr_import, runs, cfg)
     if not stats:
         return list(names)
 
@@ -909,6 +977,58 @@ def _filter_low_confidence_candidates(
     if not filtered:
         return list(names)
     return filtered
+
+
+def _merge_prefix_candidate_stats(
+    stats: dict[str, dict[str, float | int | str]],
+) -> dict[str, dict[str, float | int | str]]:
+    """Merge truncated prefix variants into their longer candidate."""
+    merged: dict[str, dict[str, float | int | str]] = {
+        str(key): dict(value or {})
+        for key, value in dict(stats or {}).items()
+        if str(key).strip()
+    }
+    if len(merged) <= 1:
+        return merged
+
+    keys_by_length = sorted(
+        list(merged.keys()),
+        key=lambda key: len(str((merged.get(key) or {}).get("display", "") or "").strip()),
+        reverse=True,
+    )
+    removed: set[str] = set()
+    for long_key in keys_by_length:
+        if long_key in removed or long_key not in merged:
+            continue
+        long_bucket = merged.get(long_key) or {}
+        long_display = str(long_bucket.get("display", "") or "").strip()
+        if not long_display:
+            continue
+        long_fold = long_display.casefold()
+        for short_key, short_bucket in list(merged.items()):
+            if short_key == long_key or short_key in removed:
+                continue
+            short_display = str((short_bucket or {}).get("display", "") or "").strip()
+            if len(short_display) < 6:
+                continue
+            if (len(long_display) - len(short_display)) > 20:
+                continue
+            short_fold = short_display.casefold()
+            if not long_fold.startswith(short_fold + " "):
+                continue
+            target = merged.get(long_key)
+            if target is None:
+                continue
+            target["support"] = int(target.get("support", 0)) + int(short_bucket.get("support", 0))
+            target["occurrences"] = int(target.get("occurrences", 0)) + int(short_bucket.get("occurrences", 0))
+            target["best_conf"] = max(
+                float(target.get("best_conf", -1.0)),
+                float(short_bucket.get("best_conf", -1.0)),
+            )
+            removed.add(short_key)
+    for key in removed:
+        merged.pop(key, None)
+    return merged
 
 
 def _should_run_row_pass(cfg: dict, names: list[str]) -> bool:
@@ -1017,16 +1137,19 @@ def _select_candidate_keys_from_stats(
 
 def _build_final_names_from_runs(
     *,
-    ocr_import,
     cfg: dict,
+    stats: dict[str, dict[str, float | int | str]],
     preferred_names: list[str],
     primary_names: list[str],
     retry_names: list[str],
     row_names: list[str],
-    all_runs: list[dict],
     row_preferred: bool = False,
 ) -> list[str]:
-    stats = _candidate_stats_from_runs(ocr_import, all_runs, cfg)
+    stats = {
+        str(key): dict(bucket or {})
+        for key, bucket in dict(stats or {}).items()
+        if str(key).strip()
+    }
     for seed_name in list(preferred_names) + list(primary_names) + list(retry_names) + list(row_names):
         text = str(seed_name or "").strip()
         key = _simple_name_key(text)
@@ -1041,7 +1164,16 @@ def _build_final_names_from_runs(
             bucket["display"] = text
 
     if not stats:
-        return _dedupe_names_in_order(list(row_names) + list(retry_names) + list(primary_names))
+        ordered_seeds = list(preferred_names)
+        if row_preferred:
+            ordered_seeds.extend(list(row_names))
+            ordered_seeds.extend(list(primary_names))
+            ordered_seeds.extend(list(retry_names))
+        else:
+            ordered_seeds.extend(list(primary_names))
+            ordered_seeds.extend(list(retry_names))
+            ordered_seeds.extend(list(row_names))
+        return _dedupe_names_in_order(ordered_seeds)
 
     ranked_all = sorted(
         stats.items(),
@@ -1098,23 +1230,38 @@ def _build_final_names_from_runs(
         else:
             selected_keys = preferred_set
 
-    ordered_keys: list[str] = []
-    seen_keys: set[str] = set()
-    for seed in list(row_names) + list(preferred_names) + list(primary_names) + list(retry_names):
-        key = _simple_name_key(seed)
-        if not key or key in seen_keys or key not in selected_keys:
-            continue
-        seen_keys.add(key)
-        ordered_keys.append(key)
+    seed_sequences: list[list[str]] = [list(preferred_names)]
+    if row_preferred:
+        seed_sequences.extend([list(row_names), list(primary_names), list(retry_names)])
+    else:
+        seed_sequences.extend([list(primary_names), list(retry_names), list(row_names)])
 
-    remaining = [key for key in selected_keys if key not in seen_keys]
-    remaining.sort(
-        key=lambda key: (
-            -_candidate_bucket_score(stats.get(key, {}), cfg),
-            _name_display_quality(str(stats.get(key, {}).get("display", ""))),
+    seed_key_order: list[str] = []
+    seen_seed_keys: set[str] = set()
+    for sequence in seed_sequences:
+        for seed in sequence:
+            key = _simple_name_key(seed)
+            if not key or key in seen_seed_keys:
+                continue
+            seen_seed_keys.add(key)
+            seed_key_order.append(key)
+    for key in stats.keys():
+        if key in seen_seed_keys:
+            continue
+        seen_seed_keys.add(key)
+        seed_key_order.append(key)
+
+    ordered_keys = [key for key in seed_key_order if key in selected_keys]
+    ordered_key_set = set(ordered_keys)
+    if len(ordered_keys) < len(selected_keys):
+        remaining = [key for key in selected_keys if key not in ordered_key_set]
+        remaining.sort(
+            key=lambda key: (
+                -_candidate_bucket_score(stats.get(key, {}), cfg),
+                _name_display_quality(str(stats.get(key, {}).get("display", ""))),
+            )
         )
-    )
-    ordered_keys.extend(remaining)
+        ordered_keys.extend(remaining)
 
     names = [str(stats[key].get("display", "")).strip() for key in ordered_keys if key in stats]
     names = [name for name in names if name]
@@ -1307,10 +1454,84 @@ def _build_row_image_variants(row_img: QtGui.QImage, cfg: dict) -> list[tuple[st
     return variants
 
 
+def _row_image_looks_right_clipped(row_img: QtGui.QImage, cfg: dict) -> bool:
+    """Heuristic: bright pixels at the right edge suggest horizontal clipping."""
+    if row_img is None or row_img.isNull():
+        return False
+    width = int(row_img.width())
+    height = int(row_img.height())
+    if width < 20 or height < 4:
+        return False
+
+    probe_ratio = max(0.02, min(0.40, float(cfg.get("row_pass_right_edge_probe_ratio", 0.08))))
+    edge_px = max(2, min(10, int(width * probe_ratio)))
+    edge_px = min(edge_px, width)
+    if edge_px <= 0:
+        return False
+
+    bright_threshold = max(
+        0,
+        min(255, int(cfg.get("row_pass_brightness_threshold", 145)) - 12),
+    )
+    start_x = max(0, width - edge_px)
+    bright_pixels = 0
+    total_pixels = edge_px * height
+    for y in range(height):
+        for x in range(start_x, width):
+            if QtGui.qGray(row_img.pixel(x, y)) >= bright_threshold:
+                bright_pixels += 1
+    bright_ratio = bright_pixels / max(1, total_pixels)
+    min_ratio = max(0.03, min(0.90, float(cfg.get("row_pass_right_edge_bright_ratio", 0.12))))
+    return bright_ratio >= min_ratio
+
+
 def _name_display_quality(value: str) -> tuple[int, int]:
     text = str(value or "").strip()
     separators = sum(1 for ch in text if not ch.isalnum())
     return (separators, -len(text))
+
+
+def _merge_row_prefix_variants(votes: dict[str, dict[str, object]]) -> int:
+    """
+    Merge row-vote entries where one display is a prefix of another display.
+    This helps when narrow crops produce truncated names and full-width retry
+    produces the same row with full suffix.
+    """
+    if len(votes) <= 1:
+        return max((int(bucket.get("count", 0)) for bucket in votes.values()), default=0)
+
+    removed: set[str] = set()
+    ordered = sorted(
+        list(votes.items()),
+        key=lambda item: len(str((item[1] or {}).get("display", "") or "").strip()),
+        reverse=True,
+    )
+    for long_key, long_bucket in ordered:
+        if long_key in removed or long_key not in votes:
+            continue
+        long_display = str((votes.get(long_key) or {}).get("display", "") or "").strip()
+        if not long_display:
+            continue
+        long_fold = long_display.casefold()
+        for short_key, short_bucket in list(votes.items()):
+            if short_key == long_key or short_key in removed:
+                continue
+            short_display = str((short_bucket or {}).get("display", "") or "").strip()
+            if len(short_display) < 6:
+                continue
+            short_fold = short_display.casefold()
+            if not long_fold.startswith(short_fold + " "):
+                continue
+            target = votes.get(long_key)
+            if target is None:
+                continue
+            target["count"] = int(target.get("count", 0)) + int(short_bucket.get("count", 0))
+            target["conf_sum"] = float(target.get("conf_sum", 0.0)) + float(short_bucket.get("conf_sum", 0.0))
+            target["conf_weight"] = float(target.get("conf_weight", 0.0)) + float(short_bucket.get("conf_weight", 0.0))
+            removed.add(short_key)
+    for key in removed:
+        votes.pop(key, None)
+    return max((int(bucket.get("count", 0)) for bucket in votes.values()), default=0)
 
 
 def _select_row_names_from_ranked_votes(
@@ -1368,6 +1589,7 @@ def _run_row_segmentation_pass(
     paths: list[Path],
     *,
     cfg: dict,
+    parse_ctx: _OCRLineParseContext,
 ) -> tuple[list[str], list[str], list[dict]]:
     ocr_import = _ocr_import_module()
     selected_paths = _select_variant_paths(paths, cfg, max_variants_key="max_variants")
@@ -1388,19 +1610,6 @@ def _run_row_segmentation_pass(
     seen_keys: set[str] = set()
     row_texts: list[str] = []
     runs: list[dict] = []
-
-    def _entry_text(entry) -> str:
-        if isinstance(entry, dict):
-            return str(entry.get("text", "") or "").strip()
-        return str(getattr(entry, "text", "") or "").strip()
-
-    def _entry_conf(entry) -> float:
-        try:
-            if isinstance(entry, dict):
-                return float(entry.get("conf", entry.get("confidence", -1.0)))
-            return float(getattr(entry, "confidence", -1.0))
-        except Exception:
-            return -1.0
 
     source_candidates: list[tuple[Path, QtGui.QImage, int]] = []
     max_width = -1
@@ -1432,107 +1641,108 @@ def _run_row_segmentation_pass(
     for idx, (y0, y1) in enumerate(row_ranges[:max_rows], start=1):
         top = max(0, y0 - pad_px)
         bottom = min(gray.height() - 1, y1 + pad_px)
-        row_img = gray.copy(0, top, min(name_width, gray.width()), max(1, bottom - top + 1))
-        row_variants = _build_row_image_variants(row_img, cfg)
+        row_h = max(1, bottom - top + 1)
+        cropped_width = min(name_width, gray.width())
+        row_img = gray.copy(0, top, cropped_width, row_h)
+        row_crops: list[tuple[str, QtGui.QImage]] = [("name", row_img)]
+        allow_full_width_fallback = bool(cfg.get("row_pass_full_width_fallback", True))
+        if not is_pre_cropped and cropped_width < int(gray.width()) and allow_full_width_fallback:
+            # Always evaluate one full-width row variant so long names are not
+            # lost when the name-column crop is too aggressive for a capture.
+            # Keep the old edge-clipped heuristic as extra signal (future use).
+            _ = _row_image_looks_right_clipped(row_img, cfg)
+            row_crops.append(("full", gray.copy(0, top, int(gray.width()), row_h)))
         votes: dict[str, dict[str, object]] = {}
         best_vote_count = 0
 
-        for variant_name, variant_img in row_variants:
-            if variant_name.startswith("mono") and best_vote_count >= 2:
-                # If base/gray variants already agree, mono variants often add noise.
-                continue
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                row_path = Path(tmp.name)
-            try:
-                if not variant_img.save(str(row_path), "PNG"):
+        for crop_name, crop_img in row_crops:
+            row_variants = _build_row_image_variants(crop_img, cfg)
+            for variant_name, variant_img in row_variants:
+                if variant_name.startswith("mono") and best_vote_count >= 2:
+                    # If base/gray variants already agree, mono variants often add noise.
                     continue
-                run_result = run_ocr_multi(
-                    row_path,
-                    engine=engine,
-                    cmd="",
-                    psm_values=psm_values,
-                    timeout_s=timeout_s,
-                    lang=lang,
-                    stop_on_first_success=False,
-                    easyocr_model_dir=cfg.get("easyocr_model_dir"),
-                    easyocr_user_network_dir=cfg.get("easyocr_user_network_dir"),
-                    easyocr_gpu=cfg.get("easyocr_gpu", "auto"),
-                    easyocr_download_enabled=bool(cfg.get("easyocr_download_enabled", False)),
-                    easyocr_quiet=bool(cfg.get("quiet_mode", False)),
-                )
-                text = str(run_result.text or "").strip()
-                line_entries = list(getattr(run_result, "lines", ()) or [])
-                if not line_entries and text:
-                    line_entries = [{"text": ln.strip(), "conf": -1.0} for ln in text.splitlines() if ln.strip()]
-                if text:
-                    row_texts.append(text)
-                for line_entry in line_entries:
-                    line_text = _entry_text(line_entry)
-                    if not line_text:
-                        continue
-                    parsed_names = ocr_import.extract_candidate_names(
-                        line_text,
-                        min_chars=int(cfg.get("name_min_chars", 2)),
-                        max_chars=int(cfg.get("name_max_chars", 24)),
-                        max_words=int(cfg.get("name_max_words", 2)),
-                        max_digit_ratio=float(cfg.get("name_max_digit_ratio", 0.45)),
-                        enforce_special_char_constraint=bool(
-                            cfg.get("name_special_char_constraint", True)
-                        ),
-                    )
-                    if not parsed_names:
-                        continue
-                    candidate_conf = _entry_conf(line_entry)
-                    for candidate in parsed_names:
-                        key = _simple_name_key(candidate)
-                        if not key:
-                            continue
-                        bucket = votes.setdefault(
-                            key,
-                            {"count": 0, "display": candidate, "conf_sum": 0.0, "conf_weight": 0.0},
-                        )
-                        bucket["count"] = int(bucket.get("count", 0)) + 1
-                        best_vote_count = max(best_vote_count, int(bucket["count"]))
-                        if candidate_conf >= 0.0:
-                            bucket["conf_sum"] = float(bucket.get("conf_sum", 0.0)) + candidate_conf
-                            bucket["conf_weight"] = float(bucket.get("conf_weight", 0.0)) + 1.0
-                        current_display = str(bucket.get("display", "")).strip()
-                        if (
-                            _name_display_quality(candidate) < _name_display_quality(current_display)
-                            or not current_display
-                        ):
-                            bucket["display"] = candidate
-                line_payload: list[dict] = []
-                for line_entry in line_entries:
-                    line_text = _entry_text(line_entry)
-                    if not line_text:
-                        continue
-                    conf_value = _entry_conf(line_entry)
-                    line_payload.append({"text": line_text, "conf": conf_value})
-                runs.append(
-                    {
-                        "pass": "row",
-                        "image": f"{source_path.name}#{idx}[{top}:{bottom}]/{variant_name}",
-                        "engine": engine,
-                        "psm_values": list(psm_values),
-                        "timeout_s": timeout_s,
-                        "lang": str(lang or ""),
-                        "fast_mode": False,
-                        "text": text,
-                        "error": str(run_result.error or ""),
-                        "lines": line_payload,
-                    }
-                )
-            finally:
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                    row_path = Path(tmp.name)
                 try:
-                    row_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-            if best_vote_count >= 3:
-                # Enough agreement for this row; avoid accumulating extra noise.
-                break
+                    if not variant_img.save(str(row_path), "PNG"):
+                        continue
+                    run_result = run_ocr_multi(
+                        row_path,
+                        engine=engine,
+                        cmd="",
+                        psm_values=psm_values,
+                        timeout_s=timeout_s,
+                        lang=lang,
+                        stop_on_first_success=False,
+                        easyocr_model_dir=cfg.get("easyocr_model_dir"),
+                        easyocr_user_network_dir=cfg.get("easyocr_user_network_dir"),
+                        easyocr_gpu=cfg.get("easyocr_gpu", "auto"),
+                        easyocr_download_enabled=bool(cfg.get("easyocr_download_enabled", False)),
+                        easyocr_quiet=bool(cfg.get("quiet_mode", False)),
+                    )
+                    text = str(run_result.text or "").strip()
+                    line_entries = _line_entries_from_run_result(run_result)
+                    if text:
+                        row_texts.append(text)
+                    for line_entry in line_entries:
+                        line_text = _line_entry_text(line_entry)
+                        if not line_text:
+                            continue
+                        parsed_names = parse_ctx.extract_line_candidates(line_text)
+                        if not parsed_names:
+                            continue
+                        candidate_conf = _line_entry_conf(line_entry)
+                        for candidate in parsed_names:
+                            key = _simple_name_key(candidate)
+                            if not key:
+                                continue
+                            bucket = votes.setdefault(
+                                key,
+                                {"count": 0, "display": candidate, "conf_sum": 0.0, "conf_weight": 0.0},
+                            )
+                            bucket["count"] = int(bucket.get("count", 0)) + 1
+                            best_vote_count = max(best_vote_count, int(bucket["count"]))
+                            if candidate_conf >= 0.0:
+                                bucket["conf_sum"] = float(bucket.get("conf_sum", 0.0)) + candidate_conf
+                                bucket["conf_weight"] = float(bucket.get("conf_weight", 0.0)) + 1.0
+                            current_display = str(bucket.get("display", "")).strip()
+                            if (
+                                _name_display_quality(candidate) < _name_display_quality(current_display)
+                                or not current_display
+                            ):
+                                bucket["display"] = candidate
+                    line_payload: list[dict] = []
+                    for line_entry in line_entries:
+                        line_text = _line_entry_text(line_entry)
+                        if not line_text:
+                            continue
+                        conf_value = _line_entry_conf(line_entry)
+                        line_payload.append({"text": line_text, "conf": conf_value})
+                    runs.append(
+                        {
+                            "pass": "row",
+                            "image": f"{source_path.name}#{idx}[{top}:{bottom}]/{crop_name}.{variant_name}",
+                            "engine": engine,
+                            "psm_values": list(psm_values),
+                            "timeout_s": timeout_s,
+                            "lang": str(lang or ""),
+                            "fast_mode": False,
+                            "text": text,
+                            "error": str(run_result.error or ""),
+                            "lines": line_payload,
+                        }
+                    )
+                finally:
+                    try:
+                        row_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                if best_vote_count >= 3:
+                    # Enough agreement for this row; avoid accumulating extra noise.
+                    break
 
         if votes:
+            best_vote_count = _merge_row_prefix_variants(votes)
             ranked = sorted(
                 votes.values(),
                 key=lambda entry: (
@@ -1561,6 +1771,7 @@ def _run_row_segmentation_pass(
 def _build_ocr_debug_report(
     *,
     cfg: dict,
+    parse_ctx: _OCRLineParseContext,
     primary_runs: list[dict],
     retry_runs: list[dict],
     row_runs: list[dict],
@@ -1634,8 +1845,7 @@ def _build_ocr_debug_report(
                         f"n={len(conf_values)}"
                     )
             if bool(cfg.get("debug_line_analysis", True)):
-                ocr_import = _ocr_import_module()
-                parsed_names, parsed_entries = _extract_line_debug_for_text(ocr_import, text, cfg)
+                parsed_names, parsed_entries = _extract_line_debug_for_text(parse_ctx, text)
                 lines.append("parsed-candidates: " + (", ".join(parsed_names) if parsed_names else "-"))
                 if parsed_entries:
                     max_entries = max(0, int(cfg.get("debug_line_max_entries_per_run", 40)))
@@ -1777,6 +1987,7 @@ def _extract_names_from_ocr_files(
     cfg: dict,
 ) -> tuple[list[str], str, str | None]:
     ocr_import = _ocr_import_module()
+    line_parse_ctx = _OCRLineParseContext(ocr_import, cfg)
     primary_texts, errors, primary_runs = _run_ocr_pass(
         paths,
         pass_label="primary",
@@ -1824,6 +2035,7 @@ def _extract_names_from_ocr_files(
         row_names, row_texts, row_runs = _run_row_segmentation_pass(
             paths,
             cfg=cfg,
+            parse_ctx=line_parse_ctx,
         )
         merged_texts.extend(row_texts)
         if _prefer_row_candidates(names, row_names, cfg):
@@ -1838,15 +2050,21 @@ def _extract_names_from_ocr_files(
             names = row_deduped
 
     all_runs = list(primary_runs) + list(retry_runs) + list(row_runs)
+    candidate_stats = _candidate_stats_from_runs(all_runs, line_parse_ctx)
+    candidate_stats = _merge_prefix_candidate_stats(candidate_stats)
     names = _build_final_names_from_runs(
-        ocr_import=ocr_import,
         cfg=cfg,
+        stats=candidate_stats,
         preferred_names=names,
         primary_names=primary_names,
         retry_names=retry_names,
         row_names=row_names,
-        all_runs=all_runs,
         row_preferred=row_preferred,
+    )
+    names = _filter_low_confidence_candidates(
+        names,
+        cfg,
+        candidate_stats,
     )
     names = _expand_config_identifier_prefixes(names)
 
@@ -1859,6 +2077,7 @@ def _extract_names_from_ocr_files(
     if debug_requested:
         debug_report = _build_ocr_debug_report(
             cfg=cfg,
+            parse_ctx=line_parse_ctx,
             primary_runs=primary_runs,
             retry_runs=retry_runs,
             row_runs=row_runs,

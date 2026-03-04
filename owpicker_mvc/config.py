@@ -175,7 +175,10 @@ OCR_ROW_PASS_MERGE_GAP_PX = 2
 OCR_ROW_PASS_MIN_HEIGHT_PX = 7
 OCR_ROW_PASS_MAX_ROWS = 12
 OCR_ROW_PASS_PAD_PX = 2
-OCR_ROW_PASS_NAME_X_RATIO = 0.58
+# Wider default row crop to reduce right-side truncation.
+OCR_ROW_PASS_NAME_X_RATIO = 0.72
+# If True, row-pass OCR also evaluates full-width rows in addition to name crop.
+OCR_ROW_PASS_FULL_WIDTH_FALLBACK = True
 # Row projection window used for line segmentation.
 # Helps avoid continuous bright borders/checkbox columns in OCR pick overlay.
 OCR_ROW_PASS_PROJECTION_X_START_RATIO = 0.08
@@ -212,13 +215,15 @@ OCR_NAME_HINTS_ONLY_WHEN_SET = True
 OCR_HINT_CORRECTION_MIN_SCORE = 0.62
 OCR_HINT_CORRECTION_LOW_CONF_MIN_SCORE = 0.28
 # OCR variants tailored for player list screenshots.
-OCR_INCLUDE_LEFT_CROP_VARIANTS = True
+# Left-crop variants can truncate long names; keep disabled by default.
+OCR_INCLUDE_LEFT_CROP_VARIANTS = False
 OCR_NAME_COLUMN_CROP_RATIO = 0.50
 OCR_INCLUDE_MONO_VARIANTS = True
 OCR_SCALE_FACTOR = 3
 OCR_NAME_MIN_CHARS = 2
-OCR_NAME_MAX_CHARS = 24
-OCR_NAME_MAX_WORDS = 4
+# Allow longer OCR names so trailing parts are not dropped prematurely.
+OCR_NAME_MAX_CHARS = 64
+OCR_NAME_MAX_WORDS = 8
 OCR_NAME_MAX_DIGIT_RATIO = 0.45
 # If True, OCR parsing aggressively trims on special characters/icons.
 # Disabled by default to avoid cutting player lines too early.
