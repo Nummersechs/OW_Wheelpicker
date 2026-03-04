@@ -323,14 +323,26 @@ def global_stylesheet(_theme: Theme) -> str:
             font-size:13px;
         }
         QCheckBox::indicator {
-            width:8px;
-            height:8px;
-            border:2px solid palette(window-text);
-            border-radius:3px;
+            width:10px;
+            height:10px;
+            border:1px solid palette(midlight);
+            border-radius:2px;
+            background: palette(base);
+        }
+        QCheckBox::indicator:unchecked {
+            border:1px solid palette(window-text);
             background: palette(base);
         }
         QCheckBox::indicator:checked {
+            border:1px solid palette(button-text);
             background: palette(highlight);
+        }
+        QCheckBox::indicator:indeterminate {
+            border:1px solid palette(button-text);
+            background: palette(highlight);
+        }
+        QCheckBox::indicator:hover {
+            border:1px solid palette(window-text);
         }
     """
     return _GLOBAL_STYLESHEET_CACHE

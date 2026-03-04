@@ -21,20 +21,6 @@ def _wheel_indicator_style(theme: theme_util.Theme) -> str:
     if cached is not None:
         return cached
     cached = f"""
-            QCheckBox::indicator,
-            QListView::indicator {{
-                width: 6px;
-                height: 6px;
-                border: 2px solid {theme.text};
-                border-radius: 3px;
-                background: {theme.base};
-            }}
-
-            QCheckBox::indicator:checked,
-            QListView::indicator:checked {{
-                background: {theme.primary};
-            }}
-
             /* Scrollbar-Farben im aktiven Theme halten */
             QScrollBar:vertical {{
                 background:{theme.frame_bg};
@@ -413,7 +399,7 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
             return
         super().apply_theme(theme)
         self.result.setStyleSheet(_wheel_result_style(theme))
-        # Indicator styling stays aligned with the active theme colors.
+        # Keep wheel-local scrollbar colors in sync with the active theme.
         self.setStyleSheet(_wheel_indicator_style(theme))
         self.btn_clear_result.setStyleSheet(_clear_result_button_style(theme))
         if hasattr(self, "btn_reset_segments"):
