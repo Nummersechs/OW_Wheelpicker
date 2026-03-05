@@ -6,9 +6,12 @@ from unittest.mock import patch
 
 from controller.ocr.ocr_import import (
     OCRRunResult,
+    _build_easyocr_lang_groups,
+    _parse_easyocr_langs,
     _normalize_easyocr_gpu_mode,
     _resolve_easyocr_device,
     clear_ocr_runtime_caches,
+    easyocr_available,
     extract_candidate_names,
     extract_candidate_names_debug,
     extract_candidate_names_multi,
@@ -18,6 +21,30 @@ from controller.ocr.ocr_import import (
 
 
 class TestOCRImport(unittest.TestCase):
+    def test_build_easyocr_lang_groups_splits_cjk_and_general_langs(self):
+        groups = _build_easyocr_lang_groups(("en", "de", "ja", "ch_sim", "ko"))
+        self.assertEqual(
+            groups,
+            (
+                ("en", "de"),
+                ("ja", "en"),
+                ("ch_sim", "en"),
+                ("ko", "en"),
+            ),
+        )
+
+    def test_parse_easyocr_langs_supports_de_ja_zh_ko(self):
+        self.assertEqual(
+            _parse_easyocr_langs("de,ja,zh,ko"),
+            ("de", "ja", "ch_sim", "ko"),
+        )
+
+    def test_parse_easyocr_langs_supports_chinese_aliases(self):
+        self.assertEqual(
+            _parse_easyocr_langs("zh-tw,ch_tra,zh-cn"),
+            ("ch_tra", "ch_sim"),
+        )
+
     def test_extract_candidate_names_normalizes_and_deduplicates(self):
         text = """
         1) Nummersechs
@@ -463,6 +490,190 @@ class TestOCRImport(unittest.TestCase):
         easy_mock.assert_called_once()
         kwargs = easy_mock.call_args.kwargs
         self.assertEqual(kwargs.get("gpu"), "mps")
+
+    def test_easyocr_available_succeeds_with_split_lang_groups(self):
+        called_langs: list[str] = []
+
+        def _fake_resolve_reader(*, lang, model_dir, user_network_dir, gpu, download_enabled, quiet):
+            _ = (model_dir, user_network_dir, gpu, download_enabled, quiet)
+            called_langs.append(str(lang or ""))
+            return object(), None
+
+        with patch("controller.ocr.ocr_import._resolve_easyocr_reader", side_effect=_fake_resolve_reader):
+            ok = easyocr_available(lang="en,de,ja,ch_sim,ko")
+
+        self.assertTrue(ok)
+        self.assertEqual(
+            called_langs,
+            ["en,de", "ja,en", "ch_sim,en", "ko,en"],
+        )
+
+    def test_easyocr_available_uses_english_fallback_when_group_model_is_missing(self):
+        called_langs: list[str] = []
+
+        def _fake_resolve_reader(*, lang, model_dir, user_network_dir, gpu, download_enabled, quiet):
+            _ = (model_dir, user_network_dir, gpu, download_enabled, quiet)
+            key = str(lang or "")
+            called_langs.append(key)
+            if key == "en,de":
+                return None, "easyocr-init-error:Missing /tmp/latin_g2.pth and downloads disabled"
+            if key == "en":
+                return object(), None
+            return None, "easyocr-init-error:unexpected"
+
+        with patch("controller.ocr.ocr_import._resolve_easyocr_reader", side_effect=_fake_resolve_reader):
+            ok = easyocr_available(lang="en,de", download_enabled=False)
+
+        self.assertTrue(ok)
+        self.assertEqual(called_langs, ["en,de", "en"])
+
+    def test_run_easyocr_merges_results_from_split_lang_groups(self):
+        class _Reader:
+            def __init__(self, device: str, detections):
+                self.device = device
+                self._detections = list(detections or [])
+
+            def readtext(self, *_args, **_kwargs):
+                return list(self._detections)
+
+        detection_alpha = (
+            [(8, 10), (90, 10), (90, 28), (8, 28)],
+            "Alpha",
+            0.92,
+        )
+        detection_ja = (
+            [(8, 40), (90, 40), (90, 58), (8, 58)],
+            "ミカ",
+            0.90,
+        )
+
+        def _fake_resolve_reader(*, lang, model_dir, user_network_dir, gpu, download_enabled, quiet):
+            _ = (model_dir, user_network_dir, gpu, download_enabled, quiet)
+            lang_key = str(lang or "")
+            if lang_key == "en,de":
+                return _Reader("cpu", [detection_alpha]), None
+            if lang_key == "ja,en":
+                return _Reader("cpu", [detection_ja]), None
+            return _Reader("cpu", []), None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "sample.png"
+            image_path.write_bytes(b"stub")
+            with patch("controller.ocr.ocr_import._resolve_easyocr_reader", side_effect=_fake_resolve_reader):
+                result = run_easyocr(image_path, lang="en,de,ja")
+
+        self.assertIsNone(result.error)
+        self.assertIn("Alpha", [line.text for line in result.lines])
+        self.assertIn("ミカ", [line.text for line in result.lines])
+
+    def test_run_easyocr_uses_english_fallback_when_group_model_is_missing(self):
+        class _Reader:
+            device = "cpu"
+
+            @staticmethod
+            def readtext(_path, detail=1, paragraph=False):
+                _ = (detail, paragraph)
+                return [
+                    (
+                        [(8, 10), (90, 10), (90, 28), (8, 28)],
+                        "Alpha",
+                        0.92,
+                    )
+                ]
+
+        def _fake_resolve_reader(*, lang, model_dir, user_network_dir, gpu, download_enabled, quiet):
+            _ = (model_dir, user_network_dir, gpu, download_enabled, quiet)
+            key = str(lang or "")
+            if key == "en,de":
+                return None, "easyocr-init-error:Missing /tmp/latin_g2.pth and downloads disabled"
+            if key == "en":
+                return _Reader(), None
+            return None, "easyocr-init-error:unexpected"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "sample.png"
+            image_path.write_bytes(b"stub")
+            with patch("controller.ocr.ocr_import._resolve_easyocr_reader", side_effect=_fake_resolve_reader):
+                result = run_easyocr(image_path, lang="en,de", download_enabled=False)
+
+        self.assertIsNone(result.error)
+        self.assertEqual(result.text, "Alpha")
+
+    def test_run_easyocr_prefers_primary_group_on_overlapping_tokens(self):
+        class _Reader:
+            def __init__(self, detections):
+                self.device = "cpu"
+                self._detections = list(detections)
+
+            def readtext(self, *_args, **_kwargs):
+                return list(self._detections)
+
+        primary_detection = (
+            [(10, 10), (120, 10), (120, 30), (10, 30)],
+            "Mika",
+            0.63,
+        )
+        secondary_detection = (
+            [(11, 11), (121, 11), (121, 31), (11, 31)],
+            "Mik4",
+            0.95,
+        )
+
+        def _fake_resolve_reader(*, lang, model_dir, user_network_dir, gpu, download_enabled, quiet):
+            _ = (model_dir, user_network_dir, gpu, download_enabled, quiet)
+            key = str(lang or "")
+            if key == "en,de":
+                return _Reader([primary_detection]), None
+            if key == "ja,en":
+                return _Reader([secondary_detection]), None
+            return _Reader([]), None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "sample.png"
+            image_path.write_bytes(b"stub")
+            with patch("controller.ocr.ocr_import._resolve_easyocr_reader", side_effect=_fake_resolve_reader):
+                result = run_easyocr(image_path, lang="en,de,ja")
+
+        self.assertIsNone(result.error)
+        self.assertEqual(result.text, "Mika")
+
+    def test_run_easyocr_allows_secondary_to_replace_very_weak_primary_overlap(self):
+        class _Reader:
+            def __init__(self, detections):
+                self.device = "cpu"
+                self._detections = list(detections)
+
+            def readtext(self, *_args, **_kwargs):
+                return list(self._detections)
+
+        primary_detection = (
+            [(10, 10), (120, 10), (120, 30), (10, 30)],
+            "Mik4",
+            0.09,
+        )
+        secondary_detection = (
+            [(11, 11), (121, 11), (121, 31), (11, 31)],
+            "ミカ",
+            0.82,
+        )
+
+        def _fake_resolve_reader(*, lang, model_dir, user_network_dir, gpu, download_enabled, quiet):
+            _ = (model_dir, user_network_dir, gpu, download_enabled, quiet)
+            key = str(lang or "")
+            if key == "en,de":
+                return _Reader([primary_detection]), None
+            if key == "ja,en":
+                return _Reader([secondary_detection]), None
+            return _Reader([]), None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "sample.png"
+            image_path.write_bytes(b"stub")
+            with patch("controller.ocr.ocr_import._resolve_easyocr_reader", side_effect=_fake_resolve_reader):
+                result = run_easyocr(image_path, lang="en,de,ja")
+
+        self.assertIsNone(result.error)
+        self.assertEqual(result.text, "ミカ")
 
     def test_run_easyocr_disables_pin_memory_patch_for_non_cuda_device(self):
         class _Reader:

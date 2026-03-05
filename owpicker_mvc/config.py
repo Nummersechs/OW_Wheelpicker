@@ -116,8 +116,9 @@ PAUSE_BACKGROUND_UI_SERVICES_DURING_SPIN = True
 # - "easyocr" is the active/default backend.
 OCR_ENGINE = "easyocr"
 # EasyOCR language list (comma/plus separated), e.g. "en" or "en,de".
-# Keep this minimal for fast OCR; add more languages only when needed.
-OCR_EASYOCR_LANG = "en"
+# Default includes German, Japanese, Chinese (simplified), and Korean.
+# Note: More languages increase OCR runtime.
+OCR_EASYOCR_LANG = "en,de,ja,ch_sim,ko"
 # Local model paths for EasyOCR (optional). Keep empty to use EasyOCR defaults.
 OCR_EASYOCR_MODEL_DIR = ""
 OCR_EASYOCR_USER_NETWORK_DIR = ""

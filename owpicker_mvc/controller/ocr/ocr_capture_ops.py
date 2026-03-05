@@ -463,7 +463,7 @@ def _ocr_runtime_cfg_snapshot(mw) -> dict:
         debug_log_to_file = False
         debug_line_analysis = False
 
-    easyocr_lang = str(mw._cfg("OCR_EASYOCR_LANG", "en")).strip() or None
+    easyocr_lang = str(mw._cfg("OCR_EASYOCR_LANG", "en,de,ja,ch_sim,ko")).strip() or None
     cfg = {
         "engine": engine,
         "fast_mode": fast_mode,
@@ -2015,7 +2015,7 @@ def _start_ocr_async_import(
                 i18n.t("ocr.error_title"),
                 i18n.t(
                     "ocr.error_run_failed",
-                    reason="easyocr-not-ready (package/models missing?)",
+                    reason="easyocr-not-ready (missing language models / downloads disabled?)",
                 )
                 + "\n\n"
                 + diag,

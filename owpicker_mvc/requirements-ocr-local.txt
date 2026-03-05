@@ -1,2 +1,5 @@
+# Optional OCR stack (local EasyOCR runtime + model preload/download flow).
 easyocr>=1.7
-tensorboard>=2.0
+torch>=2.2
+torchvision>=0.17
+certifi>=2024.2.2

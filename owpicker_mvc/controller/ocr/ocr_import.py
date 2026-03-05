@@ -31,8 +31,33 @@ _EASYOCR_LANG_ALIAS: dict[str, str] = {
     "en": "en",
     "deu": "de",
     "ger": "de",
+    "german": "de",
+    "deutsch": "de",
     "de": "de",
+    "ja": "ja",
+    "jpn": "ja",
+    "jp": "ja",
+    "japanese": "ja",
+    "ko": "ko",
+    "kor": "ko",
+    "kr": "ko",
+    "korean": "ko",
+    "zh": "ch_sim",
+    "zho": "ch_sim",
+    "chi": "ch_sim",
+    "cn": "ch_sim",
+    "ch": "ch_sim",
+    "chs": "ch_sim",
+    "zh-cn": "ch_sim",
+    "zh_hans": "ch_sim",
+    "ch_sim": "ch_sim",
+    "cht": "ch_tra",
+    "zh-tw": "ch_tra",
+    "zh-hk": "ch_tra",
+    "zh_hant": "ch_tra",
+    "ch_tra": "ch_tra",
 }
+_EASYOCR_RESTRICTED_LANGS: set[str] = {"ch_sim", "ch_tra", "ja", "ko"}
 _TORCH_WARN_FILTERS_APPLIED = False
 
 
@@ -74,6 +99,57 @@ def _parse_easyocr_langs(lang: str | None) -> tuple[str, ...]:
     if not normalized:
         return ("en",)
     return tuple(normalized)
+
+
+def _build_easyocr_lang_groups(langs: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
+    resolved = tuple(str(value or "").strip().lower() for value in tuple(langs or ()) if str(value or "").strip())
+    if not resolved:
+        return (("en",),)
+
+    groups: list[tuple[str, ...]] = []
+    has_en = "en" in resolved
+    general = [lang for lang in resolved if lang not in _EASYOCR_RESTRICTED_LANGS and lang != "en"]
+    if general:
+        group: list[str] = []
+        if has_en:
+            group.append("en")
+        group.extend(general)
+        groups.append(tuple(group))
+
+    for lang in resolved:
+        if lang not in _EASYOCR_RESTRICTED_LANGS:
+            continue
+        # EasyOCR allows these CJK models reliably only in an EN pair.
+        group = [lang]
+        if lang != "en":
+            group.append("en")
+        groups.append(tuple(group))
+
+    if not groups:
+        groups.append(resolved)
+
+    deduped: list[tuple[str, ...]] = []
+    seen: set[str] = set()
+    for group in groups:
+        normalized_group: list[str] = []
+        seen_group: set[str] = set()
+        for lang in group:
+            token = str(lang or "").strip().lower()
+            if not token or token in seen_group:
+                continue
+            seen_group.add(token)
+            normalized_group.append(token)
+        if not normalized_group:
+            continue
+        key = "|".join(normalized_group)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(tuple(normalized_group))
+
+    if not deduped:
+        return (("en",),)
+    return tuple(deduped)
 
 
 def _normalize_easyocr_gpu_mode(value: bool | str | None) -> str:
@@ -334,6 +410,83 @@ def _resolve_easyocr_reader(
     return reader, None
 
 
+def _resolve_easyocr_group_readers(
+    *,
+    lang: str | None,
+    model_dir: str | None,
+    user_network_dir: str | None,
+    gpu: bool | str,
+    download_enabled: bool,
+    quiet: bool = False,
+) -> tuple[list[tuple[tuple[str, ...], Any]], list[str], tuple[tuple[str, ...], ...]]:
+    parsed_langs = _parse_easyocr_langs(lang)
+    groups = _build_easyocr_lang_groups(parsed_langs)
+    readers: list[tuple[tuple[str, ...], Any]] = []
+    errors: list[str] = []
+    for group in groups:
+        group_lang = ",".join(group)
+        reader, reader_error = _resolve_easyocr_reader(
+            lang=group_lang,
+            model_dir=model_dir,
+            user_network_dir=user_network_dir,
+            gpu=gpu,
+            download_enabled=download_enabled,
+            quiet=quiet,
+        )
+        if reader is None:
+            errors.append(f"{'+'.join(group)}:{reader_error or 'easyocr-reader-not-ready'}")
+            continue
+        readers.append((group, reader))
+    return readers, errors, groups
+
+
+def _reader_errors_indicate_missing_models(reader_errors: Iterable[str]) -> bool:
+    for error in list(reader_errors or ()):
+        token = str(error or "").strip().lower()
+        if not token:
+            continue
+        if "missing " in token and "download" in token and "disabled" in token:
+            return True
+    return False
+
+
+def _should_try_easyocr_english_fallback(
+    *,
+    parsed_langs: tuple[str, ...],
+    reader_errors: Iterable[str],
+) -> bool:
+    if "en" not in tuple(parsed_langs or ()):
+        return False
+    if len(tuple(parsed_langs or ())) <= 1:
+        return False
+    return _reader_errors_indicate_missing_models(reader_errors)
+
+
+def _resolve_easyocr_english_fallback_reader(
+    *,
+    parsed_langs: tuple[str, ...],
+    reader_errors: Iterable[str],
+    model_dir: str | None,
+    user_network_dir: str | None,
+    gpu: bool | str,
+    download_enabled: bool,
+    quiet: bool,
+) -> tuple[Any | None, str | None]:
+    if not _should_try_easyocr_english_fallback(
+        parsed_langs=parsed_langs,
+        reader_errors=reader_errors,
+    ):
+        return None, None
+    return _resolve_easyocr_reader(
+        lang="en",
+        model_dir=model_dir,
+        user_network_dir=user_network_dir,
+        gpu=gpu,
+        download_enabled=download_enabled,
+        quiet=quiet,
+    )
+
+
 def easyocr_resolution_diagnostics(
     *,
     lang: str | None = None,
@@ -345,6 +498,7 @@ def easyocr_resolution_diagnostics(
 ) -> str:
     requested_lang = str(lang or "").strip() or "-"
     parsed_langs = _parse_easyocr_langs(lang)
+    lang_groups = _build_easyocr_lang_groups(parsed_langs)
     resolved_model_dir = _resolve_optional_directory(model_dir)
     if resolved_model_dir:
         model_path = Path(str(resolved_model_dir)).expanduser()
@@ -360,6 +514,7 @@ def easyocr_resolution_diagnostics(
         f"engine=easyocr",
         f"requested_lang={requested_lang}",
         f"normalized_langs={'+'.join(parsed_langs)}",
+        "lang_groups=" + ";".join("+".join(group) for group in lang_groups),
         f"model_dir={effective_model_dir or '-'}",
         f"user_network_dir={resolved_user_network_dir or '-'}",
         f"gpu_requested={gpu}",
@@ -377,7 +532,7 @@ def easyocr_resolution_diagnostics(
             lines.append("hint_cmd=pip install -r requirements-ocr-local.txt")
     if auto_model_dir and not resolved_model_dir:
         lines.append("model_dir_source=auto-discovered")
-    reader, reader_error = _resolve_easyocr_reader(
+    readers, reader_errors, _ = _resolve_easyocr_group_readers(
         lang=lang,
         model_dir=model_dir,
         user_network_dir=user_network_dir,
@@ -385,8 +540,33 @@ def easyocr_resolution_diagnostics(
         download_enabled=download_enabled,
         quiet=quiet,
     )
-    lines.append(f"reader={'ready' if reader is not None else 'failed'}")
-    if reader_error:
+    fallback_reader, fallback_error = _resolve_easyocr_english_fallback_reader(
+        parsed_langs=parsed_langs,
+        reader_errors=reader_errors,
+        model_dir=model_dir,
+        user_network_dir=user_network_dir,
+        gpu=gpu,
+        download_enabled=download_enabled,
+        quiet=quiet,
+    )
+    fallback_used = False
+    if (not readers) and fallback_reader is not None:
+        readers = [(("en",), fallback_reader)]
+        fallback_used = True
+
+    if readers and reader_errors:
+        reader_status = "partial"
+    elif readers:
+        reader_status = "ready"
+    else:
+        reader_status = "failed"
+    lines.append(f"reader={reader_status}")
+    if readers:
+        lines.append("reader_groups_ready=" + ";".join("+".join(group) for group, _ in readers))
+    if fallback_used:
+        lines.append("reader_fallback=en")
+    if reader_errors:
+        reader_error = "; ".join(reader_errors)
         lines.append(f"reader_error={reader_error}")
         reader_err_l = str(reader_error).lower()
         if "certificate verify failed" in reader_err_l:
@@ -395,12 +575,18 @@ def easyocr_resolution_diagnostics(
         if "nodename nor servname provided" in reader_err_l or "temporary failure in name resolution" in reader_err_l:
             lines.append("hint=network or DNS unavailable for model download")
             lines.append("hint_action=check internet/proxy or place model files manually in ~/.EasyOCR/model")
+        if _reader_errors_indicate_missing_models(reader_errors):
+            lines.append("hint=one or more EasyOCR model files are missing locally")
+            if bool(download_enabled) is False:
+                lines.append("hint_action=set OCR_EASYOCR_DOWNLOAD_ENABLED=True once, run OCR once, then set it back to False")
         if (
             bool(download_enabled) is False
             and (effective_model_dir is None or str(effective_model_dir).strip() == "")
         ):
             lines.append("hint=offline mode active and no model directory resolved")
             lines.append("hint_action=set OCR_EASYOCR_MODEL_DIR or enable OCR_EASYOCR_DOWNLOAD_ENABLED")
+    if fallback_error:
+        lines.append(f"reader_fallback_error={fallback_error}")
     return "\n".join(lines)
 
 
@@ -413,7 +599,8 @@ def easyocr_available(
     download_enabled: bool = False,
     quiet: bool = False,
 ) -> bool:
-    reader, _ = _resolve_easyocr_reader(
+    parsed_langs = _parse_easyocr_langs(lang)
+    readers, reader_errors, _ = _resolve_easyocr_group_readers(
         lang=lang,
         model_dir=model_dir,
         user_network_dir=user_network_dir,
@@ -421,7 +608,18 @@ def easyocr_available(
         download_enabled=download_enabled,
         quiet=quiet,
     )
-    return reader is not None
+    if readers:
+        return True
+    fallback_reader, _fallback_error = _resolve_easyocr_english_fallback_reader(
+        parsed_langs=parsed_langs,
+        reader_errors=reader_errors,
+        model_dir=model_dir,
+        user_network_dir=user_network_dir,
+        gpu=gpu,
+        download_enabled=download_enabled,
+        quiet=quiet,
+    )
+    return bool(fallback_reader)
 
 
 def clear_ocr_runtime_caches(
@@ -471,7 +669,11 @@ def _easyocr_sort_key(detection: Any) -> tuple[float, float]:
     return (min(ys), min(xs))
 
 
-def _easyocr_detection_to_token(detection: Any) -> dict[str, float | str] | None:
+def _easyocr_detection_to_token(
+    detection: Any,
+    *,
+    group_index: int = 0,
+) -> dict[str, float | str] | None:
     try:
         text = str(detection[1] or "").strip()
     except Exception:
@@ -519,7 +721,132 @@ def _easyocr_detection_to_token(detection: Any) -> dict[str, float | str] | None
         "x1": float(x1),
         "y0": float(y0),
         "y1": float(y1),
+        "group_index": float(max(0, int(group_index))),
     }
+
+
+def _easyocr_token_overlap_ratio(left: dict[str, float | str], right: dict[str, float | str]) -> float:
+    try:
+        lx0 = float(left.get("x0", 0.0))
+        lx1 = float(left.get("x1", lx0))
+        ly0 = float(left.get("y0", 0.0))
+        ly1 = float(left.get("y1", ly0))
+        rx0 = float(right.get("x0", 0.0))
+        rx1 = float(right.get("x1", rx0))
+        ry0 = float(right.get("y0", 0.0))
+        ry1 = float(right.get("y1", ry0))
+    except Exception:
+        return 0.0
+    if lx1 < lx0:
+        lx1 = lx0
+    if ly1 < ly0:
+        ly1 = ly0
+    if rx1 < rx0:
+        rx1 = rx0
+    if ry1 < ry0:
+        ry1 = ry0
+    inter_w = max(0.0, min(lx1, rx1) - max(lx0, rx0))
+    inter_h = max(0.0, min(ly1, ry1) - max(ly0, ry0))
+    if inter_w <= 0.0 or inter_h <= 0.0:
+        return 0.0
+    inter_area = inter_w * inter_h
+    left_area = max(1.0, (lx1 - lx0) * (ly1 - ly0))
+    right_area = max(1.0, (rx1 - rx0) * (ry1 - ry0))
+    return inter_area / max(1.0, min(left_area, right_area))
+
+
+def _easyocr_token_quality_score(token: dict[str, float | str]) -> float:
+    text = str(token.get("text", "") or "").strip()
+    if not text:
+        return float("-inf")
+    try:
+        conf = float(token.get("confidence", -1.0))
+    except Exception:
+        conf = -1.0
+    if conf < 0.0:
+        conf = 0.0
+    group_index = int(float(token.get("group_index", 0.0)))
+    primary_bonus = 6.0 if group_index == 0 else 0.0
+    alnum = sum(1 for ch in text if ch.isalnum())
+    punct = sum(1 for ch in text if (not ch.isalnum()) and (not ch.isspace()))
+    return conf + primary_bonus + min(12.0, float(alnum) * 0.25) - (float(punct) * 0.35)
+
+
+def _easyocr_should_replace_overlapping_token(
+    existing: dict[str, float | str],
+    candidate: dict[str, float | str],
+) -> bool:
+    try:
+        existing_group = int(float(existing.get("group_index", 0.0)))
+    except Exception:
+        existing_group = 0
+    try:
+        candidate_group = int(float(candidate.get("group_index", 0.0)))
+    except Exception:
+        candidate_group = 0
+
+    try:
+        existing_conf = float(existing.get("confidence", -1.0))
+    except Exception:
+        existing_conf = -1.0
+    try:
+        candidate_conf = float(candidate.get("confidence", -1.0))
+    except Exception:
+        candidate_conf = -1.0
+
+    if existing_group == 0 and candidate_group > 0:
+        # Keep primary-group text unless it is very weak and the secondary
+        # candidate is clearly stronger at the same position.
+        return existing_conf < 30.0 and candidate_conf >= (existing_conf + 18.0)
+    if existing_group > 0 and candidate_group == 0:
+        # Prefer primary group whenever it is not significantly worse.
+        return candidate_conf >= (existing_conf - 5.0)
+
+    return _easyocr_token_quality_score(candidate) > _easyocr_token_quality_score(existing)
+
+
+def _easyocr_reduce_cross_group_tokens(
+    tokens: list[dict[str, float | str]],
+    *,
+    min_secondary_conf: float = 22.0,
+) -> list[dict[str, float | str]]:
+    if len(tokens) <= 1:
+        return list(tokens)
+
+    reduced: list[dict[str, float | str]] = []
+    for token in tokens:
+        text = str(token.get("text", "") or "").strip()
+        if not text:
+            continue
+        try:
+            group_index = int(float(token.get("group_index", 0.0)))
+        except Exception:
+            group_index = 0
+        try:
+            confidence = float(token.get("confidence", -1.0))
+        except Exception:
+            confidence = -1.0
+        if group_index > 0 and confidence >= 0.0 and confidence < float(min_secondary_conf):
+            # Secondary-language low-confidence matches are a major source of
+            # noisy variants when multiple readers are merged.
+            continue
+
+        overlapping_index = -1
+        for idx, existing in enumerate(reduced):
+            overlap_ratio = _easyocr_token_overlap_ratio(existing, token)
+            if overlap_ratio >= 0.58:
+                overlapping_index = idx
+                break
+
+        if overlapping_index < 0:
+            reduced.append(token)
+            continue
+
+        existing = reduced[overlapping_index]
+        if _easyocr_should_replace_overlapping_token(existing, token):
+            reduced[overlapping_index] = token
+
+    return reduced
 
 
 def _easyocr_group_tokens_to_lines(tokens: Iterable[dict[str, float | str]]) -> tuple[OCRLineResult, ...]:
@@ -690,7 +1017,8 @@ def run_easyocr(
 ) -> OCRRunResult:
     if not image_path.exists():
         return OCRRunResult("", error=f"image-not-found:{image_path}")
-    reader, reader_error = _resolve_easyocr_reader(
+    parsed_langs = _parse_easyocr_langs(lang)
+    readers, reader_errors, _ = _resolve_easyocr_group_readers(
         lang=lang,
         model_dir=model_dir,
         user_network_dir=user_network_dir,
@@ -698,25 +1026,49 @@ def run_easyocr(
         download_enabled=download_enabled,
         quiet=quiet,
     )
-    if reader is None:
-        return OCRRunResult("", error=reader_error or "easyocr-reader-not-ready")
-    try:
-        _apply_torch_warning_filters(bool(quiet))
-        device = str(getattr(reader, "device", "") or "").strip().lower()
-        disable_pin_memory = device != "cuda"
-        with _patch_dataloader_pin_memory(disable_pin_memory):
-            detections = reader.readtext(str(image_path), detail=1, paragraph=False)
-    except Exception as exc:
-        return OCRRunResult("", error=f"easyocr-run-error:{exc}")
-    if not detections:
+    fallback_error: str | None = None
+    fallback_reader, fallback_error = _resolve_easyocr_english_fallback_reader(
+        parsed_langs=parsed_langs,
+        reader_errors=reader_errors,
+        model_dir=model_dir,
+        user_network_dir=user_network_dir,
+        gpu=gpu,
+        download_enabled=download_enabled,
+        quiet=quiet,
+    )
+    if (not readers) and fallback_reader is not None:
+        readers = [(("en",), fallback_reader)]
+    if not readers:
+        details = [str(value).strip() for value in list(reader_errors or []) if str(value).strip()]
+        if fallback_error:
+            details.append(f"en:{fallback_error}")
+        error_text = "; ".join(details) if details else "easyocr-reader-not-ready"
+        return OCRRunResult("", error=error_text)
+
+    all_detections: list[tuple[int, Any]] = []
+    for group_index, (group, reader) in enumerate(readers):
+        try:
+            _apply_torch_warning_filters(bool(quiet))
+            device = str(getattr(reader, "device", "") or "").strip().lower()
+            disable_pin_memory = device != "cuda"
+            with _patch_dataloader_pin_memory(disable_pin_memory):
+                detections = reader.readtext(str(image_path), detail=1, paragraph=False)
+        except Exception as exc:
+            return OCRRunResult("", error=f"easyocr-run-error[{'+'.join(group)}]:{exc}")
+        if detections:
+            all_detections.extend((group_index, detection) for detection in list(detections))
+
+    if not all_detections:
         return OCRRunResult("")
-    ordered = list(detections)
-    ordered.sort(key=_easyocr_sort_key)
+    ordered = list(all_detections)
+    ordered.sort(key=lambda item: _easyocr_sort_key(item[1]))
     tokens: list[dict[str, float | str]] = []
-    for detection in ordered:
-        token = _easyocr_detection_to_token(detection)
+    for group_index, detection in ordered:
+        token = _easyocr_detection_to_token(detection, group_index=group_index)
         if token is not None:
             tokens.append(token)
+    if len(readers) > 1 and len(tokens) > 1:
+        tokens = _easyocr_reduce_cross_group_tokens(tokens)
 
     lines = _easyocr_group_tokens_to_lines(tokens)
     if not lines and tokens:
