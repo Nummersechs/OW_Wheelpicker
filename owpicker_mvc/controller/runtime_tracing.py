@@ -440,6 +440,14 @@ def trace_event(mw, name: str, **extra) -> None:
                 f.write(line + "\n")
         except Exception:
             pass
+        try:
+            if bool(getattr(mw, "_spin_perf_enabled", False)):
+                event_name = str(name or "").strip().casefold()
+                if event_name and ("spin" in event_name):
+                    with mw._spin_perf_file.open("a", encoding="utf-8") as f:
+                        f.write(line + "\n")
+        except Exception:
+            pass
         if _cfg(mw, "DEBUG", False):
             config.debug_print(line)
     except Exception:

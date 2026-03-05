@@ -227,11 +227,22 @@ def _append_ocr_debug_log(
     configured_name = str(mw._cfg("OCR_DEBUG_LOG_FILE", "ocr_debug.log")).strip() or "ocr_debug.log"
     target_path = Path(configured_name)
     if not target_path.is_absolute():
-        state_dir = getattr(mw, "_state_dir", None)
-        if isinstance(state_dir, Path):
-            target_path = state_dir / target_path
-        else:
-            target_path = Path.cwd() / target_path
+        log_dir = getattr(mw, "_log_dir", None)
+        if not isinstance(log_dir, Path):
+            state_dir = getattr(mw, "_state_dir", None)
+            if isinstance(state_dir, Path):
+                configured_log_dir = str(mw._cfg("LOG_OUTPUT_DIR", "logs")).strip()
+                if configured_log_dir:
+                    configured_log_path = Path(configured_log_dir)
+                    if configured_log_path.is_absolute():
+                        log_dir = configured_log_path
+                    else:
+                        log_dir = state_dir / configured_log_path
+                else:
+                    log_dir = state_dir
+        if not isinstance(log_dir, Path):
+            log_dir = Path.cwd()
+        target_path = log_dir / target_path
 
     max_chars = max(0, int(mw._cfg("OCR_DEBUG_LOG_MAX_CHARS", 200000)))
     if max_chars > 0 and len(report) > max_chars:

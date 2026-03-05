@@ -62,6 +62,17 @@ class MainWindow(
         self._state_dir = self._state_base_dir()
         self._state_file = self._get_state_file()
         self.settings = AppSettings.from_module(config)
+        configured_log_dir = str(self._cfg("LOG_OUTPUT_DIR", "logs")).strip()
+        log_root = Path(configured_log_dir) if configured_log_dir else Path()
+        if not configured_log_dir:
+            log_root = self._state_dir
+        elif not log_root.is_absolute():
+            log_root = self._state_dir / log_root
+        self._log_dir = log_root
+        try:
+            self._log_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            self._log_dir = self._state_dir
         self._run_id = f"{int(time.time() * 1000)}_{os.getpid()}"
         saved = StateSyncController.load_saved_state(self._state_file)
         default_lang = self._cfg("DEFAULT_LANGUAGE", "en")
@@ -139,7 +150,7 @@ class MainWindow(
         self._hover_trace_count = 0
         self._hover_trace_max_events = int(self._cfg("HOVER_TRACE_MAX_EVENTS", 200))
         self._hover_trace_last_t: float | None = None
-        self._hover_trace_file = self._state_dir / "hover_trace.log"
+        self._hover_trace_file = self._log_dir / "hover_trace.log"
         self._write_trace_run_header(self._hover_trace_enabled, self._hover_trace_file)
         self._hover_forward_last: float | None = None
         self._hover_forwarding = False
@@ -186,7 +197,7 @@ class MainWindow(
         self._drained_input_counts: dict[int, int] = {}
         self._drained_input_first_t: float | None = None
         self._drained_input_last_t: float | None = None
-        self._focus_trace_file = self._state_dir / "focus_trace.log"
+        self._focus_trace_file = self._log_dir / "focus_trace.log"
         self._write_trace_run_header(self._focus_trace_enabled, self._focus_trace_file)
         self._trace_enabled = bool(
             self._cfg("TRACE_FLOW", False)
@@ -194,7 +205,10 @@ class MainWindow(
             or self._cfg("DEBUG", False)
         )
         self._trace_last_t: float | None = None
-        self._trace_file = self._state_dir / "flow_trace.log"
+        self._trace_file = self._log_dir / "flow_trace.log"
+        self._spin_perf_enabled = bool(self._cfg("TRACE_SPIN_PERF", False))
+        self._spin_perf_file = self._log_dir / "spin_perf.log"
+        self._write_trace_run_header(self._spin_perf_enabled, self._spin_perf_file)
         if self._trace_enabled:
             self._trace_event("startup", run_id=self._run_id)
         if self._cfg("DISABLE_TOOLTIPS", False):
@@ -262,6 +276,7 @@ class MainWindow(
         if not enabled:
             return
         try:
+            trace_file.parent.mkdir(parents=True, exist_ok=True)
             if bool(self._cfg("TRACE_CLEAR_ON_START", False)):
                 trace_file.write_text("", encoding="utf-8")
             with trace_file.open("a", encoding="utf-8") as handle:

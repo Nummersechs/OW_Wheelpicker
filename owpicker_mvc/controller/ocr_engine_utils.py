@@ -381,6 +381,16 @@ def _run_ocr_pass(
     engine = _ocr_engine_from_cfg(cfg)
     fast_mode = bool(cfg.get("fast_mode", True))
     stop_after_variant_success = bool(cfg.get("stop_after_variant_success", True)) and fast_mode
+    confident_line_stop = bool(cfg.get("fast_mode_confident_line_stop", True)) and fast_mode
+    confident_line_min_lines_cfg = int(cfg.get("fast_mode_confident_line_min_lines", 0))
+    confident_line_min_avg_conf = float(cfg.get("fast_mode_confident_line_min_avg_conf", 68.0))
+    confident_line_missing_tolerance = max(
+        0,
+        int(cfg.get("fast_mode_confident_line_missing_tolerance", 1)),
+    )
+    confident_line_min_avg_conf_tolerant = float(
+        cfg.get("fast_mode_confident_line_min_avg_conf_tolerant", 78.0)
+    )
     psm_values = tuple(cfg.get("psm_values", (6, 11)))
     lang = cfg.get("lang")
     timeout_s = float(cfg.get("timeout_s", 8.0))
@@ -430,6 +440,37 @@ def _run_ocr_pass(
             all_texts.append(text)
             if stop_after_variant_success:
                 break
+            if confident_line_stop and len(selected_paths) > 1:
+                expected_lines = max(1, int(cfg.get("expected_candidates", 5)))
+                min_lines = (
+                    max(1, int(confident_line_min_lines_cfg))
+                    if confident_line_min_lines_cfg > 0
+                    else max(1, expected_lines - confident_line_missing_tolerance)
+                )
+                line_count = int(sum(1 for entry in line_entries if str(entry.get("text", "") or "").strip()))
+                if line_count <= 0:
+                    line_count = int(sum(1 for raw_line in str(text).splitlines() if str(raw_line).strip()))
+                conf_values: list[float] = []
+                for entry in line_entries:
+                    try:
+                        conf_value = float(entry.get("conf", -1.0))
+                    except Exception:
+                        conf_value = -1.0
+                    if conf_value >= 0.0:
+                        conf_values.append(conf_value)
+                if conf_values:
+                    avg_conf = sum(conf_values) / max(1, len(conf_values))
+                    conf_threshold = confident_line_min_avg_conf
+                    if line_count < expected_lines:
+                        conf_threshold = max(conf_threshold, confident_line_min_avg_conf_tolerant)
+                    confident_enough = avg_conf >= conf_threshold
+                else:
+                    # For text-only OCR results without per-line confidence,
+                    # require one additional line over the target before
+                    # stopping early.
+                    confident_enough = line_count >= (min_lines + 1)
+                if line_count >= min_lines and confident_enough:
+                    break
         else:
             error_text = _run_result_error(run_result)
             if error_text:

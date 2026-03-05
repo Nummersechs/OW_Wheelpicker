@@ -234,6 +234,137 @@ class TestOCRCaptureOps(unittest.TestCase):
         )
         self.assertEqual(result, ["Mogojyan The Lacie Lover"])
 
+    def test_should_run_row_pass_skips_when_primary_is_stable_and_clean(self):
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "row_pass_enabled": True,
+                "row_pass_always_run": True,
+                "row_pass_skip_when_primary_stable": True,
+                "expected_candidates": 5,
+            }
+        )
+        stable_names = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"]
+        self.assertFalse(ocr_capture_ops._should_run_row_pass(cfg, stable_names))
+
+    def test_should_run_row_pass_still_runs_when_primary_looks_noisy(self):
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "row_pass_enabled": True,
+                "row_pass_always_run": True,
+                "row_pass_skip_when_primary_stable": True,
+                "expected_candidates": 5,
+            }
+        )
+        noisy_names = ["A", "B", "C", "D", "E"]
+        self.assertTrue(ocr_capture_ops._should_run_row_pass(cfg, noisy_names))
+
+    def test_should_run_row_pass_skips_when_relaxed_gap_and_primary_confidence_are_good(self):
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "row_pass_enabled": True,
+                "row_pass_always_run": True,
+                "row_pass_skip_when_primary_stable": True,
+                "expected_candidates": 7,
+                "primary_candidate_count": 4,
+                "primary_line_avg_conf": 82.0,
+                "row_pass_primary_stable_relaxed_expected_gap": 3,
+                "row_pass_primary_stable_relaxed_min_avg_conf": 76.0,
+            }
+        )
+        clean_primary_names = [
+            "Jockie Music 1 (ml)",
+            "Mogojyan The Lacie Lover FWMC",
+            "Rontorou {Gest Cojo Moin} 1OOK",
+            "The Gookseller {The Food lover}",
+        ]
+        self.assertFalse(ocr_capture_ops._should_run_row_pass(cfg, clean_primary_names))
+
+    def test_should_run_recall_retry_skips_when_primary_is_clean_and_shortfall_is_small(self):
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "fast_mode": True,
+                "recall_retry_enabled": True,
+                "recall_retry_min_candidates": 5,
+                "recall_retry_skip_when_primary_clean": True,
+                "recall_retry_skip_primary_clean_min_count": 4,
+                "recall_retry_skip_primary_clean_max_shortfall": 1,
+                "recall_retry_skip_primary_clean_min_avg_conf": 78.0,
+                "primary_line_avg_conf": 82.0,
+            }
+        )
+        clean_primary_names = [
+            "Jockie Music 1 (ml)",
+            "Mogojyan The Lacie Lover FWMC",
+            "Rontorou {Gest Cojo Moin} 1OOK",
+            "The Gookseller {The Food lover}",
+        ]
+        self.assertFalse(ocr_capture_ops._should_run_recall_retry(cfg, clean_primary_names))
+
+    def test_should_run_recall_retry_keeps_running_when_primary_confidence_is_low(self):
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "fast_mode": True,
+                "recall_retry_enabled": True,
+                "recall_retry_min_candidates": 5,
+                "recall_retry_skip_when_primary_clean": True,
+                "recall_retry_skip_primary_clean_min_count": 4,
+                "recall_retry_skip_primary_clean_max_shortfall": 1,
+                "recall_retry_skip_primary_clean_min_avg_conf": 78.0,
+                "primary_line_avg_conf": 64.0,
+            }
+        )
+        clean_primary_names = [
+            "Jockie Music 1 (ml)",
+            "Mogojyan The Lacie Lover FWMC",
+            "Rontorou {Gest Cojo Moin} 1OOK",
+            "The Gookseller {The Food lover}",
+        ]
+        self.assertTrue(ocr_capture_ops._should_run_recall_retry(cfg, clean_primary_names))
+
+    def test_should_run_row_pass_skips_when_expected_gap_is_small_and_primary_is_clean(self):
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "row_pass_enabled": True,
+                "row_pass_always_run": True,
+                "row_pass_skip_when_primary_stable": True,
+                "expected_candidates": 7,
+                "primary_candidate_count": 5,
+                "row_pass_primary_stable_relaxed_expected_gap": 2,
+            }
+        )
+        clean_primary_names = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"]
+        self.assertFalse(ocr_capture_ops._should_run_row_pass(cfg, clean_primary_names))
+
+    def test_prefer_row_candidates_keeps_primary_when_row_has_fewer_and_primary_is_clean(self):
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "expected_candidates": 8,
+                "precount_rows_primary_stable": 7,
+            }
+        )
+        primary = ["Rhug", "flatiqz", "Kylo", "mikix", "Pxssesive", "rqlled", "yukino"]
+        row = ["Rhug", "tlatiaz", "Kylo", "mikix", "Pxssesive", "ralled"]
+        self.assertFalse(ocr_capture_ops._prefer_row_candidates(primary, row, cfg))
+
+    def test_prefer_row_candidates_can_replace_short_noisy_primary_even_if_row_has_fewer(self):
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "expected_candidates": 5,
+                "precount_rows_primary_stable": 0,
+            }
+        )
+        primary = ["A", "B", "C", "D", "E", "F", "G"]
+        row = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"]
+        self.assertTrue(ocr_capture_ops._prefer_row_candidates(primary, row, cfg))
+
     def test_candidate_stats_counts_only_one_candidate_per_line(self):
         class _ParseCtx:
             @staticmethod
@@ -275,6 +406,83 @@ class TestOCRCaptureOps(unittest.TestCase):
         self.assertEqual(len(stats), 1)
         self.assertIn("thebookseller", stats)
         self.assertNotIn("tk", stats)
+
+    def test_candidate_stats_uses_preparsed_candidates_hint_without_reparsing(self):
+        class _ParseCtx:
+            @staticmethod
+            def extract_line_candidates(_line_text):
+                raise AssertionError("should not reparse when parsed_candidates is provided")
+
+        stats = ocr_capture_ops._candidate_stats_from_runs(
+            [
+                {
+                    "pass": "row",
+                    "image": "src#1[0:0]/name.base",
+                    "lines": [
+                        {
+                            "text": "ignored-raw",
+                            "conf": 80.0,
+                            "parsed_candidates": ["Alpha"],
+                        }
+                    ],
+                }
+            ],
+            _ParseCtx(),
+        )
+        self.assertEqual(len(stats), 1)
+        self.assertIn("alpha", stats)
+
+    def test_candidate_stats_skips_marked_lines_without_reparsing(self):
+        class _ParseCtx:
+            @staticmethod
+            def extract_line_candidates(_line_text):
+                raise AssertionError("should not reparse skipped row lines")
+
+        stats = ocr_capture_ops._candidate_stats_from_runs(
+            [
+                {
+                    "pass": "row",
+                    "image": "src#1[0:0]/name.base",
+                    "lines": [
+                        {
+                            "text": "ignored-raw",
+                            "conf": 10.0,
+                            "skip_candidate_stats": True,
+                            "skip_reason": "row-low-conf",
+                            "parsed_candidates_locked": True,
+                            "parsed_candidates": [],
+                        }
+                    ],
+                }
+            ],
+            _ParseCtx(),
+        )
+        self.assertEqual(stats, {})
+
+    def test_candidate_stats_respects_locked_empty_candidates(self):
+        class _ParseCtx:
+            @staticmethod
+            def extract_line_candidates(_line_text):
+                raise AssertionError("should not reparse locked parsed_candidates")
+
+        stats = ocr_capture_ops._candidate_stats_from_runs(
+            [
+                {
+                    "pass": "row",
+                    "image": "src#1[0:0]/name.base",
+                    "lines": [
+                        {
+                            "text": "ignored-raw",
+                            "conf": 55.0,
+                            "parsed_candidates_locked": True,
+                            "parsed_candidates": [],
+                        }
+                    ],
+                }
+            ],
+            _ParseCtx(),
+        )
+        self.assertEqual(stats, {})
 
     def test_candidate_stats_uses_alternate_candidate_when_primary_already_seen(self):
         class _ParseCtx:
@@ -1562,6 +1770,41 @@ class TestOCRCaptureOps(unittest.TestCase):
         effective = ocr_capture_ops._resolve_effective_precount_rows(7, primary_runs)
         self.assertEqual(effective, 6)
 
+    def test_estimate_expected_rows_fast_probe_reduces_detection_calls(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path_a = Path(tmpdir) / "a.png"
+            path_b = Path(tmpdir) / "b.png"
+            image = QtGui.QImage(32, 32, QtGui.QImage.Format_Grayscale8)
+            image.fill(255)
+            self.assertTrue(image.save(str(path_a), "PNG"))
+            self.assertTrue(image.save(str(path_b), "PNG"))
+
+            calls: list[int] = []
+
+            def _fake_detect(_gray, cfg):
+                calls.append(int(cfg.get("expected_candidates", 0)))
+                return [(3, 6)]
+
+            cfg = self._ocr_cfg()
+            cfg.update(
+                {
+                    "max_variants": 2,
+                    "fast_mode": True,
+                    "expected_candidates": 5,
+                    "precount_fast_probe_enabled": True,
+                    "precount_fast_probe_single_expected": True,
+                    "precount_fast_probe_max_variants": 1,
+                }
+            )
+            with patch("controller.ocr_capture_ops._detect_text_row_ranges", side_effect=_fake_detect):
+                estimated = ocr_capture_ops._estimate_expected_rows_from_paths(
+                    [path_a, path_b],
+                    cfg,
+                )
+
+            self.assertEqual(estimated, 1)
+            self.assertEqual(calls, [5])
+
     def test_resolve_effective_precount_rows_keeps_visual_when_primary_unstable(self):
         primary_runs = [
             {
@@ -1586,6 +1829,38 @@ class TestOCRCaptureOps(unittest.TestCase):
         ]
         effective = ocr_capture_ops._resolve_effective_precount_rows(7, primary_runs)
         self.assertEqual(effective, 7)
+
+    def test_resolve_effective_precount_rows_uses_primary_when_visual_undercounts_single_run(self):
+        primary_runs = [
+            {
+                "lines": [
+                    {"text": "A", "conf": 90.0},
+                    {"text": "B", "conf": 90.0},
+                    {"text": "C", "conf": 90.0},
+                    {"text": "D", "conf": 90.0},
+                    {"text": "E", "conf": 90.0},
+                    {"text": "F", "conf": 90.0},
+                ]
+            }
+        ]
+        effective = ocr_capture_ops._resolve_effective_precount_rows(1, primary_runs)
+        self.assertEqual(effective, 6)
+
+    def test_resolve_effective_precount_rows_keeps_visual_on_single_run_overcount(self):
+        primary_runs = [
+            {
+                "lines": [
+                    {"text": "A", "conf": 90.0},
+                    {"text": "B", "conf": 90.0},
+                    {"text": "C", "conf": 90.0},
+                    {"text": "D", "conf": 90.0},
+                    {"text": "E", "conf": 90.0},
+                    {"text": "F", "conf": 90.0},
+                ]
+            }
+        ]
+        effective = ocr_capture_ops._resolve_effective_precount_rows(9, primary_runs)
+        self.assertEqual(effective, 9)
 
     def test_resolve_precount_row_bounds_locks_upper_bound_when_primary_stable(self):
         minimum, maximum, refill_target = ocr_capture_ops._resolve_precount_row_bounds(
@@ -1779,6 +2054,80 @@ class TestOCRCaptureOps(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(len(calls), 1)
 
+    def test_extract_names_fast_mode_confident_primary_short_circuit_skips_second_variant(self):
+        calls: list[dict] = []
+        outputs = [
+            "Alpha\nBravo\nCharlie\nDelta\nEcho\nFoxtrot",
+            "NOISE\nTAIL\nSHOULD\nNOT\nRUN",
+        ]
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_tesseract_multi(
+                image_path,
+                *,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+            ):
+                calls.append(
+                    {
+                        "path": str(image_path),
+                        "cmd": cmd,
+                        "psm_values": tuple(psm_values),
+                        "timeout_s": timeout_s,
+                        "lang": lang,
+                        "stop_on_first_success": bool(stop_on_first_success),
+                    }
+                )
+                text = outputs.pop(0) if outputs else ""
+                return SimpleNamespace(text=text, error=None)
+
+            @staticmethod
+            def extract_candidate_names_multi(texts, **kwargs):
+                seen: set[str] = set()
+                names: list[str] = []
+                for text in texts:
+                    for line in str(text or "").splitlines():
+                        value = line.strip()
+                        if not value or value in seen:
+                            continue
+                        seen.add(value)
+                        names.append(value)
+                return names
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "max_variants": 2,
+                "fast_mode": True,
+                "stop_after_variant_success": False,
+                "fast_mode_confident_line_stop": True,
+                "fast_mode_confident_line_min_lines": 5,
+                "expected_candidates": 5,
+                "recall_retry_enabled": False,
+                "row_pass_enabled": False,
+            }
+        )
+
+        with patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
+            names, merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
+                [Path("dummy-a.png"), Path("dummy-b.png")],
+                ocr_cmd="auto",
+                cfg=cfg,
+            )
+
+        self.assertEqual(
+            names,
+            ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"],
+        )
+        self.assertIn("Foxtrot", merged_text)
+        self.assertNotIn("SHOULD", merged_text)
+        self.assertIsNone(error)
+        self.assertEqual(len(calls), 1)
+
     def test_extract_names_relaxes_support_filter_when_result_stays_too_small(self):
         calls: list[dict] = []
         outputs = [
@@ -1827,6 +2176,103 @@ class TestOCRCaptureOps(unittest.TestCase):
         self.assertIn("D", merged_text)
         self.assertIsNone(error)
         self.assertEqual(len(calls), 2)
+
+    def test_extract_names_confident_line_stop_allows_one_missing_line_with_high_conf(self):
+        calls: list[dict] = []
+        outputs = [
+            {
+                "text": "Alpha\nBravo\nCharlie\nDelta",
+                "lines": [
+                    {"text": "Alpha", "conf": 92.0},
+                    {"text": "Bravo", "conf": 88.0},
+                    {"text": "Charlie", "conf": 85.0},
+                    {"text": "Delta", "conf": 81.0},
+                ],
+            },
+            {
+                "text": "NOISE\nTAIL\nSHOULD\nNOT\nRUN",
+                "lines": [
+                    {"text": "NOISE", "conf": 42.0},
+                    {"text": "TAIL", "conf": 41.0},
+                    {"text": "SHOULD", "conf": 40.0},
+                    {"text": "NOT", "conf": 39.0},
+                    {"text": "RUN", "conf": 38.0},
+                ],
+            },
+        ]
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_ocr_multi(
+                image_path,
+                *,
+                engine,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+                **kwargs,
+            ):
+                calls.append(
+                    {
+                        "path": str(image_path),
+                        "engine": engine,
+                        "cmd": cmd,
+                        "psm_values": tuple(psm_values),
+                        "timeout_s": timeout_s,
+                        "lang": lang,
+                        "stop_on_first_success": bool(stop_on_first_success),
+                    }
+                )
+                payload = outputs.pop(0) if outputs else {"text": "", "lines": []}
+                return SimpleNamespace(
+                    text=str(payload.get("text", "")),
+                    error=None,
+                    lines=list(payload.get("lines", [])),
+                )
+
+            @staticmethod
+            def extract_candidate_names_multi(texts, **kwargs):
+                seen: set[str] = set()
+                names: list[str] = []
+                for text in texts:
+                    for line in str(text or "").splitlines():
+                        value = line.strip()
+                        if not value or value in seen:
+                            continue
+                        seen.add(value)
+                        names.append(value)
+                return names
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "max_variants": 2,
+                "fast_mode": True,
+                "stop_after_variant_success": False,
+                "fast_mode_confident_line_stop": True,
+                "fast_mode_confident_line_min_lines": 0,
+                "fast_mode_confident_line_missing_tolerance": 1,
+                "fast_mode_confident_line_min_avg_conf": 68.0,
+                "fast_mode_confident_line_min_avg_conf_tolerant": 78.0,
+                "expected_candidates": 5,
+                "recall_retry_enabled": False,
+                "row_pass_enabled": False,
+            }
+        )
+
+        with patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
+            names, merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
+                [Path("dummy-a.png"), Path("dummy-b.png")],
+                ocr_cmd="auto",
+                cfg=cfg,
+            )
+
+        self.assertEqual(names, ["Alpha", "Bravo", "Charlie", "Delta"])
+        self.assertNotIn("SHOULD", merged_text)
+        self.assertIsNone(error)
+        self.assertEqual(len(calls), 1)
 
     def test_extract_names_prefers_retry_when_primary_has_too_many_candidates(self):
         calls: list[dict] = []
@@ -2562,6 +3008,7 @@ class TestOCRCaptureOps(unittest.TestCase):
                 "row_pass_scale_factor": 1,
                 "row_pass_include_mono": False,
                 "row_pass_psm_values": (7,),
+                "row_pass_full_only_when_name_uncertain": False,
                 "name_special_char_constraint": False,
             }
         )
@@ -2592,6 +3039,1237 @@ class TestOCRCaptureOps(unittest.TestCase):
         self.assertIn("Mogojyan The Lacie Lover", row_texts)
         self.assertEqual(len(runs), 2)
         self.assertIn("/full.base", str(runs[1].get("image", "")))
+
+    def test_row_pass_skips_full_width_when_name_crop_stays_empty(self):
+        call_no = {"n": 0}
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_ocr_multi(
+                image_path,
+                *,
+                engine,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+                easyocr_model_dir,
+                easyocr_user_network_dir,
+                easyocr_gpu,
+                easyocr_download_enabled,
+                easyocr_quiet,
+            ):
+                del (
+                    image_path,
+                    engine,
+                    cmd,
+                    psm_values,
+                    timeout_s,
+                    lang,
+                    stop_on_first_success,
+                    easyocr_model_dir,
+                    easyocr_user_network_dir,
+                    easyocr_gpu,
+                    easyocr_download_enabled,
+                    easyocr_quiet,
+                )
+                call_no["n"] += 1
+                return SimpleNamespace(text="", error=None, lines=[])
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                del kwargs
+                value = str(text or "").strip()
+                return [value] if value else []
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "engine": "easyocr",
+                "lang": "en",
+                "row_pass_name_x_ratio": 0.58,
+                "row_pass_brightness_threshold": 145,
+                "row_pass_scale_factor": 2,
+                "row_pass_include_mono": False,
+                "row_pass_psm_values": (7,),
+                "row_pass_full_width_fallback": True,
+                "row_pass_full_width_edge_only": False,
+                "row_pass_skip_full_when_name_empty": True,
+                "name_special_char_constraint": False,
+            }
+        )
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            image_path = Path(tmp.name)
+        try:
+            img = QtGui.QImage(180, 24, QtGui.QImage.Format_Grayscale8)
+            img.fill(0)
+            self.assertTrue(img.save(str(image_path), "PNG"))
+
+            parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
+            with (
+                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
+                patch("controller.ocr_capture_ops._row_image_looks_right_clipped", return_value=True),
+            ):
+                names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
+                    [image_path],
+                    cfg=cfg,
+                    parse_ctx=parse_ctx,
+                )
+        finally:
+            image_path.unlink(missing_ok=True)
+
+        self.assertEqual(call_no["n"], 2)
+        self.assertEqual(names, [])
+        self.assertEqual(len(runs), 2)
+        self.assertTrue(all("/full." not in str(run.get("image", "")) for run in runs))
+
+    def test_row_pass_skips_full_width_when_name_crop_only_has_low_conf_noise(self):
+        call_no = {"n": 0}
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_ocr_multi(
+                image_path,
+                *,
+                engine,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+                easyocr_model_dir,
+                easyocr_user_network_dir,
+                easyocr_gpu,
+                easyocr_download_enabled,
+                easyocr_quiet,
+            ):
+                del (
+                    image_path,
+                    engine,
+                    cmd,
+                    psm_values,
+                    timeout_s,
+                    lang,
+                    stop_on_first_success,
+                    easyocr_model_dir,
+                    easyocr_user_network_dir,
+                    easyocr_gpu,
+                    easyocr_download_enabled,
+                    easyocr_quiet,
+                )
+                call_no["n"] += 1
+                return SimpleNamespace(
+                    text="low conf noise",
+                    error=None,
+                    lines=[SimpleNamespace(text="low conf noise", confidence=4.0)],
+                )
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                del kwargs
+                value = str(text or "").strip()
+                return [value] if value else []
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "engine": "easyocr",
+                "lang": "en",
+                "row_pass_name_x_ratio": 0.58,
+                "row_pass_brightness_threshold": 145,
+                "row_pass_scale_factor": 2,
+                "row_pass_include_mono": False,
+                "row_pass_psm_values": (7,),
+                "row_pass_full_width_fallback": True,
+                "row_pass_full_width_edge_only": False,
+                "row_pass_skip_full_when_name_empty": False,
+                "row_pass_skip_full_when_name_low_conf": True,
+                "row_pass_skip_full_when_name_low_conf_max_conf": 12.0,
+                "row_pass_line_stats_min_conf": 8.0,
+                "name_special_char_constraint": False,
+            }
+        )
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            image_path = Path(tmp.name)
+        try:
+            img = QtGui.QImage(180, 24, QtGui.QImage.Format_Grayscale8)
+            img.fill(0)
+            self.assertTrue(img.save(str(image_path), "PNG"))
+
+            parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
+            with (
+                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
+                patch("controller.ocr_capture_ops._row_image_looks_right_clipped", return_value=True),
+            ):
+                names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
+                    [image_path],
+                    cfg=cfg,
+                    parse_ctx=parse_ctx,
+                )
+        finally:
+            image_path.unlink(missing_ok=True)
+
+        self.assertEqual(call_no["n"], 2)
+        self.assertEqual(names, [])
+        self.assertEqual(len(runs), 2)
+        self.assertTrue(all("/full." not in str(run.get("image", "")) for run in runs))
+
+    def test_row_pass_stops_early_after_vote_target_without_full_width_retry(self):
+        call_no = {"n": 0}
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_ocr_multi(
+                image_path,
+                *,
+                engine,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+                easyocr_model_dir,
+                easyocr_user_network_dir,
+                easyocr_gpu,
+                easyocr_download_enabled,
+                easyocr_quiet,
+            ):
+                del (
+                    image_path,
+                    engine,
+                    cmd,
+                    psm_values,
+                    timeout_s,
+                    lang,
+                    stop_on_first_success,
+                    easyocr_model_dir,
+                    easyocr_user_network_dir,
+                    easyocr_gpu,
+                    easyocr_download_enabled,
+                    easyocr_quiet,
+                )
+                call_no["n"] += 1
+                text = "Mogojyan The Lacie Lover"
+                return SimpleNamespace(
+                    text=text,
+                    error=None,
+                    lines=[SimpleNamespace(text=text, confidence=82.0)],
+                )
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                del kwargs
+                value = str(text or "").strip()
+                return [value] if value else []
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "engine": "easyocr",
+                "lang": "en",
+                "row_pass_name_x_ratio": 0.58,
+                "row_pass_brightness_threshold": 145,
+                "row_pass_scale_factor": 2,
+                "row_pass_include_mono": False,
+                "row_pass_psm_values": (7,),
+                "row_pass_full_width_fallback": True,
+                "row_pass_vote_target_single_name": 2,
+                "name_special_char_constraint": False,
+            }
+        )
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            image_path = Path(tmp.name)
+        try:
+            img = QtGui.QImage(180, 24, QtGui.QImage.Format_Grayscale8)
+            img.fill(0)
+            self.assertTrue(img.save(str(image_path), "PNG"))
+
+            parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
+            with (
+                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
+            ):
+                names, row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
+                    [image_path],
+                    cfg=cfg,
+                    parse_ctx=parse_ctx,
+                )
+        finally:
+            image_path.unlink(missing_ok=True)
+
+        self.assertEqual(call_no["n"], 2)
+        self.assertEqual(names, ["Mogojyan The Lacie Lover"])
+        self.assertIn("Mogojyan The Lacie Lover", row_texts)
+        self.assertEqual(len(runs), 2)
+        self.assertTrue(all("/full." not in str(run.get("image", "")) for run in runs))
+
+    def test_row_pass_confident_single_vote_stops_after_first_variant(self):
+        call_no = {"n": 0}
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_ocr_multi(
+                image_path,
+                *,
+                engine,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+                easyocr_model_dir,
+                easyocr_user_network_dir,
+                easyocr_gpu,
+                easyocr_download_enabled,
+                easyocr_quiet,
+            ):
+                del (
+                    image_path,
+                    engine,
+                    cmd,
+                    psm_values,
+                    timeout_s,
+                    lang,
+                    stop_on_first_success,
+                    easyocr_model_dir,
+                    easyocr_user_network_dir,
+                    easyocr_gpu,
+                    easyocr_download_enabled,
+                    easyocr_quiet,
+                )
+                call_no["n"] += 1
+                text = "Mogojyan The Lacie Lover"
+                return SimpleNamespace(
+                    text=text,
+                    error=None,
+                    lines=[SimpleNamespace(text=text, confidence=99.0)],
+                )
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                del kwargs
+                value = str(text or "").strip()
+                return [value] if value else []
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "engine": "easyocr",
+                "lang": "en",
+                "row_pass_name_x_ratio": 0.58,
+                "row_pass_brightness_threshold": 145,
+                "row_pass_scale_factor": 2,
+                "row_pass_include_mono": False,
+                "row_pass_psm_values": (7,),
+                "row_pass_full_width_fallback": True,
+                "row_pass_vote_target_single_name": 2,
+                "row_pass_confident_single_vote_stop": True,
+                "row_pass_confident_single_vote_min_conf": 98.0,
+                "name_special_char_constraint": False,
+            }
+        )
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            image_path = Path(tmp.name)
+        try:
+            img = QtGui.QImage(180, 24, QtGui.QImage.Format_Grayscale8)
+            img.fill(0)
+            self.assertTrue(img.save(str(image_path), "PNG"))
+
+            parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
+            with (
+                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
+            ):
+                names, row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
+                    [image_path],
+                    cfg=cfg,
+                    parse_ctx=parse_ctx,
+                )
+        finally:
+            image_path.unlink(missing_ok=True)
+
+        self.assertEqual(call_no["n"], 1)
+        self.assertEqual(names, ["Mogojyan The Lacie Lover"])
+        self.assertIn("Mogojyan The Lacie Lover", row_texts)
+        self.assertEqual(len(runs), 1)
+
+    def test_row_pass_stops_after_consecutive_empty_rows_when_enough_names_collected(self):
+        call_no = {"n": 0}
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_ocr_multi(
+                image_path,
+                *,
+                engine,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+                easyocr_model_dir,
+                easyocr_user_network_dir,
+                easyocr_gpu,
+                easyocr_download_enabled,
+                easyocr_quiet,
+            ):
+                del (
+                    image_path,
+                    engine,
+                    cmd,
+                    psm_values,
+                    timeout_s,
+                    lang,
+                    stop_on_first_success,
+                    easyocr_model_dir,
+                    easyocr_user_network_dir,
+                    easyocr_gpu,
+                    easyocr_download_enabled,
+                    easyocr_quiet,
+                )
+                call_no["n"] += 1
+                if call_no["n"] <= 5:
+                    text = f"Name{call_no['n']}"
+                    return SimpleNamespace(
+                        text=text,
+                        error=None,
+                        lines=[SimpleNamespace(text=text, confidence=80.0)],
+                    )
+                return SimpleNamespace(text="", error=None, lines=[])
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                del kwargs
+                value = str(text or "").strip()
+                return [value] if value else []
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "engine": "easyocr",
+                "lang": "en",
+                "fast_mode": True,
+                "expected_candidates": 5,
+                "row_pass_max_rows": 12,
+                "row_pass_adaptive_max_rows": True,
+                "row_pass_adaptive_extra_rows": 4,
+                "row_pass_name_x_ratio": 0.58,
+                "row_pass_brightness_threshold": 145,
+                "row_pass_scale_factor": 1,
+                "row_pass_include_mono": False,
+                "row_pass_psm_values": (7,),
+                "row_pass_full_width_fallback": False,
+                "row_pass_vote_target_single_name": 1,
+                "row_pass_consecutive_empty_row_stop": 2,
+                "row_pass_empty_row_stop_min_collected": 5,
+                "row_pass_stop_when_expected_reached": False,
+                "name_special_char_constraint": False,
+            }
+        )
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            image_path = Path(tmp.name)
+        try:
+            img = QtGui.QImage(220, 320, QtGui.QImage.Format_Grayscale8)
+            img.fill(0)
+            self.assertTrue(img.save(str(image_path), "PNG"))
+
+            parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
+            row_ranges = [(2 + i * 20, 10 + i * 20) for i in range(10)]
+            with (
+                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=row_ranges),
+            ):
+                names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
+                    [image_path],
+                    cfg=cfg,
+                    parse_ctx=parse_ctx,
+                )
+        finally:
+            image_path.unlink(missing_ok=True)
+
+        self.assertEqual(names, ["Name1", "Name2", "Name3", "Name4", "Name5"])
+        self.assertEqual(call_no["n"], 7)
+        self.assertEqual(len(runs), 7)
+
+    def test_row_pass_prefilter_skips_obvious_noise_before_parser(self):
+        call_no = {"n": 0}
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_ocr_multi(
+                image_path,
+                *,
+                engine,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+                easyocr_model_dir,
+                easyocr_user_network_dir,
+                easyocr_gpu,
+                easyocr_download_enabled,
+                easyocr_quiet,
+            ):
+                del (
+                    image_path,
+                    engine,
+                    cmd,
+                    psm_values,
+                    timeout_s,
+                    lang,
+                    stop_on_first_success,
+                    easyocr_model_dir,
+                    easyocr_user_network_dir,
+                    easyocr_gpu,
+                    easyocr_download_enabled,
+                    easyocr_quiet,
+                )
+                call_no["n"] += 1
+                return SimpleNamespace(
+                    text="1\n(\nAlpha",
+                    error=None,
+                    lines=[
+                        SimpleNamespace(text="1", confidence=1.0),
+                        SimpleNamespace(text="(", confidence=2.0),
+                        SimpleNamespace(text="Alpha", confidence=82.0),
+                    ],
+                )
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                del kwargs
+                value = str(text or "").strip()
+                return [value] if value else []
+
+        class _ParseCtx:
+            def __init__(self):
+                self.calls: list[str] = []
+
+            def extract_line_candidates(self, line_text):
+                text = str(line_text or "").strip()
+                self.calls.append(text)
+                return [text] if text else []
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "engine": "easyocr",
+                "lang": "en",
+                "row_pass_name_x_ratio": 0.58,
+                "row_pass_brightness_threshold": 145,
+                "row_pass_scale_factor": 1,
+                "row_pass_include_mono": False,
+                "row_pass_psm_values": (7,),
+                "row_pass_full_width_fallback": False,
+                "row_pass_vote_target_single_name": 1,
+                "row_pass_line_prefilter_enabled": True,
+                "row_pass_line_prefilter_low_conf": 22.0,
+                "row_pass_line_prefilter_high_conf_bypass": 72.0,
+                "name_special_char_constraint": False,
+            }
+        )
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            image_path = Path(tmp.name)
+        try:
+            img = QtGui.QImage(180, 24, QtGui.QImage.Format_Grayscale8)
+            img.fill(0)
+            self.assertTrue(img.save(str(image_path), "PNG"))
+
+            parse_ctx = _ParseCtx()
+            with (
+                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
+            ):
+                names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
+                    [image_path],
+                    cfg=cfg,
+                    parse_ctx=parse_ctx,
+                )
+        finally:
+            image_path.unlink(missing_ok=True)
+
+        self.assertEqual(call_no["n"], 1)
+        self.assertEqual(names, ["Alpha"])
+        self.assertEqual(parse_ctx.calls, ["Alpha"])
+        self.assertEqual(len(runs), 1)
+
+    def test_row_pass_reuses_cached_candidate_for_duplicate_raw_line(self):
+        call_no = {"n": 0}
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_ocr_multi(
+                image_path,
+                *,
+                engine,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+                easyocr_model_dir,
+                easyocr_user_network_dir,
+                easyocr_gpu,
+                easyocr_download_enabled,
+                easyocr_quiet,
+            ):
+                del (
+                    image_path,
+                    engine,
+                    cmd,
+                    psm_values,
+                    timeout_s,
+                    lang,
+                    stop_on_first_success,
+                    easyocr_model_dir,
+                    easyocr_user_network_dir,
+                    easyocr_gpu,
+                    easyocr_download_enabled,
+                    easyocr_quiet,
+                )
+                call_no["n"] += 1
+                return SimpleNamespace(
+                    text="Alpha",
+                    error=None,
+                    lines=[SimpleNamespace(text="Alpha", confidence=84.0)],
+                )
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                del kwargs
+                value = str(text or "").strip()
+                return [value] if value else []
+
+        class _ParseCtx:
+            def __init__(self):
+                self.calls: list[str] = []
+
+            def extract_line_candidates(self, line_text):
+                text = str(line_text or "").strip()
+                self.calls.append(text)
+                return [text] if text else []
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "engine": "easyocr",
+                "lang": "en",
+                "row_pass_name_x_ratio": 0.58,
+                "row_pass_brightness_threshold": 145,
+                "row_pass_scale_factor": 2,
+                "row_pass_include_mono": False,
+                "row_pass_psm_values": (7,),
+                "row_pass_full_width_fallback": False,
+                "row_pass_vote_target_single_name": 2,
+                "row_pass_line_prefilter_enabled": True,
+                "name_special_char_constraint": False,
+            }
+        )
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            image_path = Path(tmp.name)
+        try:
+            img = QtGui.QImage(180, 24, QtGui.QImage.Format_Grayscale8)
+            img.fill(0)
+            self.assertTrue(img.save(str(image_path), "PNG"))
+
+            parse_ctx = _ParseCtx()
+            with (
+                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
+            ):
+                names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
+                    [image_path],
+                    cfg=cfg,
+                    parse_ctx=parse_ctx,
+                )
+        finally:
+            image_path.unlink(missing_ok=True)
+
+        self.assertEqual(call_no["n"], 2)
+        self.assertEqual(names, ["Alpha"])
+        self.assertEqual(parse_ctx.calls, ["Alpha"])
+        self.assertEqual(len(runs), 2)
+
+    def test_row_pass_reuses_cached_candidate_across_rows(self):
+        call_no = {"n": 0}
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_ocr_multi(
+                image_path,
+                *,
+                engine,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+                easyocr_model_dir,
+                easyocr_user_network_dir,
+                easyocr_gpu,
+                easyocr_download_enabled,
+                easyocr_quiet,
+            ):
+                del (
+                    image_path,
+                    engine,
+                    cmd,
+                    psm_values,
+                    timeout_s,
+                    lang,
+                    stop_on_first_success,
+                    easyocr_model_dir,
+                    easyocr_user_network_dir,
+                    easyocr_gpu,
+                    easyocr_download_enabled,
+                    easyocr_quiet,
+                )
+                call_no["n"] += 1
+                return SimpleNamespace(
+                    text="Alpha",
+                    error=None,
+                    lines=[SimpleNamespace(text="Alpha", confidence=84.0)],
+                )
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                del kwargs
+                value = str(text or "").strip()
+                return [value] if value else []
+
+        class _ParseCtx:
+            def __init__(self):
+                self.calls: list[str] = []
+
+            def extract_line_candidates(self, line_text):
+                text = str(line_text or "").strip()
+                self.calls.append(text)
+                return [text] if text else []
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "engine": "easyocr",
+                "lang": "en",
+                "row_pass_name_x_ratio": 0.58,
+                "row_pass_brightness_threshold": 145,
+                "row_pass_scale_factor": 1,
+                "row_pass_include_mono": False,
+                "row_pass_psm_values": (7,),
+                "row_pass_full_width_fallback": False,
+                "row_pass_vote_target_single_name": 1,
+                "row_pass_line_prefilter_enabled": True,
+                "name_special_char_constraint": False,
+            }
+        )
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            image_path = Path(tmp.name)
+        try:
+            img = QtGui.QImage(200, 80, QtGui.QImage.Format_Grayscale8)
+            img.fill(0)
+            self.assertTrue(img.save(str(image_path), "PNG"))
+
+            parse_ctx = _ParseCtx()
+            with (
+                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 12), (24, 34)]),
+            ):
+                names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
+                    [image_path],
+                    cfg=cfg,
+                    parse_ctx=parse_ctx,
+                )
+        finally:
+            image_path.unlink(missing_ok=True)
+
+        self.assertEqual(call_no["n"], 2)
+        self.assertEqual(names, ["Alpha"])
+        self.assertEqual(parse_ctx.calls, ["Alpha"])
+        self.assertEqual(len(runs), 2)
+
+    def test_row_pass_skips_mono_retry_when_row_candidate_is_already_confident(self):
+        call_no = {"n": 0}
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_ocr_multi(
+                image_path,
+                *,
+                engine,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+                easyocr_model_dir,
+                easyocr_user_network_dir,
+                easyocr_gpu,
+                easyocr_download_enabled,
+                easyocr_quiet,
+            ):
+                del (
+                    image_path,
+                    engine,
+                    cmd,
+                    psm_values,
+                    timeout_s,
+                    lang,
+                    stop_on_first_success,
+                    easyocr_model_dir,
+                    easyocr_user_network_dir,
+                    easyocr_gpu,
+                    easyocr_download_enabled,
+                    easyocr_quiet,
+                )
+                call_no["n"] += 1
+                if call_no["n"] == 1:
+                    return SimpleNamespace(
+                        text="Alpha",
+                        error=None,
+                        lines=[SimpleNamespace(text="Alpha", confidence=85.0)],
+                    )
+                return SimpleNamespace(text="", error=None, lines=[])
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                del kwargs
+                value = str(text or "").strip()
+                return [value] if value else []
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "engine": "easyocr",
+                "lang": "en",
+                "row_pass_name_x_ratio": 0.58,
+                "row_pass_brightness_threshold": 145,
+                "row_pass_scale_factor": 2,
+                "row_pass_include_mono": True,
+                "row_pass_psm_values": (7,),
+                "row_pass_full_width_fallback": False,
+                "row_pass_vote_target_single_name": 3,
+                "row_pass_confident_single_vote_stop": False,
+                "row_pass_mono_retry_only_when_uncertain": True,
+                "row_pass_mono_retry_min_conf": 70.0,
+                "name_special_char_constraint": False,
+            }
+        )
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            image_path = Path(tmp.name)
+        try:
+            img = QtGui.QImage(180, 24, QtGui.QImage.Format_Grayscale8)
+            img.fill(0)
+            self.assertTrue(img.save(str(image_path), "PNG"))
+
+            parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
+            with (
+                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
+            ):
+                names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
+                    [image_path],
+                    cfg=cfg,
+                    parse_ctx=parse_ctx,
+                )
+        finally:
+            image_path.unlink(missing_ok=True)
+
+        # base + scaled only (mono variants skipped due confident first vote)
+        self.assertEqual(call_no["n"], 2)
+        self.assertEqual(names, ["Alpha"])
+        self.assertEqual(len(runs), 2)
+
+    def test_row_pass_skips_mono_retry_when_non_mono_signal_is_only_low_conf_noise(self):
+        call_no = {"n": 0}
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_ocr_multi(
+                image_path,
+                *,
+                engine,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+                easyocr_model_dir,
+                easyocr_user_network_dir,
+                easyocr_gpu,
+                easyocr_download_enabled,
+                easyocr_quiet,
+            ):
+                del (
+                    image_path,
+                    engine,
+                    cmd,
+                    psm_values,
+                    timeout_s,
+                    lang,
+                    stop_on_first_success,
+                    easyocr_model_dir,
+                    easyocr_user_network_dir,
+                    easyocr_gpu,
+                    easyocr_download_enabled,
+                    easyocr_quiet,
+                )
+                call_no["n"] += 1
+                if call_no["n"] == 1:
+                    return SimpleNamespace(
+                        text="Lt",
+                        error=None,
+                        lines=[SimpleNamespace(text="Lt", confidence=0.3)],
+                    )
+                if call_no["n"] == 2:
+                    return SimpleNamespace(
+                        text="n",
+                        error=None,
+                        lines=[SimpleNamespace(text="n", confidence=1.2)],
+                    )
+                return SimpleNamespace(text="", error=None, lines=[])
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                del kwargs
+                value = str(text or "").strip()
+                return [value] if value else []
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "engine": "easyocr",
+                "lang": "en",
+                "row_pass_name_x_ratio": 0.58,
+                "row_pass_brightness_threshold": 145,
+                "row_pass_scale_factor": 2,
+                "row_pass_include_mono": True,
+                "row_pass_psm_values": (7,),
+                "row_pass_full_width_fallback": False,
+                "row_pass_vote_target_single_name": 3,
+                "row_pass_skip_mono_when_non_mono_empty": False,
+                "row_pass_skip_mono_when_non_mono_low_conf": True,
+                "row_pass_skip_mono_when_non_mono_low_conf_max_conf": 12.0,
+                "row_pass_line_stats_min_conf": 8.0,
+                "name_special_char_constraint": False,
+            }
+        )
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            image_path = Path(tmp.name)
+        try:
+            img = QtGui.QImage(180, 24, QtGui.QImage.Format_Grayscale8)
+            img.fill(0)
+            self.assertTrue(img.save(str(image_path), "PNG"))
+
+            parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
+            with (
+                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
+            ):
+                names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
+                    [image_path],
+                    cfg=cfg,
+                    parse_ctx=parse_ctx,
+                )
+        finally:
+            image_path.unlink(missing_ok=True)
+
+        self.assertEqual(call_no["n"], 2)
+        self.assertEqual(names, [])
+        self.assertEqual(len(runs), 2)
+        self.assertTrue(all("/mono" not in str(run.get("image", "")) for run in runs))
+
+    def test_row_pass_extra_rows_light_mode_reduces_tail_variant_calls(self):
+        call_no = {"n": 0}
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_ocr_multi(
+                image_path,
+                *,
+                engine,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+                easyocr_model_dir,
+                easyocr_user_network_dir,
+                easyocr_gpu,
+                easyocr_download_enabled,
+                easyocr_quiet,
+            ):
+                del (
+                    image_path,
+                    engine,
+                    cmd,
+                    psm_values,
+                    timeout_s,
+                    lang,
+                    stop_on_first_success,
+                    easyocr_model_dir,
+                    easyocr_user_network_dir,
+                    easyocr_gpu,
+                    easyocr_download_enabled,
+                    easyocr_quiet,
+                )
+                call_no["n"] += 1
+                if call_no["n"] <= 5:
+                    text = f"Name{call_no['n']}"
+                    return SimpleNamespace(
+                        text=text,
+                        error=None,
+                        lines=[SimpleNamespace(text=text, confidence=82.0)],
+                    )
+                return SimpleNamespace(text="", error=None, lines=[])
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                del kwargs
+                value = str(text or "").strip()
+                return [value] if value else []
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "engine": "easyocr",
+                "lang": "en",
+                "fast_mode": True,
+                "expected_candidates": 5,
+                "row_pass_max_rows": 12,
+                "row_pass_adaptive_max_rows": True,
+                "row_pass_adaptive_extra_rows": 2,
+                "row_pass_name_x_ratio": 0.58,
+                "row_pass_brightness_threshold": 145,
+                "row_pass_scale_factor": 2,
+                "row_pass_include_mono": True,
+                "row_pass_psm_values": (7,),
+                "row_pass_full_width_fallback": True,
+                "row_pass_full_width_edge_only": False,
+                "row_pass_vote_target_single_name": 1,
+                "row_pass_confident_single_vote_stop": False,
+                "row_pass_mono_retry_only_when_uncertain": False,
+                "row_pass_extra_rows_light_mode": True,
+                "row_pass_extra_rows_light_mode_min_collected": 5,
+                "row_pass_consecutive_empty_row_stop": 2,
+                "row_pass_empty_row_stop_min_collected": 5,
+                "row_pass_stop_when_expected_reached": False,
+                "name_special_char_constraint": False,
+            }
+        )
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            image_path = Path(tmp.name)
+        try:
+            img = QtGui.QImage(220, 220, QtGui.QImage.Format_Grayscale8)
+            img.fill(0)
+            self.assertTrue(img.save(str(image_path), "PNG"))
+
+            parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
+            row_ranges = [(2 + i * 20, 10 + i * 20) for i in range(10)]
+            with (
+                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=row_ranges),
+            ):
+                names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
+                    [image_path],
+                    cfg=cfg,
+                    parse_ctx=parse_ctx,
+                )
+        finally:
+            image_path.unlink(missing_ok=True)
+
+        # First 5 rows succeed in one call each (vote_target=1).
+        # Extra rows 6 and 7 run in light mode: name crop + non-mono variants.
+        self.assertEqual(names, ["Name1", "Name2", "Name3", "Name4", "Name5"])
+        self.assertEqual(call_no["n"], 9)
+        self.assertEqual(len(runs), 9)
+
+    def test_row_pass_stops_when_expected_rows_are_already_collected(self):
+        call_no = {"n": 0}
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_ocr_multi(
+                image_path,
+                *,
+                engine,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+                easyocr_model_dir,
+                easyocr_user_network_dir,
+                easyocr_gpu,
+                easyocr_download_enabled,
+                easyocr_quiet,
+            ):
+                del (
+                    image_path,
+                    engine,
+                    cmd,
+                    psm_values,
+                    timeout_s,
+                    lang,
+                    stop_on_first_success,
+                    easyocr_model_dir,
+                    easyocr_user_network_dir,
+                    easyocr_gpu,
+                    easyocr_download_enabled,
+                    easyocr_quiet,
+                )
+                call_no["n"] += 1
+                text = f"Name{call_no['n']}"
+                return SimpleNamespace(
+                    text=text,
+                    error=None,
+                    lines=[SimpleNamespace(text=text, confidence=82.0)],
+                )
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                del kwargs
+                value = str(text or "").strip()
+                return [value] if value else []
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "engine": "easyocr",
+                "lang": "en",
+                "expected_candidates": 5,
+                "row_pass_max_rows": 12,
+                "row_pass_adaptive_max_rows": False,
+                "row_pass_name_x_ratio": 0.58,
+                "row_pass_brightness_threshold": 145,
+                "row_pass_scale_factor": 1,
+                "row_pass_include_mono": False,
+                "row_pass_psm_values": (7,),
+                "row_pass_full_width_fallback": False,
+                "row_pass_vote_target_single_name": 1,
+                "row_pass_stop_when_expected_reached": True,
+                "row_pass_consecutive_empty_row_stop": 0,
+                "name_special_char_constraint": False,
+            }
+        )
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            image_path = Path(tmp.name)
+        try:
+            img = QtGui.QImage(220, 260, QtGui.QImage.Format_Grayscale8)
+            img.fill(0)
+            self.assertTrue(img.save(str(image_path), "PNG"))
+
+            parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
+            row_ranges = [(2 + i * 20, 10 + i * 20) for i in range(10)]
+            with (
+                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=row_ranges),
+            ):
+                names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
+                    [image_path],
+                    cfg=cfg,
+                    parse_ctx=parse_ctx,
+                )
+        finally:
+            image_path.unlink(missing_ok=True)
+
+        self.assertEqual(names, ["Name1", "Name2", "Name3", "Name4", "Name5"])
+        self.assertEqual(call_no["n"], 5)
+        self.assertEqual(len(runs), 5)
+
+    def test_row_pass_adaptive_max_rows_limits_processed_rows_in_fast_mode(self):
+        call_no = {"n": 0}
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_ocr_multi(
+                image_path,
+                *,
+                engine,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+                easyocr_model_dir,
+                easyocr_user_network_dir,
+                easyocr_gpu,
+                easyocr_download_enabled,
+                easyocr_quiet,
+            ):
+                del (
+                    image_path,
+                    engine,
+                    cmd,
+                    psm_values,
+                    timeout_s,
+                    lang,
+                    stop_on_first_success,
+                    easyocr_model_dir,
+                    easyocr_user_network_dir,
+                    easyocr_gpu,
+                    easyocr_download_enabled,
+                    easyocr_quiet,
+                )
+                call_no["n"] += 1
+                text = "RowCandidate"
+                return SimpleNamespace(
+                    text=text,
+                    error=None,
+                    lines=[SimpleNamespace(text=text, confidence=80.0)],
+                )
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                del kwargs
+                value = str(text or "").strip()
+                return [value] if value else []
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "engine": "easyocr",
+                "lang": "en",
+                "fast_mode": True,
+                "expected_candidates": 5,
+                "row_pass_max_rows": 12,
+                "row_pass_adaptive_max_rows": True,
+                "row_pass_adaptive_extra_rows": 2,
+                "row_pass_name_x_ratio": 0.58,
+                "row_pass_brightness_threshold": 145,
+                "row_pass_scale_factor": 1,
+                "row_pass_include_mono": False,
+                "row_pass_psm_values": (7,),
+                "row_pass_full_width_fallback": False,
+                "name_special_char_constraint": False,
+            }
+        )
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            image_path = Path(tmp.name)
+        try:
+            img = QtGui.QImage(200, 260, QtGui.QImage.Format_Grayscale8)
+            img.fill(0)
+            self.assertTrue(img.save(str(image_path), "PNG"))
+
+            parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
+            row_ranges = [(2 + i * 20, 10 + i * 20) for i in range(10)]
+            with (
+                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=row_ranges),
+            ):
+                _names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
+                    [image_path],
+                    cfg=cfg,
+                    parse_ctx=parse_ctx,
+                )
+        finally:
+            image_path.unlink(missing_ok=True)
+
+        self.assertEqual(call_no["n"], 7)
+        self.assertEqual(len(runs), 7)
 
     def test_expand_config_identifier_prefixes_completes_unique_prefixes(self):
         names = [
@@ -3270,11 +4948,13 @@ class TestOCRCaptureOps(unittest.TestCase):
             settings = {
                 "OCR_DEBUG_LOG_TO_FILE": True,
                 "OCR_DEBUG_LOG_FILE": "ocr_debug.log",
+                "LOG_OUTPUT_DIR": "logs",
                 "OCR_DEBUG_LOG_MAX_CHARS": 0,
             }
             mw = SimpleNamespace(
                 _cfg=lambda key, default=None: settings.get(key, default),
                 _state_dir=state_dir,
+                _log_dir=state_dir / "logs",
             )
             log_path = ocr_capture_ops._append_ocr_debug_log(
                 mw,
@@ -3283,9 +4963,9 @@ class TestOCRCaptureOps(unittest.TestCase):
                 raw_text="[OCR Debug Report]\nparsed-candidates: Aero, Massith",
                 ocr_error=None,
             )
-            self.assertEqual(log_path, state_dir / "ocr_debug.log")
-            self.assertTrue((state_dir / "ocr_debug.log").exists())
-            content = (state_dir / "ocr_debug.log").read_text(encoding="utf-8")
+            self.assertEqual(log_path, state_dir / "logs" / "ocr_debug.log")
+            self.assertTrue((state_dir / "logs" / "ocr_debug.log").exists())
+            content = (state_dir / "logs" / "ocr_debug.log").read_text(encoding="utf-8")
             self.assertIn("role=DPS", content)
             self.assertIn("candidates=2", content)
             self.assertIn("[OCR Debug Report]", content)

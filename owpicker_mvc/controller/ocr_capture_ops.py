@@ -402,6 +402,27 @@ def _ocr_runtime_cfg_snapshot(mw) -> dict:
             return "auto"
         return "auto" if bool(raw) else "cpu"
 
+    def _cfg_bool_map(entries: list[tuple[str, str, bool]]) -> dict[str, bool]:
+        values: dict[str, bool] = {}
+        for key, cfg_key, default in entries:
+            values[key] = bool(mw._cfg(cfg_key, default))
+        return values
+
+    def _cfg_int_map(entries: list[tuple[str, str, int]]) -> dict[str, int]:
+        values: dict[str, int] = {}
+        for key, cfg_key, default in entries:
+            values[key] = int(mw._cfg(cfg_key, default))
+        return values
+
+    def _cfg_float_map(entries: list[tuple[str, str, float]]) -> dict[str, float]:
+        values: dict[str, float] = {}
+        for key, cfg_key, default in entries:
+            values[key] = float(mw._cfg(cfg_key, default))
+        return values
+
+    def _cfg_optional_str(cfg_key: str, default: str = "") -> str | None:
+        return str(mw._cfg(cfg_key, default)).strip() or None
+
     engine = str(mw._cfg("OCR_ENGINE", "easyocr")).strip().casefold()
     if engine in {"easy", "easy-ocr", "easy_ocr"}:
         engine = "easyocr"
@@ -431,120 +452,226 @@ def _ocr_runtime_cfg_snapshot(mw) -> dict:
     row_pass_psm_values = _parse_psm_values(mw._cfg("OCR_ROW_PASS_PSMS", [7, 13, 6]))
     if not row_pass_psm_values:
         row_pass_psm_values = [7, 6, 13]
+    quiet_mode = bool(mw._cfg("QUIET", False))
     debug_show_report = bool(mw._cfg("OCR_DEBUG_SHOW_REPORT", False))
-    debug_include_report_text = bool(
-        mw._cfg("OCR_DEBUG_INCLUDE_REPORT_TEXT", debug_show_report)
-    )
+    debug_include_report_text = bool(mw._cfg("OCR_DEBUG_INCLUDE_REPORT_TEXT", debug_show_report))
     debug_log_to_file = bool(mw._cfg("OCR_DEBUG_LOG_TO_FILE", True))
     debug_line_analysis = bool(mw._cfg("OCR_DEBUG_LINE_ANALYSIS", True))
-    if bool(mw._cfg("QUIET", False)):
+    if quiet_mode:
         debug_show_report = False
         debug_include_report_text = False
         debug_log_to_file = False
         debug_line_analysis = False
-    quiet_mode = bool(mw._cfg("QUIET", False))
 
     easyocr_lang = str(mw._cfg("OCR_EASYOCR_LANG", "en")).strip() or None
-    selected_lang = easyocr_lang
-
-    return {
+    cfg = {
         "engine": engine,
         "fast_mode": fast_mode,
         "max_variants": max_variants,
-        "stop_after_variant_success": bool(mw._cfg("OCR_STOP_AFTER_FIRST_VARIANT_SUCCESS", True)),
         "psm_primary": psm_primary,
         "psm_fallback": psm_fallback,
         "psm_values": tuple(psm_values),
         "retry_extra_psm_values": tuple(retry_extra_psm_values),
-        "lang": selected_lang,
+        "lang": easyocr_lang,
         "easyocr_lang": easyocr_lang,
-        "easyocr_model_dir": str(mw._cfg("OCR_EASYOCR_MODEL_DIR", "")).strip() or None,
-        "easyocr_user_network_dir": str(mw._cfg("OCR_EASYOCR_USER_NETWORK_DIR", "")).strip() or None,
+        "easyocr_model_dir": _cfg_optional_str("OCR_EASYOCR_MODEL_DIR"),
+        "easyocr_user_network_dir": _cfg_optional_str("OCR_EASYOCR_USER_NETWORK_DIR"),
         "easyocr_gpu": _parse_easyocr_gpu_value(mw._cfg("OCR_EASYOCR_GPU", "auto")),
-        "easyocr_download_enabled": bool(mw._cfg("OCR_EASYOCR_DOWNLOAD_ENABLED", False)),
         "quiet_mode": quiet_mode,
         "timeout_s": timeout_s,
         "debug_show_report": debug_show_report,
         "debug_include_report_text": debug_include_report_text,
         "debug_log_to_file": debug_log_to_file,
-        "debug_report_max_chars": int(mw._cfg("OCR_DEBUG_REPORT_MAX_CHARS", 12000)),
         "debug_line_analysis": debug_line_analysis,
-        "debug_line_max_entries_per_run": int(mw._cfg("OCR_DEBUG_LINE_MAX_ENTRIES_PER_RUN", 40)),
-        "debug_trace_line_mapping": bool(mw._cfg("OCR_DEBUG_TRACE_LINE_MAPPING", True)),
-        "debug_trace_max_entries": int(mw._cfg("OCR_DEBUG_TRACE_MAX_ENTRIES", 220)),
-        "recall_retry_enabled": bool(mw._cfg("OCR_RECALL_RETRY_ENABLED", True)),
         "recall_retry_min_candidates": retry_min_candidates,
-        "recall_retry_max_candidates": int(mw._cfg("OCR_RECALL_RETRY_MAX_CANDIDATES", 7)),
-        "recall_retry_short_name_max_ratio": float(
-            mw._cfg("OCR_RECALL_RETRY_SHORT_NAME_MAX_RATIO", 0.34)
-        ),
         "recall_retry_max_variants": retry_max_variants,
-        "recall_retry_use_fallback_psm": bool(
-            mw._cfg("OCR_RECALL_RETRY_USE_FALLBACK_PSM", True)
-        ),
-        "recall_retry_timeout_scale": float(mw._cfg("OCR_RECALL_RETRY_TIMEOUT_SCALE", 1.35)),
-        "recall_relax_support_on_low_count": bool(
-            mw._cfg("OCR_RECALL_RELAX_SUPPORT_ON_LOW_COUNT", True)
-        ),
-        "expected_candidates": int(mw._cfg("OCR_EXPECTED_CANDIDATES", 5)),
-        "row_pass_enabled": bool(mw._cfg("OCR_ROW_PASS_ENABLED", True)),
-        "row_pass_always_run": bool(mw._cfg("OCR_ROW_PASS_ALWAYS_RUN", True)),
-        "row_pass_min_candidates": int(mw._cfg("OCR_ROW_PASS_MIN_CANDIDATES", 5)),
-        "row_pass_brightness_threshold": int(mw._cfg("OCR_ROW_PASS_BRIGHTNESS_THRESHOLD", 145)),
-        "row_pass_min_pixels_ratio": float(mw._cfg("OCR_ROW_PASS_MIN_PIXELS_RATIO", 0.015)),
-        "row_pass_merge_gap_px": int(mw._cfg("OCR_ROW_PASS_MERGE_GAP_PX", 2)),
-        "row_pass_min_height_px": int(mw._cfg("OCR_ROW_PASS_MIN_HEIGHT_PX", 7)),
-        "row_pass_max_rows": int(mw._cfg("OCR_ROW_PASS_MAX_ROWS", 12)),
-        "row_pass_pad_px": int(mw._cfg("OCR_ROW_PASS_PAD_PX", 2)),
-        "row_pass_name_x_ratio": float(mw._cfg("OCR_ROW_PASS_NAME_X_RATIO", 0.58)),
-        "row_pass_full_width_fallback": bool(
-            mw._cfg("OCR_ROW_PASS_FULL_WIDTH_FALLBACK", True)
-        ),
-        "row_pass_projection_x_start_ratio": float(
-            mw._cfg("OCR_ROW_PASS_PROJECTION_X_START_RATIO", 0.08)
-        ),
-        "row_pass_projection_x_end_ratio": float(
-            mw._cfg("OCR_ROW_PASS_PROJECTION_X_END_RATIO", 0.92)
-        ),
-        "row_pass_projection_col_max_ratio": float(
-            mw._cfg("OCR_ROW_PASS_PROJECTION_COL_MAX_RATIO", 0.84)
-        ),
-        "row_pass_scale_factor": int(mw._cfg("OCR_ROW_PASS_SCALE_FACTOR", 4)),
-        "row_pass_include_mono": bool(mw._cfg("OCR_ROW_PASS_INCLUDE_MONO", True)),
-        "row_pass_timeout_scale": float(mw._cfg("OCR_ROW_PASS_TIMEOUT_SCALE", 0.55)),
         "row_pass_psm_values": tuple(row_pass_psm_values),
-        "row_pass_single_name_per_row": bool(
-            mw._cfg("OCR_ROW_PASS_SINGLE_NAME_PER_ROW", True)
-        ),
-        "single_name_per_line": bool(mw._cfg("OCR_SINGLE_NAME_PER_LINE", False)),
-        "name_min_chars": int(mw._cfg("OCR_NAME_MIN_CHARS", 2)),
-        "name_max_chars": int(mw._cfg("OCR_NAME_MAX_CHARS", 24)),
-        "name_max_words": int(mw._cfg("OCR_NAME_MAX_WORDS", 2)),
-        "name_max_digit_ratio": float(mw._cfg("OCR_NAME_MAX_DIGIT_RATIO", 0.45)),
-        "line_relaxed_fallback": bool(mw._cfg("OCR_LINE_RELAXED_FALLBACK", True)),
-        "line_recall_max_additions": int(mw._cfg("OCR_LINE_RECALL_MAX_ADDITIONS", 2)),
-        "name_special_char_constraint": bool(
-            mw._cfg("OCR_NAME_SPECIAL_CHAR_CONSTRAINT", False)
-        ),
-        "name_min_support": int(mw._cfg("OCR_NAME_MIN_SUPPORT", 1)),
-        "name_min_confidence": float(mw._cfg("OCR_NAME_MIN_CONFIDENCE", 43.0)),
-        "name_low_confidence_min_support": int(
-            mw._cfg("OCR_NAME_LOW_CONFIDENCE_MIN_SUPPORT", 2)
-        ),
-        "name_confidence_filter_noisy_only": bool(
-            mw._cfg("OCR_NAME_CONFIDENCE_FILTER_NOISY_ONLY", True)
-        ),
-        "name_high_count_threshold": int(mw._cfg("OCR_NAME_HIGH_COUNT_THRESHOLD", 8)),
-        "name_high_count_min_support": int(mw._cfg("OCR_NAME_HIGH_COUNT_MIN_SUPPORT", 2)),
-        "name_max_candidates": int(mw._cfg("OCR_NAME_MAX_CANDIDATES", 12)),
-        "name_near_dup_min_chars": int(mw._cfg("OCR_NAME_NEAR_DUP_MIN_CHARS", 8)),
-        "name_near_dup_max_len_delta": int(mw._cfg("OCR_NAME_NEAR_DUP_MAX_LEN_DELTA", 1)),
-        "name_near_dup_similarity": float(mw._cfg("OCR_NAME_NEAR_DUP_SIMILARITY", 0.90)),
-        "name_near_dup_tail_min_chars": int(mw._cfg("OCR_NAME_NEAR_DUP_TAIL_MIN_CHARS", 3)),
-        "name_near_dup_tail_head_similarity": float(
-            mw._cfg("OCR_NAME_NEAR_DUP_TAIL_HEAD_SIMILARITY", 0.70)
-        ),
     }
+    cfg.update(
+        _cfg_bool_map(
+            [
+                ("stop_after_variant_success", "OCR_STOP_AFTER_FIRST_VARIANT_SUCCESS", True),
+                ("fast_mode_confident_line_stop", "OCR_FAST_MODE_CONFIDENT_LINE_STOP", True),
+                ("precount_fast_probe_enabled", "OCR_PRECOUNT_FAST_PROBE_ENABLED", True),
+                (
+                    "precount_fast_probe_single_expected",
+                    "OCR_PRECOUNT_FAST_PROBE_SINGLE_EXPECTED",
+                    True,
+                ),
+                ("easyocr_download_enabled", "OCR_EASYOCR_DOWNLOAD_ENABLED", False),
+                ("debug_trace_line_mapping", "OCR_DEBUG_TRACE_LINE_MAPPING", True),
+                ("recall_retry_enabled", "OCR_RECALL_RETRY_ENABLED", True),
+                (
+                    "recall_retry_skip_when_primary_clean",
+                    "OCR_RECALL_RETRY_SKIP_WHEN_PRIMARY_CLEAN",
+                    True,
+                ),
+                ("recall_retry_use_fallback_psm", "OCR_RECALL_RETRY_USE_FALLBACK_PSM", True),
+                ("recall_relax_support_on_low_count", "OCR_RECALL_RELAX_SUPPORT_ON_LOW_COUNT", True),
+                ("row_pass_enabled", "OCR_ROW_PASS_ENABLED", True),
+                ("row_pass_always_run", "OCR_ROW_PASS_ALWAYS_RUN", True),
+                ("row_pass_skip_when_primary_stable", "OCR_ROW_PASS_SKIP_WHEN_PRIMARY_STABLE", True),
+                ("row_pass_full_width_fallback", "OCR_ROW_PASS_FULL_WIDTH_FALLBACK", True),
+                ("row_pass_full_width_edge_only", "OCR_ROW_PASS_FULL_WIDTH_EDGE_ONLY", True),
+                ("row_pass_full_only_when_name_uncertain", "OCR_ROW_PASS_FULL_ONLY_WHEN_NAME_UNCERTAIN", True),
+                ("row_pass_skip_full_when_name_empty", "OCR_ROW_PASS_SKIP_FULL_WHEN_NAME_EMPTY", True),
+                ("row_pass_skip_full_when_name_low_conf", "OCR_ROW_PASS_SKIP_FULL_WHEN_NAME_LOW_CONF", True),
+                ("row_pass_include_mono", "OCR_ROW_PASS_INCLUDE_MONO", True),
+                ("row_pass_skip_mono_when_non_mono_empty", "OCR_ROW_PASS_SKIP_MONO_WHEN_NON_MONO_EMPTY", True),
+                ("row_pass_skip_mono_when_non_mono_low_conf", "OCR_ROW_PASS_SKIP_MONO_WHEN_NON_MONO_LOW_CONF", True),
+                ("row_pass_single_name_per_row", "OCR_ROW_PASS_SINGLE_NAME_PER_ROW", True),
+                ("row_pass_confident_single_vote_stop", "OCR_ROW_PASS_CONFIDENT_SINGLE_VOTE_STOP", True),
+                (
+                    "row_pass_confident_single_vote_stop_when_primary_complete",
+                    "OCR_ROW_PASS_CONFIDENT_SINGLE_VOTE_STOP_WHEN_PRIMARY_COMPLETE",
+                    True,
+                ),
+                (
+                    "row_pass_single_psm_when_primary_complete",
+                    "OCR_ROW_PASS_SINGLE_PSM_WHEN_PRIMARY_COMPLETE",
+                    True,
+                ),
+                ("row_pass_line_prefilter_enabled", "OCR_ROW_PASS_LINE_PREFILTER_ENABLED", True),
+                ("row_pass_mono_retry_only_when_uncertain", "OCR_ROW_PASS_MONO_RETRY_ONLY_WHEN_UNCERTAIN", True),
+                ("row_pass_extra_rows_light_mode", "OCR_ROW_PASS_EXTRA_ROWS_LIGHT_MODE", True),
+                ("row_pass_stop_when_expected_reached", "OCR_ROW_PASS_STOP_WHEN_EXPECTED_REACHED", True),
+                ("row_pass_adaptive_max_rows", "OCR_ROW_PASS_ADAPTIVE_MAX_ROWS", True),
+                ("row_pass_early_abort_on_primary_strong", "OCR_ROW_PASS_EARLY_ABORT_ON_PRIMARY_STRONG", True),
+                ("single_name_per_line", "OCR_SINGLE_NAME_PER_LINE", False),
+                ("line_relaxed_fallback", "OCR_LINE_RELAXED_FALLBACK", True),
+                ("name_special_char_constraint", "OCR_NAME_SPECIAL_CHAR_CONSTRAINT", False),
+                ("name_confidence_filter_noisy_only", "OCR_NAME_CONFIDENCE_FILTER_NOISY_ONLY", True),
+            ]
+        )
+    )
+    cfg.update(
+        _cfg_int_map(
+            [
+                ("fast_mode_confident_line_min_lines", "OCR_FAST_MODE_CONFIDENT_LINE_MIN_LINES", 0),
+                (
+                    "fast_mode_confident_line_missing_tolerance",
+                    "OCR_FAST_MODE_CONFIDENT_LINE_MISSING_TOLERANCE",
+                    1,
+                ),
+                (
+                    "precount_fast_probe_max_variants",
+                    "OCR_PRECOUNT_FAST_PROBE_MAX_VARIANTS",
+                    1,
+                ),
+                ("debug_report_max_chars", "OCR_DEBUG_REPORT_MAX_CHARS", 12000),
+                ("debug_line_max_entries_per_run", "OCR_DEBUG_LINE_MAX_ENTRIES_PER_RUN", 40),
+                ("debug_trace_max_entries", "OCR_DEBUG_TRACE_MAX_ENTRIES", 220),
+                ("recall_retry_max_candidates", "OCR_RECALL_RETRY_MAX_CANDIDATES", 7),
+                (
+                    "recall_retry_skip_primary_clean_min_count",
+                    "OCR_RECALL_RETRY_SKIP_PRIMARY_CLEAN_MIN_COUNT",
+                    4,
+                ),
+                (
+                    "recall_retry_skip_primary_clean_max_shortfall",
+                    "OCR_RECALL_RETRY_SKIP_PRIMARY_CLEAN_MAX_SHORTFALL",
+                    1,
+                ),
+                ("expected_candidates", "OCR_EXPECTED_CANDIDATES", 5),
+                ("row_pass_primary_stable_min_candidates", "OCR_ROW_PASS_PRIMARY_STABLE_MIN_CANDIDATES", 0),
+                ("row_pass_min_candidates", "OCR_ROW_PASS_MIN_CANDIDATES", 5),
+                ("row_pass_brightness_threshold", "OCR_ROW_PASS_BRIGHTNESS_THRESHOLD", 145),
+                ("row_pass_merge_gap_px", "OCR_ROW_PASS_MERGE_GAP_PX", 2),
+                ("row_pass_min_height_px", "OCR_ROW_PASS_MIN_HEIGHT_PX", 7),
+                ("row_pass_max_rows", "OCR_ROW_PASS_MAX_ROWS", 12),
+                ("row_pass_pad_px", "OCR_ROW_PASS_PAD_PX", 2),
+                ("row_pass_scale_factor", "OCR_ROW_PASS_SCALE_FACTOR", 4),
+                ("row_pass_vote_target_single_name", "OCR_ROW_PASS_VOTE_TARGET_SINGLE_NAME", 2),
+                (
+                    "row_pass_vote_target_single_name_when_primary_complete",
+                    "OCR_ROW_PASS_VOTE_TARGET_SINGLE_NAME_WHEN_PRIMARY_COMPLETE",
+                    1,
+                ),
+                ("row_pass_vote_target_multi_name", "OCR_ROW_PASS_VOTE_TARGET_MULTI_NAME", 3),
+                ("row_pass_line_prefilter_min_alnum", "OCR_ROW_PASS_LINE_PREFILTER_MIN_ALNUM", 2),
+                ("row_pass_primary_complete_margin", "OCR_ROW_PASS_PRIMARY_COMPLETE_MARGIN", 1),
+                (
+                    "row_pass_primary_stable_relaxed_expected_gap",
+                    "OCR_ROW_PASS_PRIMARY_STABLE_RELAXED_EXPECTED_GAP",
+                    3,
+                ),
+                ("row_pass_early_abort_probe_rows", "OCR_ROW_PASS_EARLY_ABORT_PROBE_ROWS", 3),
+                (
+                    "row_pass_early_abort_probe_rows_when_primary_complete",
+                    "OCR_ROW_PASS_EARLY_ABORT_PROBE_ROWS_WHEN_PRIMARY_COMPLETE",
+                    2,
+                ),
+                ("row_pass_early_abort_primary_min_candidates", "OCR_ROW_PASS_EARLY_ABORT_PRIMARY_MIN_CANDIDATES", 0),
+                ("row_pass_extra_rows_light_mode_min_collected", "OCR_ROW_PASS_EXTRA_ROWS_LIGHT_MODE_MIN_COLLECTED", 0),
+                ("row_pass_adaptive_extra_rows", "OCR_ROW_PASS_ADAPTIVE_EXTRA_ROWS", 2),
+                ("row_pass_consecutive_empty_row_stop", "OCR_ROW_PASS_CONSECUTIVE_EMPTY_ROW_STOP", 2),
+                ("row_pass_empty_row_stop_min_collected", "OCR_ROW_PASS_EMPTY_ROW_STOP_MIN_COLLECTED", 0),
+                ("name_min_chars", "OCR_NAME_MIN_CHARS", 2),
+                ("name_max_chars", "OCR_NAME_MAX_CHARS", 24),
+                ("name_max_words", "OCR_NAME_MAX_WORDS", 2),
+                ("line_recall_max_additions", "OCR_LINE_RECALL_MAX_ADDITIONS", 2),
+                ("name_min_support", "OCR_NAME_MIN_SUPPORT", 1),
+                ("name_low_confidence_min_support", "OCR_NAME_LOW_CONFIDENCE_MIN_SUPPORT", 2),
+                ("name_high_count_threshold", "OCR_NAME_HIGH_COUNT_THRESHOLD", 8),
+                ("name_high_count_min_support", "OCR_NAME_HIGH_COUNT_MIN_SUPPORT", 2),
+                ("name_max_candidates", "OCR_NAME_MAX_CANDIDATES", 12),
+                ("name_near_dup_min_chars", "OCR_NAME_NEAR_DUP_MIN_CHARS", 8),
+                ("name_near_dup_max_len_delta", "OCR_NAME_NEAR_DUP_MAX_LEN_DELTA", 1),
+                ("name_near_dup_tail_min_chars", "OCR_NAME_NEAR_DUP_TAIL_MIN_CHARS", 3),
+            ]
+        )
+    )
+    cfg.update(
+        _cfg_float_map(
+            [
+                ("fast_mode_confident_line_min_avg_conf", "OCR_FAST_MODE_CONFIDENT_LINE_MIN_AVG_CONF", 68.0),
+                (
+                    "fast_mode_confident_line_min_avg_conf_tolerant",
+                    "OCR_FAST_MODE_CONFIDENT_LINE_MIN_AVG_CONF_TOLERANT",
+                    78.0,
+                ),
+                ("recall_retry_short_name_max_ratio", "OCR_RECALL_RETRY_SHORT_NAME_MAX_RATIO", 0.34),
+                (
+                    "recall_retry_skip_primary_clean_min_avg_conf",
+                    "OCR_RECALL_RETRY_SKIP_PRIMARY_CLEAN_MIN_AVG_CONF",
+                    78.0,
+                ),
+                ("recall_retry_timeout_scale", "OCR_RECALL_RETRY_TIMEOUT_SCALE", 1.35),
+                ("row_pass_min_pixels_ratio", "OCR_ROW_PASS_MIN_PIXELS_RATIO", 0.015),
+                ("row_pass_name_x_ratio", "OCR_ROW_PASS_NAME_X_RATIO", 0.58),
+                ("row_pass_projection_x_start_ratio", "OCR_ROW_PASS_PROJECTION_X_START_RATIO", 0.08),
+                ("row_pass_projection_x_end_ratio", "OCR_ROW_PASS_PROJECTION_X_END_RATIO", 0.92),
+                ("row_pass_projection_col_max_ratio", "OCR_ROW_PASS_PROJECTION_COL_MAX_RATIO", 0.84),
+                ("row_pass_full_only_when_name_uncertain_min_conf", "OCR_ROW_PASS_FULL_ONLY_WHEN_NAME_UNCERTAIN_MIN_CONF", 68.0),
+                ("row_pass_skip_full_when_name_low_conf_max_conf", "OCR_ROW_PASS_SKIP_FULL_WHEN_NAME_LOW_CONF_MAX_CONF", 12.0),
+                ("row_pass_skip_mono_when_non_mono_low_conf_max_conf", "OCR_ROW_PASS_SKIP_MONO_WHEN_NON_MONO_LOW_CONF_MAX_CONF", 12.0),
+                ("row_pass_timeout_scale", "OCR_ROW_PASS_TIMEOUT_SCALE", 0.55),
+                ("row_pass_confident_single_vote_min_conf", "OCR_ROW_PASS_CONFIDENT_SINGLE_VOTE_MIN_CONF", 96.0),
+                (
+                    "row_pass_confident_single_vote_min_conf_when_primary_complete",
+                    "OCR_ROW_PASS_CONFIDENT_SINGLE_VOTE_MIN_CONF_WHEN_PRIMARY_COMPLETE",
+                    72.0,
+                ),
+                ("row_pass_line_prefilter_low_conf", "OCR_ROW_PASS_LINE_PREFILTER_LOW_CONF", 22.0),
+                ("row_pass_line_prefilter_high_conf_bypass", "OCR_ROW_PASS_LINE_PREFILTER_HIGH_CONF_BYPASS", 72.0),
+                ("row_pass_line_prefilter_min_alpha_ratio", "OCR_ROW_PASS_LINE_PREFILTER_MIN_ALPHA_RATIO", 0.42),
+                ("row_pass_line_prefilter_max_punct_ratio", "OCR_ROW_PASS_LINE_PREFILTER_MAX_PUNCT_RATIO", 0.65),
+                ("row_pass_line_stats_min_conf", "OCR_ROW_PASS_LINE_STATS_MIN_CONF", 8.0),
+                ("row_pass_mono_retry_min_conf", "OCR_ROW_PASS_MONO_RETRY_MIN_CONF", 70.0),
+                ("row_pass_early_abort_low_conf", "OCR_ROW_PASS_EARLY_ABORT_LOW_CONF", 22.0),
+                (
+                    "row_pass_primary_stable_relaxed_min_avg_conf",
+                    "OCR_ROW_PASS_PRIMARY_STABLE_RELAXED_MIN_AVG_CONF",
+                    76.0,
+                ),
+                ("name_max_digit_ratio", "OCR_NAME_MAX_DIGIT_RATIO", 0.45),
+                ("name_min_confidence", "OCR_NAME_MIN_CONFIDENCE", 43.0),
+                ("name_near_dup_similarity", "OCR_NAME_NEAR_DUP_SIMILARITY", 0.90),
+                ("name_near_dup_tail_head_similarity", "OCR_NAME_NEAR_DUP_TAIL_HEAD_SIMILARITY", 0.70),
+            ]
+        )
+    )
+    return cfg
 
 
 def _prepare_ocr_variant_files(
@@ -809,8 +936,20 @@ def _estimate_expected_rows_from_paths(paths: list[Path], cfg: dict) -> int | No
         return None
 
     base_expected = max(1, int(cfg.get("expected_candidates", 5)))
+    fast_probe_enabled = bool(cfg.get("precount_fast_probe_enabled", True)) and bool(
+        cfg.get("fast_mode", True)
+    )
+    single_expected_probe = bool(cfg.get("precount_fast_probe_single_expected", True))
+    max_probe_variants = max(1, int(cfg.get("precount_fast_probe_max_variants", 1)))
+    if fast_probe_enabled:
+        selected_paths = list(selected_paths[:max_probe_variants])
+    probe_seed_values: list[int]
+    if fast_probe_enabled and single_expected_probe:
+        probe_seed_values = [base_expected]
+    else:
+        probe_seed_values = [base_expected, max(1, base_expected - 2), base_expected + 2]
     probe_expected_values: list[int] = []
-    for value in (base_expected, max(1, base_expected - 2), base_expected + 2):
+    for value in probe_seed_values:
         if value not in probe_expected_values:
             probe_expected_values.append(value)
 
@@ -830,7 +969,28 @@ def _estimate_expected_rows_from_paths(paths: list[Path], cfg: dict) -> int | No
             if count > 0:
                 counts.append(count)
     if not counts:
-        return None
+        if fast_probe_enabled and single_expected_probe:
+            # Fallback: if the lightweight probe found nothing, run one legacy
+            # pass to avoid false negatives from a single expected-row guess.
+            legacy_values = [base_expected, max(1, base_expected - 2), base_expected + 2]
+            for image_path in selected_paths:
+                image = QtGui.QImage(str(image_path))
+                if image.isNull():
+                    continue
+                gray = image.convertToFormat(QtGui.QImage.Format_Grayscale8)
+                if gray.isNull():
+                    continue
+                for probe_expected in legacy_values:
+                    probe_cfg = dict(cfg)
+                    probe_cfg["expected_candidates"] = probe_expected
+                    ranges = _detect_text_row_ranges(gray, probe_cfg)
+                    count = len(list(ranges or []))
+                    if count > 0:
+                        counts.append(count)
+            if not counts:
+                return None
+        else:
+            return None
 
     frequency: dict[int, int] = {}
     for count in counts:
@@ -864,19 +1024,50 @@ def _stable_primary_line_count(primary_runs: list[dict]) -> int | None:
     return int(counts[0])
 
 
+def _primary_line_count_bounds(primary_runs: list[dict]) -> tuple[int | None, int | None]:
+    counts = [count for count in (_run_line_count(run) for run in list(primary_runs or [])) if count > 0]
+    if not counts:
+        return None, None
+    return int(min(counts)), int(max(counts))
+
+
+def _primary_avg_line_confidence(primary_runs: list[dict]) -> float | None:
+    values: list[float] = []
+    for run in list(primary_runs or []):
+        for entry in list(run.get("lines") or []):
+            try:
+                conf = float(entry.get("conf", -1.0))
+            except Exception:
+                conf = -1.0
+            if conf >= 0.0:
+                values.append(conf)
+    if not values:
+        return None
+    return float(sum(values) / max(1, len(values)))
+
+
 def _resolve_effective_precount_rows(
     visual_precount_rows: int | None,
     primary_runs: list[dict],
 ) -> int | None:
     visual = int(visual_precount_rows) if visual_precount_rows is not None else None
     stable_primary = _stable_primary_line_count(primary_runs)
+    _primary_min, primary_max = _primary_line_count_bounds(primary_runs)
+    undercount_tolerance = 1
     if visual is None or visual <= 0:
         return stable_primary
     if stable_primary is None or stable_primary <= 0:
+        # With a single primary run, visual row projection can occasionally
+        # under-estimate heavily. Use observed OCR line count as fallback.
+        if primary_max is not None and primary_max > 0:
+            if visual < (primary_max - undercount_tolerance):
+                return primary_max
         return visual
     # If visual projection overestimates while primary OCR line count is stable
     # across variants, trust the stable textual line count.
     if visual > stable_primary:
+        return stable_primary
+    if visual < (stable_primary - undercount_tolerance):
         return stable_primary
     return visual
 
@@ -1352,6 +1543,17 @@ class _OCRPassFlowState:
     row_preferred: bool
 
 
+def _replace_names_if_better(
+    current: list[str],
+    proposed: list[str],
+    *,
+    cfg: dict,
+) -> list[str]:
+    if _score_candidate_set(proposed, cfg) > _score_candidate_set(current, cfg):
+        return list(proposed)
+    return list(current)
+
+
 def _order_and_collapse_by_trace(
     names: list[str],
     *,
@@ -1460,25 +1662,25 @@ def _collect_optional_pass_flow(
     if len(state.names) > max(0, int(runtime_cfg.get("recall_retry_max_candidates", 7))):
         strict_cfg = _build_strict_extraction_cfg(runtime_cfg)
         strict_names = _extract_names_from_texts(ocr_import, state.merged_texts, strict_cfg)
-        if _score_candidate_set(strict_names, runtime_cfg) > _score_candidate_set(state.names, runtime_cfg):
-            state.names = strict_names
+        state.names = _replace_names_if_better(state.names, strict_names, cfg=runtime_cfg)
 
     if bool(runtime_cfg.get("recall_relax_support_on_low_count", True)) and _is_low_count_candidate_set(runtime_cfg, state.names):
         relaxed_cfg = _build_relaxed_support_cfg(runtime_cfg)
         relaxed_names = _extract_names_from_texts(ocr_import, state.merged_texts, relaxed_cfg)
-        if _score_candidate_set(relaxed_names, runtime_cfg) > _score_candidate_set(state.names, runtime_cfg):
-            state.names = relaxed_names
+        state.names = _replace_names_if_better(state.names, relaxed_names, cfg=runtime_cfg)
 
-    if _should_run_row_pass(runtime_cfg, state.names):
+    row_cfg = dict(runtime_cfg)
+    row_cfg["primary_candidate_count"] = len(list(primary_names or []))
+    if _should_run_row_pass(row_cfg, state.names):
         row_names, row_texts, row_runs = _run_row_segmentation_pass(
             paths,
-            cfg=runtime_cfg,
+            cfg=row_cfg,
             parse_ctx=line_parse_ctx,
         )
         state.row_names = list(row_names)
         state.row_runs = list(row_runs)
         state.merged_texts.extend(list(row_texts))
-        if _prefer_row_candidates(state.names, state.row_names, runtime_cfg):
+        if _prefer_row_candidates(state.names, state.row_names, row_cfg):
             state.names = list(state.row_names)
             state.row_preferred = True
 
@@ -1531,6 +1733,15 @@ def _build_names_from_candidate_runs(
     precount_max_rows: int | None,
     precount_refill_target: int | None,
 ) -> tuple[list[str], dict[str, dict[str, float | int | str]]]:
+    def _normalize_names(values: list[str]) -> list[str]:
+        return _order_and_collapse_by_trace(
+            values,
+            trace_entries=line_map_trace_all,
+            row_preferred=row_preferred,
+            candidate_stats=candidate_stats,
+            cfg=cfg_effective,
+        )
+
     all_runs = list(primary_runs) + list(retry_runs) + list(row_runs)
     candidate_stats = _candidate_stats_from_runs(
         all_runs,
@@ -1565,13 +1776,7 @@ def _build_names_from_candidate_runs(
         cfg_effective,
         candidate_stats,
     )
-    names = _order_and_collapse_by_trace(
-        names,
-        trace_entries=line_map_trace_all,
-        row_preferred=row_preferred,
-        candidate_stats=candidate_stats,
-        cfg=cfg_effective,
-    )
+    names = _normalize_names(names)
 
     expected = max(1, int(cfg_effective.get("expected_candidates", 5)))
     refill_target = expected
@@ -1601,13 +1806,7 @@ def _build_names_from_candidate_runs(
             cfg=cfg_effective,
         )
 
-    names = _order_and_collapse_by_trace(
-        names,
-        trace_entries=line_map_trace_all,
-        row_preferred=row_preferred,
-        candidate_stats=candidate_stats,
-        cfg=cfg_effective,
-    )
+    names = _normalize_names(names)
     return names, candidate_stats
 
 
@@ -1683,6 +1882,7 @@ def _extract_names_from_ocr_files(
         ocr_cmd=ocr_cmd,
     )
     stable_primary_rows = _stable_primary_line_count(primary_runs)
+    primary_avg_conf = _primary_avg_line_confidence(primary_runs)
     effective_precount_rows = _resolve_effective_precount_rows(
         visual_precount_rows,
         primary_runs,
@@ -1692,10 +1892,17 @@ def _extract_names_from_ocr_files(
         stable_primary_rows=stable_primary_rows,
     )
     runtime_cfg["precount_rows_primary_stable"] = int(stable_primary_rows or 0)
+    runtime_cfg["primary_line_avg_conf"] = float(primary_avg_conf or -1.0)
     runtime_cfg["precount_rows"] = int(effective_precount_rows or 0)
     runtime_cfg["precount_rows_min"] = int(precount_min_rows or 0)
     runtime_cfg["precount_rows_max"] = int(precount_max_rows or 0)
     runtime_cfg["precount_rows_refill_target"] = int(precount_refill_target or 0)
+    if effective_precount_rows is not None and int(effective_precount_rows) > 0:
+        runtime_cfg["expected_candidates"] = max(
+            1,
+            int(runtime_cfg.get("expected_candidates", 5)),
+            int(effective_precount_rows),
+        )
 
     primary_names = _extract_names_from_texts(ocr_import, primary_texts, runtime_cfg)
     flow_state = _collect_optional_pass_flow(

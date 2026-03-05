@@ -5,6 +5,9 @@ Hier kannst du das Verhalten und die Startdaten des Programms anpassen.
 
 # ---------- Runtime / Logging ----------
 DEBUG = False
+# Relative paths are created inside the writable app state directory.
+# Set to "" to keep logs directly in state dir, or use an absolute path.
+LOG_OUTPUT_DIR = "logs"
 # Master-Schalter für Release/EXE:
 # - unterdrückt Konsole/Qt-Logs (siehe main.py)
 # - deaktiviert zusätzlich alle internen Debug-/Trace-Logs
@@ -22,10 +25,11 @@ def _disable_flags_if_quiet(*flag_names: str) -> None:
 
 
 # Trace / Focus
-TRACE_FLOW = False
+TRACE_FLOW = True
 TRACE_SHUTDOWN = False
 TRACE_FOCUS = False
 TRACE_HOVER = False
+TRACE_SPIN_PERF = True
 TRACE_CLEAR_ON_START = False
 FOCUS_TRACE_DURATION_S = 12.0
 FOCUS_TRACE_MAX_EVENTS = 800
@@ -84,6 +88,7 @@ _disable_flags_if_quiet(
     "TRACE_SHUTDOWN",
     "TRACE_FOCUS",
     "TRACE_HOVER",
+    "TRACE_SPIN_PERF",
     "TRACE_CLEAR_ON_START",
 )
 
@@ -146,6 +151,21 @@ OCR_MAX_VARIANTS = 2
 OCR_MAX_VARIANTS_WINDOWS = 1
 # In fast mode, stop after the first variant that yields text
 OCR_STOP_AFTER_FIRST_VARIANT_SUCCESS = False
+# Additional fast-mode short-circuit: if the first variant already contains
+# enough confident lines, skip remaining variants for this pass.
+OCR_FAST_MODE_CONFIDENT_LINE_STOP = True
+# 0 = use current expected candidate count as minimum line threshold.
+OCR_FAST_MODE_CONFIDENT_LINE_MIN_LINES = 0
+OCR_FAST_MODE_CONFIDENT_LINE_MIN_AVG_CONF = 68.0
+# Allows early stop even if one expected line is missing, as long as confidence
+# is high enough (helps skip expensive second variant on stable captures).
+OCR_FAST_MODE_CONFIDENT_LINE_MISSING_TOLERANCE = 1
+OCR_FAST_MODE_CONFIDENT_LINE_MIN_AVG_CONF_TOLERANT = 78.0
+# Lightweight visual row pre-count in fast mode: use fewer probe variants and
+# usually only one expected-row guess to cut redundant preprocessing.
+OCR_PRECOUNT_FAST_PROBE_ENABLED = True
+OCR_PRECOUNT_FAST_PROBE_SINGLE_EXPECTED = True
+OCR_PRECOUNT_FAST_PROBE_MAX_VARIANTS = 1
 # Retry with a more thorough OCR pass when fast mode found too few names.
 OCR_RECALL_RETRY_ENABLED = True
 # Retry trigger threshold (0 disables retry trigger).
@@ -154,6 +174,12 @@ OCR_RECALL_RETRY_MIN_CANDIDATES = 5
 OCR_RECALL_RETRY_MAX_CANDIDATES = 7
 # Retry trigger if too many very short names (len<=2) are present.
 OCR_RECALL_RETRY_SHORT_NAME_MAX_RATIO = 0.34
+# Skip retry when primary OCR is already clean/high-confidence and only
+# narrowly below min candidate target (avoids expensive redundant repass).
+OCR_RECALL_RETRY_SKIP_WHEN_PRIMARY_CLEAN = True
+OCR_RECALL_RETRY_SKIP_PRIMARY_CLEAN_MIN_COUNT = 4
+OCR_RECALL_RETRY_SKIP_PRIMARY_CLEAN_MAX_SHORTFALL = 1
+OCR_RECALL_RETRY_SKIP_PRIMARY_CLEAN_MIN_AVG_CONF = 78.0
 # Variant cap for retry pass (0 = same/all prepared variants).
 OCR_RECALL_RETRY_MAX_VARIANTS = 4
 # Retry can include fallback PSM for better recall.
@@ -166,6 +192,15 @@ OCR_RECALL_RELAX_SUPPORT_ON_LOW_COUNT = True
 # Row-based fallback OCR for low-count results (tries to OCR each detected text row).
 OCR_ROW_PASS_ENABLED = True
 OCR_ROW_PASS_ALWAYS_RUN = True
+# If primary OCR already has stable, non-noisy candidates, skip row-pass even
+# when ALWAYS_RUN is enabled (major speed-up on clean captures).
+OCR_ROW_PASS_SKIP_WHEN_PRIMARY_STABLE = True
+# 0 = dynamic default max(3, expected_candidates - 1)
+OCR_ROW_PASS_PRIMARY_STABLE_MIN_CANDIDATES = 0
+# If expected row estimate is only slightly above primary OCR count (projection
+# overcount), allow stable-primary shortcut with relaxed expected row count.
+OCR_ROW_PASS_PRIMARY_STABLE_RELAXED_EXPECTED_GAP = 3
+OCR_ROW_PASS_PRIMARY_STABLE_RELAXED_MIN_AVG_CONF = 76.0
 OCR_ROW_PASS_MIN_CANDIDATES = 5
 OCR_ROW_PASS_BRIGHTNESS_THRESHOLD = 145
 OCR_ROW_PASS_MIN_PIXELS_RATIO = 0.015
@@ -177,6 +212,20 @@ OCR_ROW_PASS_PAD_PX = 2
 OCR_ROW_PASS_NAME_X_RATIO = 0.72
 # If True, row-pass OCR also evaluates full-width rows in addition to name crop.
 OCR_ROW_PASS_FULL_WIDTH_FALLBACK = True
+# If True, use full-width crop only when the right edge looks clipped.
+# Keeps recall for truncated names but avoids doubling OCR calls on clean rows.
+OCR_ROW_PASS_FULL_WIDTH_EDGE_ONLY = True
+# If True, run full-width fallback only when name-crop votes are still uncertain.
+# This avoids expensive full-width retries once the name-crop already looks reliable.
+OCR_ROW_PASS_FULL_ONLY_WHEN_NAME_UNCERTAIN = True
+OCR_ROW_PASS_FULL_ONLY_WHEN_NAME_UNCERTAIN_MIN_CONF = 68.0
+# If True, skip full-width retries when name base+scaled variants were both empty.
+# This removes expensive full-width calls on obvious empty/noise rows.
+OCR_ROW_PASS_SKIP_FULL_WHEN_NAME_EMPTY = True
+# If True, also skip full-width retries when name variants only produce
+# very weak low-confidence signal without any candidate votes.
+OCR_ROW_PASS_SKIP_FULL_WHEN_NAME_LOW_CONF = True
+OCR_ROW_PASS_SKIP_FULL_WHEN_NAME_LOW_CONF_MAX_CONF = 12.0
 # Row projection window used for line segmentation.
 # Helps avoid continuous bright borders/checkbox columns in OCR pick overlay.
 OCR_ROW_PASS_PROJECTION_X_START_RATIO = 0.08
@@ -184,11 +233,72 @@ OCR_ROW_PASS_PROJECTION_X_END_RATIO = 0.92
 OCR_ROW_PASS_PROJECTION_COL_MAX_RATIO = 0.84
 OCR_ROW_PASS_SCALE_FACTOR = 4
 OCR_ROW_PASS_INCLUDE_MONO = True
+# If True, skip mono variants when base+scaled already produced no text.
+# Reduces expensive no-signal retries on empty noise rows.
+OCR_ROW_PASS_SKIP_MONO_WHEN_NON_MONO_EMPTY = True
+# If True, skip mono variants when base+scaled produced text but only very
+# weak low-confidence signal (typically noise).
+OCR_ROW_PASS_SKIP_MONO_WHEN_NON_MONO_LOW_CONF = True
+OCR_ROW_PASS_SKIP_MONO_WHEN_NON_MONO_LOW_CONF_MAX_CONF = 12.0
 OCR_ROW_PASS_TIMEOUT_SCALE = 0.55
 OCR_ROW_PASS_PSMS = [7, 13, 6]
 # Keep one OCR winner per detected visual row to avoid duplicates from
 # alternate render variants of the same line.
 OCR_ROW_PASS_SINGLE_NAME_PER_ROW = True
+# Treat primary pass as "complete-ish" when it is within this gap to expected.
+OCR_ROW_PASS_PRIMARY_COMPLETE_MARGIN = 1
+# Row-pass early stop target per visual row. Lower values reduce OCR calls.
+OCR_ROW_PASS_VOTE_TARGET_SINGLE_NAME = 2
+OCR_ROW_PASS_VOTE_TARGET_SINGLE_NAME_WHEN_PRIMARY_COMPLETE = 1
+OCR_ROW_PASS_VOTE_TARGET_MULTI_NAME = 3
+# If primary pass is already complete-ish, use only the first row-pass PSM to
+# reduce expensive OCR attempts in fallback mode.
+OCR_ROW_PASS_SINGLE_PSM_WHEN_PRIMARY_COMPLETE = True
+# Fast-mode shortcut: if a row already has one very high-confidence candidate,
+# stop this row early instead of forcing additional variants/crops.
+OCR_ROW_PASS_CONFIDENT_SINGLE_VOTE_STOP = True
+OCR_ROW_PASS_CONFIDENT_SINGLE_VOTE_MIN_CONF = 96.0
+OCR_ROW_PASS_CONFIDENT_SINGLE_VOTE_STOP_WHEN_PRIMARY_COMPLETE = True
+OCR_ROW_PASS_CONFIDENT_SINGLE_VOTE_MIN_CONF_WHEN_PRIMARY_COMPLETE = 72.0
+# Early row-line filter before expensive parsing (keeps high-confidence lines).
+OCR_ROW_PASS_LINE_PREFILTER_ENABLED = True
+OCR_ROW_PASS_LINE_PREFILTER_LOW_CONF = 22.0
+OCR_ROW_PASS_LINE_PREFILTER_HIGH_CONF_BYPASS = 72.0
+OCR_ROW_PASS_LINE_PREFILTER_MIN_ALNUM = 2
+OCR_ROW_PASS_LINE_PREFILTER_MIN_ALPHA_RATIO = 0.42
+OCR_ROW_PASS_LINE_PREFILTER_MAX_PUNCT_RATIO = 0.65
+# Prevent low-confidence row lines from inflating candidate stats.
+OCR_ROW_PASS_LINE_STATS_MIN_CONF = 8.0
+# If primary pass already has enough candidates and early row probes are weak,
+# abort row-pass quickly to avoid expensive tail noise scans.
+OCR_ROW_PASS_EARLY_ABORT_ON_PRIMARY_STRONG = True
+OCR_ROW_PASS_EARLY_ABORT_PROBE_ROWS = 3
+# If primary already reached expected row count, use a shorter probe window
+# before aborting weak row-pass prefixes.
+OCR_ROW_PASS_EARLY_ABORT_PROBE_ROWS_WHEN_PRIMARY_COMPLETE = 2
+OCR_ROW_PASS_EARLY_ABORT_LOW_CONF = 22.0
+# 0 = dynamic default max(4, expected_candidates - 2)
+OCR_ROW_PASS_EARLY_ABORT_PRIMARY_MIN_CANDIDATES = 0
+# Try mono variants only when current row votes are uncertain.
+OCR_ROW_PASS_MONO_RETRY_ONLY_WHEN_UNCERTAIN = True
+OCR_ROW_PASS_MONO_RETRY_MIN_CONF = 70.0
+# For rows beyond expected_candidates, use a lighter OCR strategy after enough
+# names were already collected (no full-width, no mono, 1 vote target).
+OCR_ROW_PASS_EXTRA_ROWS_LIGHT_MODE = True
+# 0 = dynamic default max(3, expected_candidates - 2)
+OCR_ROW_PASS_EXTRA_ROWS_LIGHT_MODE_MIN_COLLECTED = 0
+# Stop row-pass tail once expected_candidates are already collected.
+# Limits expensive extra-row OCR calls without changing core row coverage.
+OCR_ROW_PASS_STOP_WHEN_EXPECTED_REACHED = True
+# Fast-mode row limit: process only expected+extra rows (with a small floor)
+# instead of all detected rows, to avoid OCR on obvious tail noise rows.
+OCR_ROW_PASS_ADAPTIVE_MAX_ROWS = True
+OCR_ROW_PASS_ADAPTIVE_EXTRA_ROWS = 2
+# Tail-noise guard: stop row-pass after N consecutive rows without new names
+# once enough names were already collected (0 disables).
+OCR_ROW_PASS_CONSECUTIVE_EMPTY_ROW_STOP = 2
+# 0 = dynamic default max(3, expected_candidates - 1)
+OCR_ROW_PASS_EMPTY_ROW_STOP_MIN_COLLECTED = 0
 # OCR debug: shows a detailed report dialog after each OCR run.
 OCR_DEBUG_SHOW_REPORT = False
 # Keep enabled with OCR_DEBUG_SHOW_REPORT so the dialog receives the full report text.

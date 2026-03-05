@@ -72,10 +72,14 @@ def _candidate_bucket_score(bucket: dict[str, float | int | str], cfg: dict) -> 
     text = str(bucket.get("display", "") or "").strip()
     support = int(bucket.get("support", 0))
     occurrences = int(bucket.get("occurrences", 0))
+    primary_support = int(bucket.get("primary_support", 0))
+    primary_occurrences = int(bucket.get("primary_occurrences", 0))
     conf = float(bucket.get("best_conf", -1.0))
     score = 0.0
     score += support * 2.2
     score += occurrences * 0.35
+    score += primary_support * 1.8
+    score += primary_occurrences * 0.28
     if conf >= 0.0:
         score += min(100.0, conf) / 42.0
     score += min(12, len(text)) * 0.08
@@ -289,6 +293,12 @@ def _merge_prefix_candidate_stats(
                 continue
             target["support"] = int(target.get("support", 0)) + int(source.get("support", 0))
             target["occurrences"] = int(target.get("occurrences", 0)) + int(source.get("occurrences", 0))
+            target["primary_support"] = int(target.get("primary_support", 0)) + int(
+                source.get("primary_support", 0)
+            )
+            target["primary_occurrences"] = int(target.get("primary_occurrences", 0)) + int(
+                source.get("primary_occurrences", 0)
+            )
             target["best_conf"] = max(
                 float(target.get("best_conf", -1.0)),
                 float(source.get("best_conf", -1.0)),
@@ -361,10 +371,12 @@ def _merge_near_duplicate_candidate_stats(
     strict_similarity = min(0.99, max(base_similarity, 0.95))
     low_support_similarity = max(0.78, min(base_similarity, 0.92) - 0.08)
 
-    def _strength(key: str) -> tuple[int, int, float, tuple[int, int], int]:
+    def _strength(key: str) -> tuple[int, int, int, int, float, tuple[int, int], int]:
         bucket = merged.get(key) or {}
         display = str(bucket.get("display", "") or "").strip()
         return (
+            int(bucket.get("primary_support", 0)),
+            int(bucket.get("primary_occurrences", 0)),
             int(bucket.get("support", 0)),
             int(bucket.get("occurrences", 0)),
             float(bucket.get("best_conf", -1.0)),
@@ -427,6 +439,12 @@ def _merge_near_duplicate_candidate_stats(
                     continue
                 target["support"] = int(target.get("support", 0)) + int(source.get("support", 0))
                 target["occurrences"] = int(target.get("occurrences", 0)) + int(source.get("occurrences", 0))
+                target["primary_support"] = int(target.get("primary_support", 0)) + int(
+                    source.get("primary_support", 0)
+                )
+                target["primary_occurrences"] = int(target.get("primary_occurrences", 0)) + int(
+                    source.get("primary_occurrences", 0)
+                )
                 target["best_conf"] = max(
                     float(target.get("best_conf", -1.0)),
                     float(source.get("best_conf", -1.0)),
@@ -450,9 +468,45 @@ def _merge_near_duplicate_candidate_stats(
 
 
 def _should_run_row_pass(cfg: dict, names: list[str]) -> bool:
+    def _looks_clean_for_expected(expected_count: int) -> bool:
+        probe_cfg = dict(cfg)
+        probe_cfg["expected_candidates"] = max(1, int(expected_count))
+        return not _candidate_set_looks_noisy(names, probe_cfg)
+
     if not bool(cfg.get("row_pass_enabled", True)):
         return False
     if bool(cfg.get("row_pass_always_run", True)):
+        if bool(cfg.get("row_pass_skip_when_primary_stable", False)):
+            expected = max(1, int(cfg.get("expected_candidates", 5)))
+            stable_min_default = max(3, expected - 1)
+            stable_min = max(
+                1,
+                int(cfg.get("row_pass_primary_stable_min_candidates", stable_min_default)),
+            )
+            if len(names) >= stable_min and _looks_clean_for_expected(expected):
+                return False
+            primary_count = max(0, int(cfg.get("primary_candidate_count", 0)))
+            relaxed_gap = max(
+                0,
+                int(cfg.get("row_pass_primary_stable_relaxed_expected_gap", 3)),
+            )
+            primary_avg_conf = float(cfg.get("primary_line_avg_conf", -1.0))
+            relaxed_min_avg_conf = float(
+                cfg.get("row_pass_primary_stable_relaxed_min_avg_conf", 76.0)
+            )
+            confidence_is_reliable = (
+                primary_avg_conf < 0.0 or primary_avg_conf >= relaxed_min_avg_conf
+            )
+            expected_gap = expected - primary_count
+            if (
+                primary_count > 0
+                and expected_gap > 0
+                and expected_gap <= relaxed_gap
+                and len(names) >= max(3, primary_count - 1)
+                and confidence_is_reliable
+                and _looks_clean_for_expected(primary_count)
+            ):
+                return False
         return True
     row_pass_min_candidates = max(1, int(cfg.get("row_pass_min_candidates", 5)))
     if len(names) < row_pass_min_candidates:
@@ -495,11 +549,24 @@ def _prefer_row_candidates(current: list[str], row_names: list[str], cfg: dict) 
         return False
     if not current:
         return True
+    expected = max(1, int(cfg.get("expected_candidates", 5)))
+    current_count = len(current)
+    row_count = len(row_names)
+    if row_count < current_count:
+        # Preserve recall when the primary pass is already near target and not
+        # obviously noisy; row-pass is allowed to replace only if primary
+        # looks unstable.
+        stable_primary_rows = max(0, int(cfg.get("precount_rows_primary_stable", 0)))
+        primary_near_target = current_count >= max(3, expected - 1)
+        if primary_near_target and (
+            stable_primary_rows >= current_count
+            or not _candidate_set_looks_noisy(current, cfg)
+        ):
+            return False
     current_score = _score_candidate_set(current, cfg)
     row_score = _score_candidate_set(row_names, cfg)
-    expected = max(1, int(cfg.get("expected_candidates", 5)))
-    current_delta = abs(len(current) - expected)
-    row_delta = abs(len(row_names) - expected)
+    current_delta = abs(current_count - expected)
+    row_delta = abs(row_count - expected)
     if row_delta < current_delta:
         return True
     if row_score > (current_score + 0.05):
@@ -614,11 +681,11 @@ def _candidate_stats_from_runs(
 
     def _support_entry_score(
         *,
-        pass_name: str,
-        candidate: str,
-        line_conf: float,
-        run_index: int,
-        selection_reason: str,
+            pass_name: str,
+            candidate: str,
+            line_conf: float,
+            run_index: int,
+            selection_reason: str,
     ) -> tuple[int, int, int, int, int, int, int, int, int, float, int]:
         quality = _name_display_quality(candidate)
         text = str(candidate or "").strip()
@@ -654,6 +721,7 @@ def _candidate_stats_from_runs(
     for run_index, run in enumerate(runs, start=1):
         seen_in_run: set[str] = set()
         pass_name = str(run.get("pass", "") or "").strip()
+        normalized_pass_name = pass_name.casefold()
         image_ref = str(run.get("image", "") or "").strip()
         line_entries = list(run.get("lines") or [])
         if not line_entries:
@@ -670,6 +738,9 @@ def _candidate_stats_from_runs(
                 line_conf = float(line.get("conf", -1.0))
             except Exception:
                 line_conf = -1.0
+            skip_candidate_stats = bool(line.get("skip_candidate_stats", False))
+            skip_reason = str(line.get("skip_reason", "") or "").strip()
+            parsed_candidates_locked = bool(line.get("parsed_candidates_locked", False))
             trace_payload: dict[str, object] | None = None
             if trace_entries is not None:
                 trace_payload = {
@@ -681,12 +752,33 @@ def _candidate_stats_from_runs(
                     "line_conf": line_conf,
                 }
                 trace_payload.update(_line_debug_meta(line_text))
-            parsed_names = parse_ctx.extract_line_candidates(line_text)
+            if skip_candidate_stats:
+                if trace_payload is not None:
+                    trace_payload["parsed_candidates_locked"] = parsed_candidates_locked
+                    trace_payload["parsed_candidates"] = []
+                    trace_payload["drop_reason"] = skip_reason or "skip-candidate-stats"
+                    trace_entries.append(trace_payload)
+                continue
+            parsed_candidates_hint = line.get("parsed_candidates")
+            if isinstance(parsed_candidates_hint, (list, tuple)):
+                parsed_names = [
+                    str(raw or "").strip()
+                    for raw in list(parsed_candidates_hint)
+                    if str(raw or "").strip()
+                ]
+            else:
+                parsed_names = []
+            if (not parsed_names) and (not parsed_candidates_locked):
+                parsed_names = parse_ctx.extract_line_candidates(line_text)
             if trace_payload is not None:
+                trace_payload["parsed_candidates_locked"] = parsed_candidates_locked
                 trace_payload["parsed_candidates"] = list(parsed_names)
             if not parsed_names:
                 if trace_payload is not None:
-                    trace_payload["drop_reason"] = "no-line-candidates"
+                    if parsed_candidates_locked:
+                        trace_payload["drop_reason"] = "locked-empty-candidates"
+                    else:
+                        trace_payload["drop_reason"] = "no-line-candidates"
                     trace_entries.append(trace_payload)
                 continue
             parsed, selection_reason = _pick_candidate_for_run(parsed_names, seen_in_run)
@@ -704,10 +796,14 @@ def _candidate_stats_from_runs(
                     "display": parsed,
                     "support": 0,
                     "occurrences": 0,
+                    "primary_support": 0,
+                    "primary_occurrences": 0,
                     "best_conf": -1.0,
                 },
             )
             bucket["occurrences"] = int(bucket.get("occurrences", 0)) + 1
+            if normalized_pass_name in {"primary", "retry"}:
+                bucket["primary_occurrences"] = int(bucket.get("primary_occurrences", 0)) + 1
             current_display = str(bucket.get("display", "")).strip()
             if (
                 _name_display_quality(parsed) < _name_display_quality(current_display)
@@ -738,6 +834,7 @@ def _candidate_stats_from_runs(
             ):
                 slot_best[slot_id] = {
                     "key": key,
+                    "pass_name": normalized_pass_name,
                     "score": score,
                     "trace_payload": trace_payload,
                 }
@@ -756,6 +853,9 @@ def _candidate_stats_from_runs(
         bucket = stats.get(key)
         if bucket is not None:
             bucket["support"] = int(bucket.get("support", 0)) + 1
+            slot_pass_name = str(slot_payload.get("pass_name", "") or "").strip().casefold()
+            if slot_pass_name in {"primary", "retry"}:
+                bucket["primary_support"] = int(bucket.get("primary_support", 0)) + 1
         trace_payload = slot_payload.get("trace_payload")
         if isinstance(trace_payload, dict):
             trace_payload["support_incremented"] = True
@@ -784,7 +884,14 @@ def _build_final_names_from_runs(
             continue
         bucket = stats.setdefault(
             key,
-            {"display": text, "support": 1, "occurrences": 1, "best_conf": -1.0},
+            {
+                "display": text,
+                "support": 1,
+                "occurrences": 1,
+                "primary_support": 0,
+                "primary_occurrences": 0,
+                "best_conf": -1.0,
+            },
         )
         current_display = str(bucket.get("display", "")).strip()
         if not current_display or _name_display_quality(text) < _name_display_quality(current_display):
@@ -969,6 +1076,31 @@ def _should_run_recall_retry(cfg: dict, names: list[str]) -> bool:
     count = len(names)
     min_candidates = max(0, int(cfg.get("recall_retry_min_candidates", 5)))
     if min_candidates > 0 and count < min_candidates:
+        if bool(cfg.get("recall_retry_skip_when_primary_clean", True)):
+            shortfall = max(0, min_candidates - count)
+            max_shortfall = max(
+                0,
+                int(cfg.get("recall_retry_skip_primary_clean_max_shortfall", 1)),
+            )
+            min_count = max(
+                1,
+                int(cfg.get("recall_retry_skip_primary_clean_min_count", 4)),
+            )
+            min_avg_conf = float(
+                cfg.get("recall_retry_skip_primary_clean_min_avg_conf", 78.0)
+            )
+            primary_avg_conf = float(cfg.get("primary_line_avg_conf", -1.0))
+            conf_ok = primary_avg_conf < 0.0 or primary_avg_conf >= min_avg_conf
+            clean_probe_cfg = dict(cfg)
+            clean_probe_cfg["expected_candidates"] = max(1, count)
+            is_clean_primary = not _candidate_set_looks_noisy(names, clean_probe_cfg)
+            if (
+                count >= min_count
+                and shortfall <= max_shortfall
+                and conf_ok
+                and is_clean_primary
+            ):
+                return False
         return True
 
     max_candidates = max(0, int(cfg.get("recall_retry_max_candidates", 7)))
