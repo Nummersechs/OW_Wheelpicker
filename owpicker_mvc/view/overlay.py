@@ -3,7 +3,12 @@ from html import escape
 import i18n
 from utils import flag_icons, qt_runtime, theme as theme_util
 from . import style_helpers
-from .name_list import NameRowWidget, NamesListPanel
+from .name_list import (
+    NAME_EDIT_HEIGHT,
+    NAME_LIST_ROW_HEIGHT,
+    NameRowWidget,
+    NamesListPanel,
+)
 
 _OVERLAY_CARD_STYLE_CACHE: dict[str, str] = {}
 _OVERLAY_TITLE_STYLE_CACHE: dict[str, str] = {}
@@ -326,10 +331,10 @@ class ResultOverlay(QtWidgets.QWidget):
 
     def _apply_ocr_picker_compact_layout(self) -> None:
         names_list = self.ocr_names_panel.names
-        # Keep OCR rows compact. For rows without subroles, avoid capping the
-        # edit width so long OCR strings stay visible.
-        row_height = 18
-        edit_height = 16
+        # Keep OCR picker row spacing consistent with the wheel names list.
+        # Width behavior remains compact for the OCR dialog.
+        row_height = NAME_LIST_ROW_HEIGHT
+        edit_height = NAME_EDIT_HEIGHT
         if names_list.has_subroles:
             name_max_width: int | None = 152
             min_width_with_subroles = 146
