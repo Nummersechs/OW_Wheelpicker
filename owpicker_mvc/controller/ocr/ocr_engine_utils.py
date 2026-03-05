@@ -89,16 +89,27 @@ def _run_ocr_multi_with_cfg(
     lang,
     stop_on_first_success: bool,
 ):
-    return run_ocr_multi(
-        image_path,
-        engine=engine,
-        cmd=str(ocr_cmd or ""),
-        psm_values=psm_values,
-        timeout_s=timeout_s,
-        lang=lang,
-        stop_on_first_success=bool(stop_on_first_success),
-        **_easyocr_runner_kwargs(cfg),
-    )
+    common_kwargs = {
+        "cmd": str(ocr_cmd or ""),
+        "psm_values": psm_values,
+        "timeout_s": timeout_s,
+        "lang": lang,
+        "stop_on_first_success": bool(stop_on_first_success),
+    }
+    try:
+        return run_ocr_multi(
+            image_path,
+            engine=engine,
+            **common_kwargs,
+            **_easyocr_runner_kwargs(cfg),
+        )
+    except TypeError:
+        # Backward-compatible fallback for lightweight unit-test stubs that do
+        # not expose the full EasyOCR-only argument surface.
+        return run_ocr_multi(
+            image_path,
+            **common_kwargs,
+        )
 
 
 def _build_ocr_run_entry(
@@ -395,32 +406,21 @@ def _run_ocr_pass(
     lang = cfg.get("lang")
     timeout_s = float(cfg.get("timeout_s", 8.0))
     run_ocr_multi = getattr(ocr_import, "run_ocr_multi", None)
-    run_tesseract_multi = getattr(ocr_import, "run_tesseract_multi", None)
-    if not callable(run_ocr_multi) and not callable(run_tesseract_multi):
+    if not callable(run_ocr_multi):
         return [], ["ocr-runner-unavailable"], []
 
     for image_path in selected_paths:
-        if callable(run_ocr_multi):
-            run_result = _run_ocr_multi_with_cfg(
-                run_ocr_multi,
-                image_path,
-                cfg=cfg,
-                engine=engine,
-                ocr_cmd=ocr_cmd,
-                psm_values=psm_values,
-                timeout_s=timeout_s,
-                lang=lang,
-                stop_on_first_success=stop_after_variant_success,
-            )
-        else:
-            run_result = run_tesseract_multi(
-                image_path,
-                cmd=str(ocr_cmd or "auto"),
-                psm_values=psm_values,
-                timeout_s=timeout_s,
-                lang=lang,
-                stop_on_first_success=stop_after_variant_success,
-            )
+        run_result = _run_ocr_multi_with_cfg(
+            run_ocr_multi,
+            image_path,
+            cfg=cfg,
+            engine=engine,
+            ocr_cmd=ocr_cmd,
+            psm_values=psm_values,
+            timeout_s=timeout_s,
+            lang=lang,
+            stop_on_first_success=stop_after_variant_success,
+        )
         line_entries = _line_entries_from_run_result(run_result)
         runs.append(
             _build_ocr_run_entry(

@@ -1,6 +1,6 @@
 import unittest
 
-from controller.ocr_role_import import (
+from controller.ocr.ocr_role_import import (
     add_names,
     collect_new_names,
     normalize_name_key,

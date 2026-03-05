@@ -14,7 +14,7 @@ import i18n
 from utils import qt_runtime
 
 try:
-    from controller import ocr_import as _ocr_import
+    from controller.ocr import ocr_import as _ocr_import
 except Exception:
     from . import ocr_import as _ocr_import
 
@@ -25,32 +25,32 @@ except Exception:
     from view import screen_redion_selector as _screen_selector
 
 try:
-    from controller import ocr_engine_utils as _ocr_engine_utils
+    from controller.ocr import ocr_engine_utils as _ocr_engine_utils
 except Exception:
     from . import ocr_engine_utils as _ocr_engine_utils
 
 try:
-    from controller import ocr_postprocess_utils as _ocr_postprocess_utils
+    from controller.ocr import ocr_postprocess_utils as _ocr_postprocess_utils
 except Exception:
     from . import ocr_postprocess_utils as _ocr_postprocess_utils
 
 try:
-    from controller import ocr_row_pass_utils as _ocr_row_pass_utils
+    from controller.ocr import ocr_row_pass_utils as _ocr_row_pass_utils
 except Exception:
     from . import ocr_row_pass_utils as _ocr_row_pass_utils
 
 try:
-    from controller import ocr_debug_utils as _ocr_debug_utils
+    from controller.ocr import ocr_debug_utils as _ocr_debug_utils
 except Exception:
     from . import ocr_debug_utils as _ocr_debug_utils
 
 try:
-    from controller import ocr_async_worker_utils as _ocr_async_worker_utils
+    from controller.ocr import ocr_async_worker_utils as _ocr_async_worker_utils
 except Exception:
     from . import ocr_async_worker_utils as _ocr_async_worker_utils
 
 try:
-    from controller import ocr_ordering_utils as _ocr_ordering_utils
+    from controller.ocr import ocr_ordering_utils as _ocr_ordering_utils
 except Exception:
     from . import ocr_ordering_utils as _ocr_ordering_utils
 
@@ -272,9 +272,9 @@ def build_ocr_pixmap_variants(mw, source: QtGui.QPixmap) -> list[QtGui.QPixmap]:
     def _left_crop_variant(pix: QtGui.QPixmap) -> QtGui.QPixmap | None:
         if pix.isNull():
             return None
-        if not bool(mw._cfg("OCR_INCLUDE_LEFT_CROP_VARIANTS", True)):
+        if not bool(mw._cfg("OCR_INCLUDE_LEFT_CROP_VARIANTS", False)):
             return None
-        ratio = float(mw._cfg("OCR_NAME_COLUMN_CROP_RATIO", 0.62))
+        ratio = float(mw._cfg("OCR_NAME_COLUMN_CROP_RATIO", 0.50))
         ratio = max(0.35, min(0.95, ratio))
         crop_w = int(pix.width() * ratio)
         if crop_w <= 0 or crop_w >= pix.width():
@@ -295,7 +295,7 @@ def build_ocr_pixmap_variants(mw, source: QtGui.QPixmap) -> list[QtGui.QPixmap]:
     # long identifiers. Left-crop is still used as an additional variant.
     _add_variant(source)
     _add_variant(_left_crop_variant(source))
-    scale_factor = max(1, int(mw._cfg("OCR_SCALE_FACTOR", 2)))
+    scale_factor = max(1, int(mw._cfg("OCR_SCALE_FACTOR", 3)))
     if scale_factor > 1 and not source.isNull():
         scaled_smooth = source.scaled(
             max(1, source.width() * scale_factor),
@@ -436,17 +436,17 @@ def _ocr_runtime_cfg_snapshot(mw) -> dict:
     max_variants = int(mw._cfg("OCR_MAX_VARIANTS", default_max_variants))
     if sys.platform == "win32":
         max_variants = int(mw._cfg("OCR_MAX_VARIANTS_WINDOWS", max_variants))
-    psm_primary = int(mw._cfg("OCR_TESSERACT_PSM", 11))
-    psm_fallback = int(mw._cfg("OCR_TESSERACT_FALLBACK_PSM", 6))
+    psm_primary = int(mw._cfg("OCR_PRIMARY_PSM", 11))
+    psm_fallback = int(mw._cfg("OCR_FALLBACK_PSM", 6))
     psm_values = [psm_primary]
     if (not fast_mode) and psm_fallback not in psm_values:
         psm_values.append(psm_fallback)
-    retry_extra_psm_values = _parse_psm_values(mw._cfg("OCR_TESSERACT_RETRY_EXTRA_PSMS", []))
-    timeout_s = float(mw._cfg("OCR_TESSERACT_TIMEOUT_S", 8.0))
+    retry_extra_psm_values = _parse_psm_values(mw._cfg("OCR_RETRY_EXTRA_PSMS", [7, 13]))
+    timeout_s = float(mw._cfg("OCR_TIMEOUT_S", 8.0))
     if sys.platform == "win32":
-        timeout_s = float(mw._cfg("OCR_TESSERACT_TIMEOUT_S_WINDOWS", timeout_s))
+        timeout_s = float(mw._cfg("OCR_TIMEOUT_S_WINDOWS", timeout_s))
     retry_min_candidates = int(mw._cfg("OCR_RECALL_RETRY_MIN_CANDIDATES", 5))
-    retry_max_variants = int(mw._cfg("OCR_RECALL_RETRY_MAX_VARIANTS", 2))
+    retry_max_variants = int(mw._cfg("OCR_RECALL_RETRY_MAX_VARIANTS", 4))
     if retry_max_variants < 0:
         retry_max_variants = 0
     row_pass_psm_values = _parse_psm_values(mw._cfg("OCR_ROW_PASS_PSMS", [7, 13, 6]))
@@ -572,7 +572,6 @@ def _ocr_runtime_cfg_snapshot(mw) -> dict:
                     "OCR_RECALL_RETRY_SKIP_PRIMARY_CLEAN_MAX_SHORTFALL",
                     1,
                 ),
-                ("expected_candidates", "OCR_EXPECTED_CANDIDATES", 5),
                 ("row_pass_primary_stable_min_candidates", "OCR_ROW_PASS_PRIMARY_STABLE_MIN_CANDIDATES", 0),
                 ("row_pass_min_candidates", "OCR_ROW_PASS_MIN_CANDIDATES", 5),
                 ("row_pass_brightness_threshold", "OCR_ROW_PASS_BRIGHTNESS_THRESHOLD", 145),

@@ -5,9 +5,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from PySide6 import QtGui
-from controller.ocr_capture_ops import capture_region_for_ocr
-import controller.ocr_capture_ops as ocr_capture_ops
-import controller.ocr_import as real_ocr_import
+from controller.ocr.ocr_capture_ops import capture_region_for_ocr
+import controller.ocr.ocr_capture_ops as ocr_capture_ops
+import controller.ocr.ocr_import as real_ocr_import
 
 
 class _DummyMainWindow:
@@ -54,10 +54,10 @@ class TestOCRCaptureOps(unittest.TestCase):
             }
         )
         with (
-            patch("controller.ocr_capture_ops.select_region_from_primary_screen", return_value=("pix", None)) as select_mock,
-            patch("controller.ocr_capture_ops.QtWidgets.QApplication.processEvents"),
-            patch("controller.ocr_capture_ops.qt_runtime.safe_raise") as raise_mock,
-            patch("controller.ocr_capture_ops.qt_runtime.safe_activate_window") as activate_mock,
+            patch("controller.ocr.ocr_capture_ops.select_region_from_primary_screen", return_value=("pix", None)) as select_mock,
+            patch("controller.ocr.ocr_capture_ops.QtWidgets.QApplication.processEvents"),
+            patch("controller.ocr.ocr_capture_ops.qt_runtime.safe_raise") as raise_mock,
+            patch("controller.ocr.ocr_capture_ops.qt_runtime.safe_activate_window") as activate_mock,
         ):
             result = capture_region_for_ocr(mw)
 
@@ -78,10 +78,10 @@ class TestOCRCaptureOps(unittest.TestCase):
             }
         )
         with (
-            patch("controller.ocr_capture_ops.select_region_from_primary_screen", return_value=("pix", None)) as select_mock,
-            patch("controller.ocr_capture_ops.QtWidgets.QApplication.processEvents"),
-            patch("controller.ocr_capture_ops.qt_runtime.safe_raise") as raise_mock,
-            patch("controller.ocr_capture_ops.qt_runtime.safe_activate_window") as activate_mock,
+            patch("controller.ocr.ocr_capture_ops.select_region_from_primary_screen", return_value=("pix", None)) as select_mock,
+            patch("controller.ocr.ocr_capture_ops.QtWidgets.QApplication.processEvents"),
+            patch("controller.ocr.ocr_capture_ops.qt_runtime.safe_raise") as raise_mock,
+            patch("controller.ocr.ocr_capture_ops.qt_runtime.safe_activate_window") as activate_mock,
         ):
             result = capture_region_for_ocr(mw)
 
@@ -104,10 +104,10 @@ class TestOCRCaptureOps(unittest.TestCase):
             minimized=True,
         )
         with (
-            patch("controller.ocr_capture_ops.select_region_from_primary_screen", return_value=("pix", None)),
-            patch("controller.ocr_capture_ops.QtWidgets.QApplication.processEvents"),
-            patch("controller.ocr_capture_ops.qt_runtime.safe_raise") as raise_mock,
-            patch("controller.ocr_capture_ops.qt_runtime.safe_activate_window") as activate_mock,
+            patch("controller.ocr.ocr_capture_ops.select_region_from_primary_screen", return_value=("pix", None)),
+            patch("controller.ocr.ocr_capture_ops.QtWidgets.QApplication.processEvents"),
+            patch("controller.ocr.ocr_capture_ops.qt_runtime.safe_raise") as raise_mock,
+            patch("controller.ocr.ocr_capture_ops.qt_runtime.safe_activate_window") as activate_mock,
         ):
             result = capture_region_for_ocr(mw)
 
@@ -128,9 +128,9 @@ class TestOCRCaptureOps(unittest.TestCase):
             }
         )
         with (
-            patch("controller.ocr_capture_ops.sys.platform", "win32"),
-            patch("controller.ocr_capture_ops.select_region_from_primary_screen", return_value=("pix", None)) as select_mock,
-            patch("controller.ocr_capture_ops.QtWidgets.QApplication.processEvents"),
+            patch("controller.ocr.ocr_capture_ops.sys.platform", "win32"),
+            patch("controller.ocr.ocr_capture_ops.select_region_from_primary_screen", return_value=("pix", None)) as select_mock,
+            patch("controller.ocr.ocr_capture_ops.QtWidgets.QApplication.processEvents"),
         ):
             result = capture_region_for_ocr(mw)
 
@@ -148,9 +148,9 @@ class TestOCRCaptureOps(unittest.TestCase):
             }
         )
         with (
-            patch("controller.ocr_capture_ops.sys.platform", "win32"),
-            patch("controller.ocr_capture_ops.select_region_from_primary_screen", return_value=("pix", None)) as select_mock,
-            patch("controller.ocr_capture_ops.QtWidgets.QApplication.processEvents"),
+            patch("controller.ocr.ocr_capture_ops.sys.platform", "win32"),
+            patch("controller.ocr.ocr_capture_ops.select_region_from_primary_screen", return_value=("pix", None)) as select_mock,
+            patch("controller.ocr.ocr_capture_ops.QtWidgets.QApplication.processEvents"),
         ):
             result = capture_region_for_ocr(mw)
 
@@ -1796,7 +1796,7 @@ class TestOCRCaptureOps(unittest.TestCase):
                     "precount_fast_probe_max_variants": 1,
                 }
             )
-            with patch("controller.ocr_capture_ops._detect_text_row_ranges", side_effect=_fake_detect):
+            with patch("controller.ocr.ocr_capture_ops._detect_text_row_ranges", side_effect=_fake_detect):
                 estimated = ocr_capture_ops._estimate_expected_rows_from_paths(
                     [path_a, path_b],
                     cfg,
@@ -1947,7 +1947,7 @@ class TestOCRCaptureOps(unittest.TestCase):
 
         class _StubOCRImport:
             @staticmethod
-            def run_tesseract_multi(
+            def run_ocr_multi(
                 image_path,
                 *,
                 cmd,
@@ -1982,7 +1982,7 @@ class TestOCRCaptureOps(unittest.TestCase):
                         names.append(value)
                 return names
 
-        with patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
+        with patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
             names, merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
                 [Path("dummy.png")],
                 ocr_cmd="auto",
@@ -2007,7 +2007,7 @@ class TestOCRCaptureOps(unittest.TestCase):
 
         class _StubOCRImport:
             @staticmethod
-            def run_tesseract_multi(
+            def run_ocr_multi(
                 image_path,
                 *,
                 cmd,
@@ -2042,7 +2042,7 @@ class TestOCRCaptureOps(unittest.TestCase):
                         names.append(value)
                 return names
 
-        with patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
+        with patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
             names, merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
                 [Path("dummy.png")],
                 ocr_cmd="auto",
@@ -2063,7 +2063,7 @@ class TestOCRCaptureOps(unittest.TestCase):
 
         class _StubOCRImport:
             @staticmethod
-            def run_tesseract_multi(
+            def run_ocr_multi(
                 image_path,
                 *,
                 cmd,
@@ -2112,7 +2112,7 @@ class TestOCRCaptureOps(unittest.TestCase):
             }
         )
 
-        with patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
+        with patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
             names, merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
                 [Path("dummy-a.png"), Path("dummy-b.png")],
                 ocr_cmd="auto",
@@ -2137,7 +2137,7 @@ class TestOCRCaptureOps(unittest.TestCase):
 
         class _StubOCRImport:
             @staticmethod
-            def run_tesseract_multi(
+            def run_ocr_multi(
                 image_path,
                 *,
                 cmd,
@@ -2165,7 +2165,7 @@ class TestOCRCaptureOps(unittest.TestCase):
                     return ["A", "B", "C", "D", "Massith"]
                 return ["A", "B", "C", "D"]
 
-        with patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
+        with patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
             names, merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
                 [Path("dummy.png")],
                 ocr_cmd="auto",
@@ -2262,7 +2262,7 @@ class TestOCRCaptureOps(unittest.TestCase):
             }
         )
 
-        with patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
+        with patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
             names, merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
                 [Path("dummy-a.png"), Path("dummy-b.png")],
                 ocr_cmd="auto",
@@ -2283,7 +2283,7 @@ class TestOCRCaptureOps(unittest.TestCase):
 
         class _StubOCRImport:
             @staticmethod
-            def run_tesseract_multi(
+            def run_ocr_multi(
                 image_path,
                 *,
                 cmd,
@@ -2318,7 +2318,7 @@ class TestOCRCaptureOps(unittest.TestCase):
                         names.append(value)
                 return names
 
-        with patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
+        with patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
             names, merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
                 [Path("dummy.png")],
                 ocr_cmd="auto",
@@ -2338,7 +2338,7 @@ class TestOCRCaptureOps(unittest.TestCase):
 
         class _StubOCRImport:
             @staticmethod
-            def run_tesseract_multi(
+            def run_ocr_multi(
                 image_path,
                 *,
                 cmd,
@@ -2357,7 +2357,7 @@ class TestOCRCaptureOps(unittest.TestCase):
                     return ["Aero", "BAO", "Bar", "MNKE", "HOY"]
                 return ["Aero", "BAO", "Bar", "MNKE", "HOY", "Pw", "HO", "B w", "HD"]
 
-        with patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
+        with patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
             names, merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
                 [Path("dummy.png")],
                 ocr_cmd="auto",
@@ -2376,7 +2376,7 @@ class TestOCRCaptureOps(unittest.TestCase):
 
         class _StubOCRImport:
             @staticmethod
-            def run_tesseract_multi(
+            def run_ocr_multi(
                 image_path,
                 *,
                 cmd,
@@ -2410,7 +2410,7 @@ class TestOCRCaptureOps(unittest.TestCase):
             }
         )
 
-        with patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
+        with patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
             names, debug_text, error = ocr_capture_ops._extract_names_from_ocr_files(
                 [Path("dummy.png")],
                 ocr_cmd="auto",
@@ -2430,7 +2430,7 @@ class TestOCRCaptureOps(unittest.TestCase):
 
         class _StubOCRImport:
             @staticmethod
-            def run_tesseract_multi(
+            def run_ocr_multi(
                 image_path,
                 *,
                 cmd,
@@ -2475,9 +2475,9 @@ class TestOCRCaptureOps(unittest.TestCase):
         ]
 
         with (
-            patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+            patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
             patch(
-                "controller.ocr_capture_ops._run_row_segmentation_pass",
+                "controller.ocr.ocr_capture_ops._run_row_segmentation_pass",
                 return_value=(row_names, row_texts, row_runs),
             ),
         ):
@@ -2498,7 +2498,7 @@ class TestOCRCaptureOps(unittest.TestCase):
 
         class _StubOCRImport:
             @staticmethod
-            def run_tesseract_multi(
+            def run_ocr_multi(
                 image_path,
                 *,
                 cmd,
@@ -2543,9 +2543,9 @@ class TestOCRCaptureOps(unittest.TestCase):
         ]
 
         with (
-            patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+            patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
             patch(
-                "controller.ocr_capture_ops._run_row_segmentation_pass",
+                "controller.ocr.ocr_capture_ops._run_row_segmentation_pass",
                 return_value=(row_names, row_texts, row_runs),
             ),
         ):
@@ -2562,7 +2562,7 @@ class TestOCRCaptureOps(unittest.TestCase):
     def test_extract_names_row_preferred_primary_stabilization_fixes_single_shifted_line(self):
         class _StubOCRImport:
             @staticmethod
-            def run_tesseract_multi(
+            def run_ocr_multi(
                 image_path,
                 *,
                 cmd,
@@ -2706,24 +2706,24 @@ class TestOCRCaptureOps(unittest.TestCase):
             return dict(stats)
 
         with (
-            patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
-            patch("controller.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=5),
+            patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+            patch("controller.ocr.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=5),
             patch(
-                "controller.ocr_capture_ops._run_ocr_pass",
+                "controller.ocr.ocr_capture_ops._run_ocr_pass",
                 return_value=(["\n".join(primary_names)], [], primary_runs),
             ),
             patch(
-                "controller.ocr_capture_ops._run_row_segmentation_pass",
+                "controller.ocr.ocr_capture_ops._run_row_segmentation_pass",
                 return_value=(row_names, row_texts, row_runs),
             ),
-            patch("controller.ocr_capture_ops._extract_names_from_texts", return_value=list(primary_names)),
-            patch("controller.ocr_capture_ops._prefer_row_candidates", return_value=True),
+            patch("controller.ocr.ocr_capture_ops._extract_names_from_texts", return_value=list(primary_names)),
+            patch("controller.ocr.ocr_capture_ops._prefer_row_candidates", return_value=True),
             patch(
-                "controller.ocr_capture_ops._candidate_stats_from_runs",
+                "controller.ocr.ocr_capture_ops._candidate_stats_from_runs",
                 side_effect=_candidate_stats_with_trace,
             ),
             patch(
-                "controller.ocr_capture_ops._build_final_names_from_runs",
+                "controller.ocr.ocr_capture_ops._build_final_names_from_runs",
                 return_value=[
                     primary_names[0],
                     primary_names[2],
@@ -2732,11 +2732,11 @@ class TestOCRCaptureOps(unittest.TestCase):
                 ],
             ),
             patch(
-                "controller.ocr_capture_ops._filter_low_confidence_candidates",
+                "controller.ocr.ocr_capture_ops._filter_low_confidence_candidates",
                 side_effect=lambda names, *_args, **_kwargs: list(names),
             ),
             patch(
-                "controller.ocr_capture_ops._expand_config_identifier_prefixes",
+                "controller.ocr.ocr_capture_ops._expand_config_identifier_prefixes",
                 side_effect=lambda names: list(names),
             ),
         ):
@@ -2760,7 +2760,7 @@ class TestOCRCaptureOps(unittest.TestCase):
     def test_extract_names_row_preferred_restores_missing_primary_slot_from_overflow_tail(self):
         class _StubOCRImport:
             @staticmethod
-            def run_tesseract_multi(
+            def run_ocr_multi(
                 image_path,
                 *,
                 cmd,
@@ -2890,24 +2890,24 @@ class TestOCRCaptureOps(unittest.TestCase):
             return dict(stats)
 
         with (
-            patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
-            patch("controller.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=7),
+            patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+            patch("controller.ocr.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=7),
             patch(
-                "controller.ocr_capture_ops._run_ocr_pass",
+                "controller.ocr.ocr_capture_ops._run_ocr_pass",
                 return_value=(["\n".join(primary_names)], [], primary_runs),
             ),
             patch(
-                "controller.ocr_capture_ops._run_row_segmentation_pass",
+                "controller.ocr.ocr_capture_ops._run_row_segmentation_pass",
                 return_value=(row_names, row_texts, row_runs),
             ),
-            patch("controller.ocr_capture_ops._extract_names_from_texts", return_value=list(primary_names)),
-            patch("controller.ocr_capture_ops._prefer_row_candidates", return_value=True),
+            patch("controller.ocr.ocr_capture_ops._extract_names_from_texts", return_value=list(primary_names)),
+            patch("controller.ocr.ocr_capture_ops._prefer_row_candidates", return_value=True),
             patch(
-                "controller.ocr_capture_ops._candidate_stats_from_runs",
+                "controller.ocr.ocr_capture_ops._candidate_stats_from_runs",
                 side_effect=_candidate_stats_with_trace,
             ),
             patch(
-                "controller.ocr_capture_ops._build_final_names_from_runs",
+                "controller.ocr.ocr_capture_ops._build_final_names_from_runs",
                 return_value=[
                     "[+] Rhug TLC",
                     "flatiqz",
@@ -2919,11 +2919,11 @@ class TestOCRCaptureOps(unittest.TestCase):
                 ],
             ),
             patch(
-                "controller.ocr_capture_ops._filter_low_confidence_candidates",
+                "controller.ocr.ocr_capture_ops._filter_low_confidence_candidates",
                 side_effect=lambda names, *_args, **_kwargs: list(names),
             ),
             patch(
-                "controller.ocr_capture_ops._expand_config_identifier_prefixes",
+                "controller.ocr.ocr_capture_ops._expand_config_identifier_prefixes",
                 side_effect=lambda names: list(names),
             ),
         ):
@@ -3021,10 +3021,10 @@ class TestOCRCaptureOps(unittest.TestCase):
 
             parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
             with (
-                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
-                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
-                patch("controller.ocr_capture_ops._build_row_image_variants", side_effect=lambda row_img, _cfg: [("base", row_img)]),
-                patch("controller.ocr_capture_ops._row_image_looks_right_clipped", return_value=True),
+                patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
+                patch("controller.ocr.ocr_capture_ops._build_row_image_variants", side_effect=lambda row_img, _cfg: [("base", row_img)]),
+                patch("controller.ocr.ocr_capture_ops._row_image_looks_right_clipped", return_value=True),
             ):
                 names, row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
                     [image_path],
@@ -3108,9 +3108,9 @@ class TestOCRCaptureOps(unittest.TestCase):
 
             parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
             with (
-                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
-                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
-                patch("controller.ocr_capture_ops._row_image_looks_right_clipped", return_value=True),
+                patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
+                patch("controller.ocr.ocr_capture_ops._row_image_looks_right_clipped", return_value=True),
             ):
                 names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
                     [image_path],
@@ -3200,9 +3200,9 @@ class TestOCRCaptureOps(unittest.TestCase):
 
             parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
             with (
-                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
-                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
-                patch("controller.ocr_capture_ops._row_image_looks_right_clipped", return_value=True),
+                patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
+                patch("controller.ocr.ocr_capture_ops._row_image_looks_right_clipped", return_value=True),
             ):
                 names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
                     [image_path],
@@ -3289,8 +3289,8 @@ class TestOCRCaptureOps(unittest.TestCase):
 
             parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
             with (
-                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
-                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
+                patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
             ):
                 names, row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
                     [image_path],
@@ -3380,8 +3380,8 @@ class TestOCRCaptureOps(unittest.TestCase):
 
             parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
             with (
-                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
-                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
+                patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
             ):
                 names, row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
                     [image_path],
@@ -3479,8 +3479,8 @@ class TestOCRCaptureOps(unittest.TestCase):
             parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
             row_ranges = [(2 + i * 20, 10 + i * 20) for i in range(10)]
             with (
-                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
-                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=row_ranges),
+                patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr.ocr_capture_ops._detect_text_row_ranges", return_value=row_ranges),
             ):
                 names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
                     [image_path],
@@ -3581,8 +3581,8 @@ class TestOCRCaptureOps(unittest.TestCase):
 
             parse_ctx = _ParseCtx()
             with (
-                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
-                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
+                patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
             ):
                 names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
                     [image_path],
@@ -3678,8 +3678,8 @@ class TestOCRCaptureOps(unittest.TestCase):
 
             parse_ctx = _ParseCtx()
             with (
-                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
-                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
+                patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
             ):
                 names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
                     [image_path],
@@ -3775,8 +3775,8 @@ class TestOCRCaptureOps(unittest.TestCase):
 
             parse_ctx = _ParseCtx()
             with (
-                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
-                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 12), (24, 34)]),
+                patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 12), (24, 34)]),
             ):
                 names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
                     [image_path],
@@ -3867,8 +3867,8 @@ class TestOCRCaptureOps(unittest.TestCase):
 
             parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
             with (
-                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
-                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
+                patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
             ):
                 names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
                     [image_path],
@@ -3966,8 +3966,8 @@ class TestOCRCaptureOps(unittest.TestCase):
 
             parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
             with (
-                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
-                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
+                patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr.ocr_capture_ops._detect_text_row_ranges", return_value=[(2, 20)]),
             ):
                 names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
                     [image_path],
@@ -4070,8 +4070,8 @@ class TestOCRCaptureOps(unittest.TestCase):
             parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
             row_ranges = [(2 + i * 20, 10 + i * 20) for i in range(10)]
             with (
-                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
-                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=row_ranges),
+                patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr.ocr_capture_ops._detect_text_row_ranges", return_value=row_ranges),
             ):
                 names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
                     [image_path],
@@ -4165,8 +4165,8 @@ class TestOCRCaptureOps(unittest.TestCase):
             parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
             row_ranges = [(2 + i * 20, 10 + i * 20) for i in range(10)]
             with (
-                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
-                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=row_ranges),
+                patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr.ocr_capture_ops._detect_text_row_ranges", return_value=row_ranges),
             ):
                 names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
                     [image_path],
@@ -4257,8 +4257,8 @@ class TestOCRCaptureOps(unittest.TestCase):
             parse_ctx = ocr_capture_ops._OCRLineParseContext(_StubOCRImport(), cfg)
             row_ranges = [(2 + i * 20, 10 + i * 20) for i in range(10)]
             with (
-                patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
-                patch("controller.ocr_capture_ops._detect_text_row_ranges", return_value=row_ranges),
+                patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+                patch("controller.ocr.ocr_capture_ops._detect_text_row_ranges", return_value=row_ranges),
             ):
                 _names, _row_texts, runs = ocr_capture_ops._run_row_segmentation_pass(
                     [image_path],
@@ -4279,7 +4279,7 @@ class TestOCRCaptureOps(unittest.TestCase):
             "SOUND WARMUP ON ST",
         ]
         with patch(
-            "controller.ocr_capture_ops._config_identifier_hints",
+            "controller.ocr.ocr_capture_ops._config_identifier_hints",
             return_value=(
                 "TOOLTIP_CACHE_ON_START",
                 "SOUND_WARMUP_LAZY_STEP_MS",
@@ -4305,7 +4305,7 @@ class TestOCRCaptureOps(unittest.TestCase):
 
         class _StubOCRImport:
             @staticmethod
-            def run_tesseract_multi(
+            def run_ocr_multi(
                 image_path,
                 *,
                 cmd,
@@ -4343,7 +4343,7 @@ class TestOCRCaptureOps(unittest.TestCase):
             }
         )
 
-        with patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
+        with patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
             names, merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
                 [Path("dummy.png")],
                 ocr_cmd="auto",
@@ -4361,7 +4361,7 @@ class TestOCRCaptureOps(unittest.TestCase):
 
         class _StubOCRImport:
             @staticmethod
-            def run_tesseract_multi(
+            def run_ocr_multi(
                 image_path,
                 *,
                 cmd,
@@ -4400,7 +4400,7 @@ class TestOCRCaptureOps(unittest.TestCase):
             }
         )
 
-        with patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
+        with patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
             names, merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
                 [Path("dummy.png")],
                 ocr_cmd="auto",
@@ -4418,7 +4418,7 @@ class TestOCRCaptureOps(unittest.TestCase):
 
         class _StubOCRImport:
             @staticmethod
-            def run_tesseract_multi(
+            def run_ocr_multi(
                 image_path,
                 *,
                 cmd,
@@ -4457,8 +4457,8 @@ class TestOCRCaptureOps(unittest.TestCase):
         )
 
         with (
-            patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
-            patch("controller.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=3),
+            patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+            patch("controller.ocr.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=3),
         ):
             names, _merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
                 [Path("dummy.png")],
@@ -4513,24 +4513,24 @@ class TestOCRCaptureOps(unittest.TestCase):
         )
 
         with (
-            patch("controller.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=7),
+            patch("controller.ocr.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=7),
             patch(
-                "controller.ocr_capture_ops._run_ocr_pass",
+                "controller.ocr.ocr_capture_ops._run_ocr_pass",
                 return_value=(["\n".join(primary_names[:6])], [], primary_runs),
             ),
-            patch("controller.ocr_capture_ops._extract_names_from_texts", return_value=list(primary_names)),
-            patch("controller.ocr_capture_ops._candidate_stats_from_runs", return_value=dict(stats)),
-            patch("controller.ocr_capture_ops._build_final_names_from_runs", return_value=list(primary_names)),
+            patch("controller.ocr.ocr_capture_ops._extract_names_from_texts", return_value=list(primary_names)),
+            patch("controller.ocr.ocr_capture_ops._candidate_stats_from_runs", return_value=dict(stats)),
+            patch("controller.ocr.ocr_capture_ops._build_final_names_from_runs", return_value=list(primary_names)),
             patch(
-                "controller.ocr_capture_ops._filter_low_confidence_candidates",
+                "controller.ocr.ocr_capture_ops._filter_low_confidence_candidates",
                 side_effect=lambda names, *_args, **_kwargs: list(names),
             ),
             patch(
-                "controller.ocr_capture_ops._order_names_by_line_trace",
+                "controller.ocr.ocr_capture_ops._order_names_by_line_trace",
                 side_effect=lambda names, *_args, **_kwargs: list(names),
             ),
             patch(
-                "controller.ocr_capture_ops._expand_config_identifier_prefixes",
+                "controller.ocr.ocr_capture_ops._expand_config_identifier_prefixes",
                 side_effect=lambda names: list(names),
             ),
         ):
@@ -4612,26 +4612,26 @@ class TestOCRCaptureOps(unittest.TestCase):
             return dict(stats)
 
         with (
-            patch("controller.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=6),
+            patch("controller.ocr.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=6),
             patch(
-                "controller.ocr_capture_ops._run_ocr_pass",
+                "controller.ocr.ocr_capture_ops._run_ocr_pass",
                 return_value=(["\n".join(primary_names)], [], primary_runs),
             ),
-            patch("controller.ocr_capture_ops._extract_names_from_texts", return_value=list(primary_names)),
+            patch("controller.ocr.ocr_capture_ops._extract_names_from_texts", return_value=list(primary_names)),
             patch(
-                "controller.ocr_capture_ops._candidate_stats_from_runs",
+                "controller.ocr.ocr_capture_ops._candidate_stats_from_runs",
                 side_effect=_candidate_stats_with_trace,
             ),
             patch(
-                "controller.ocr_capture_ops._build_final_names_from_runs",
+                "controller.ocr.ocr_capture_ops._build_final_names_from_runs",
                 return_value=["Line1", "Line3", "Line4", "Line5", "Line6"],
             ),
             patch(
-                "controller.ocr_capture_ops._filter_low_confidence_candidates",
+                "controller.ocr.ocr_capture_ops._filter_low_confidence_candidates",
                 side_effect=lambda names, *_args, **_kwargs: list(names),
             ),
             patch(
-                "controller.ocr_capture_ops._expand_config_identifier_prefixes",
+                "controller.ocr.ocr_capture_ops._expand_config_identifier_prefixes",
                 side_effect=lambda names: list(names),
             ),
         ):
@@ -4725,26 +4725,26 @@ class TestOCRCaptureOps(unittest.TestCase):
             return dict(stats)
 
         with (
-            patch("controller.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=7),
+            patch("controller.ocr.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=7),
             patch(
-                "controller.ocr_capture_ops._run_ocr_pass",
+                "controller.ocr.ocr_capture_ops._run_ocr_pass",
                 return_value=(["\n".join(primary_names)], [], primary_runs),
             ),
-            patch("controller.ocr_capture_ops._extract_names_from_texts", return_value=list(primary_names)),
+            patch("controller.ocr.ocr_capture_ops._extract_names_from_texts", return_value=list(primary_names)),
             patch(
-                "controller.ocr_capture_ops._candidate_stats_from_runs",
+                "controller.ocr.ocr_capture_ops._candidate_stats_from_runs",
                 side_effect=_candidate_stats_with_trace,
             ),
             patch(
-                "controller.ocr_capture_ops._build_final_names_from_runs",
+                "controller.ocr.ocr_capture_ops._build_final_names_from_runs",
                 return_value=["Line1", "flatiqz", "Line3", "Line4", "Line5", "Line6", "yukino", "vukino"],
             ),
             patch(
-                "controller.ocr_capture_ops._filter_low_confidence_candidates",
+                "controller.ocr.ocr_capture_ops._filter_low_confidence_candidates",
                 side_effect=lambda names, *_args, **_kwargs: list(names),
             ),
             patch(
-                "controller.ocr_capture_ops._expand_config_identifier_prefixes",
+                "controller.ocr.ocr_capture_ops._expand_config_identifier_prefixes",
                 side_effect=lambda names: list(names),
             ),
         ):
@@ -4764,7 +4764,7 @@ class TestOCRCaptureOps(unittest.TestCase):
 
         class _StubOCRImport:
             @staticmethod
-            def run_tesseract_multi(
+            def run_ocr_multi(
                 image_path,
                 *,
                 cmd,
@@ -4803,8 +4803,8 @@ class TestOCRCaptureOps(unittest.TestCase):
         )
 
         with (
-            patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
-            patch("controller.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=None),
+            patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+            patch("controller.ocr.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=None),
         ):
             names, _merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
                 [Path("dummy.png")],
@@ -4822,7 +4822,7 @@ class TestOCRCaptureOps(unittest.TestCase):
 
         class _StubOCRImport:
             @staticmethod
-            def run_tesseract_multi(
+            def run_ocr_multi(
                 image_path,
                 *,
                 cmd,
@@ -4867,7 +4867,7 @@ class TestOCRCaptureOps(unittest.TestCase):
             }
         )
 
-        with patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
+        with patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
             names, merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
                 [Path("dummy.png")],
                 ocr_cmd="auto",
@@ -4886,7 +4886,7 @@ class TestOCRCaptureOps(unittest.TestCase):
 
         class _StubOCRImport:
             @staticmethod
-            def run_tesseract_multi(
+            def run_ocr_multi(
                 image_path,
                 *,
                 cmd,
@@ -4930,7 +4930,7 @@ class TestOCRCaptureOps(unittest.TestCase):
             }
         )
 
-        with patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
+        with patch("controller.ocr.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
             names, merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
                 [Path("dummy.png")],
                 ocr_cmd="auto",
@@ -4996,11 +4996,11 @@ class TestOCRCaptureOps(unittest.TestCase):
         )
 
         with (
-            patch("controller.ocr_capture_ops._mark_ocr_runtime_activated"),
-            patch("controller.ocr_capture_ops._cancel_ocr_cache_release"),
-            patch("controller.ocr_capture_ops.capture_region_for_ocr", return_value=(None, "cancelled")),
-            patch("controller.ocr_capture_ops._handle_ocr_selection_error", return_value=True),
-            patch("controller.ocr_capture_ops._schedule_ocr_cache_release") as schedule_mock,
+            patch("controller.ocr.ocr_capture_ops._mark_ocr_runtime_activated"),
+            patch("controller.ocr.ocr_capture_ops._cancel_ocr_cache_release"),
+            patch("controller.ocr.ocr_capture_ops.capture_region_for_ocr", return_value=(None, "cancelled")),
+            patch("controller.ocr.ocr_capture_ops._handle_ocr_selection_error", return_value=True),
+            patch("controller.ocr.ocr_capture_ops._schedule_ocr_cache_release") as schedule_mock,
         ):
             ocr_capture_ops.on_role_ocr_import_clicked(mw, "dps")
 
@@ -5033,7 +5033,7 @@ class TestOCRCaptureOps(unittest.TestCase):
             _ocr_role_display_name=lambda role_key: "DPS" if role_key == "dps" else role_key.upper(),
         )
         with patch(
-            "controller.ocr_capture_ops.i18n.t",
+            "controller.ocr.ocr_capture_ops.i18n.t",
             side_effect=lambda key, **kwargs: {
                 "ocr.progress_title": "OCR in progress",
                 "ocr.progress_line_wait": "Please wait...",
@@ -5067,7 +5067,7 @@ class TestOCRCaptureOps(unittest.TestCase):
         overlay = _DummyOverlay()
         mw = SimpleNamespace(overlay=overlay)
         with patch(
-            "controller.ocr_capture_ops.i18n.t",
+            "controller.ocr.ocr_capture_ops.i18n.t",
             side_effect=lambda key, **kwargs: "OCR in progress" if key == "ocr.progress_title" else key,
         ):
             ocr_capture_ops._hide_ocr_busy_overlay(mw, active=True)

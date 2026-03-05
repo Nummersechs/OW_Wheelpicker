@@ -22,7 +22,7 @@ from .main_window_parts.main_window_sound import MainWindowSoundMixin
 from .main_window_parts.main_window_startup import MainWindowStartupMixin
 from .main_window_parts.main_window_state import MainWindowStateMixin
 from .main_window_parts.main_window_spin import MainWindowSpinMixin
-from .ocr_role_import import PendingOCRImport
+from .ocr.ocr_role_import import PendingOCRImport
 from services import state_store
 from services.app_settings import AppSettings
 from model.role_keys import role_wheel_map, role_wheels
@@ -907,7 +907,7 @@ class MainWindow(
         hover_tooltip_ops.set_tooltips_ready(self, ready=ready)
 
     def _on_role_ocr_import_clicked(self, role_key: str) -> None:
-        from . import ocr_capture_ops
+        from .ocr import ocr_capture_ops
 
         ocr_capture_ops.on_role_ocr_import_clicked(self, role_key)
 

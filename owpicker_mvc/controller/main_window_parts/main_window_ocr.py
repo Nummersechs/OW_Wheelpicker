@@ -6,7 +6,7 @@ from PySide6 import QtCore, QtWidgets
 
 import i18n
 from logic.name_normalization import normalize_name_alnum_key
-from ..ocr_role_import import (
+from ..ocr.ocr_role_import import (
     PendingOCRImport,
     normalize_name_key as normalize_ocr_name_key,
     resolve_selected_candidates as resolve_selected_ocr_candidates,
@@ -73,19 +73,19 @@ class MainWindowOCRMixin:
         return min(1.0, score)
 
     def _apply_ocr_name_hints(self, role_key: str, names: list[str]) -> list[str]:
-        if not bool(self._cfg("OCR_USE_NAME_HINTS", True)):
+        if not bool(self._cfg("OCR_USE_NAME_HINTS", False)):
             return list(names or [])
         hints = self._ocr_name_hint_candidates(role_key)
         if not hints:
             return list(names or [])
 
-        expected = max(1, int(self._cfg("OCR_EXPECTED_CANDIDATES", 5)))
         min_score = float(self._cfg("OCR_HINT_CORRECTION_MIN_SCORE", 0.62))
         low_conf_min_score = float(self._cfg("OCR_HINT_CORRECTION_LOW_CONF_MIN_SCORE", 0.28))
 
         normalized_input = [str(value or "").strip() for value in list(names or []) if str(value or "").strip()]
         if not normalized_input:
             return []
+        expected = max(5, len(normalized_input))
 
         corrected: list[str] = []
         used_hints: set[str] = set()
@@ -294,7 +294,7 @@ class MainWindowOCRMixin:
             getattr(self, "_ocr_runtime_activated", False)
         ):
             return
-        delay_ms = max(0, int(self._cfg("OCR_IDLE_CACHE_RELEASE_MS", 180000)))
+        delay_ms = max(0, int(self._cfg("OCR_IDLE_CACHE_RELEASE_MS", 30000)))
         if delay_ms <= 0:
             return
         timer = self._ensure_ocr_cache_release_timer()
@@ -345,14 +345,16 @@ class MainWindowOCRMixin:
                     pass
             return
         try:
-            from .. import ocr_import
+            from ..ocr import ocr_import
         except Exception:
             return
         release_fn = getattr(ocr_import, "clear_ocr_runtime_caches", None)
         if not callable(release_fn):
             return
         try:
-            release_fn(release_gpu=bool(self._cfg("OCR_EASYOCR_GPU", False)))
+            gpu_setting = str(self._cfg("OCR_EASYOCR_GPU", "auto")).strip().casefold()
+            release_gpu = gpu_setting not in {"", "0", "false", "off", "no", "cpu", "none"}
+            release_fn(release_gpu=release_gpu)
         except Exception:
             return
         if hasattr(self, "_trace_event"):
@@ -370,7 +372,7 @@ class MainWindowOCRMixin:
             self._schedule_ocr_runtime_cache_release()
             return
         try:
-            from .. import ocr_import
+            from ..ocr import ocr_import
         except Exception:
             return
         release_fn = getattr(ocr_import, "clear_ocr_runtime_caches", None)

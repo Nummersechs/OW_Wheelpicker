@@ -1,7 +1,7 @@
 import unittest
 
 from controller.main_window import MainWindow
-from controller.ocr_role_import import PendingOCRImport
+from controller.ocr.ocr_role_import import PendingOCRImport
 
 
 class _FakeWheel:

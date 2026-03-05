@@ -58,8 +58,6 @@ TRANSLATIONS_EN = {
     "ocr.error_no_screen": "No screen was found for capturing.",
     "ocr.error_selection_failed": "Failed to capture the selected screen region.",
     "ocr.error_screen_permission_hint": "If Discord is not visible, allow Screen Recording for this app/Python in macOS Settings > Privacy & Security > Screen Recording.",
-    "ocr.error_tesseract_missing": "Tesseract is not installed or not in PATH ({cmd}).",
-    "ocr.error_tesseract_bundle_hint": "For a Windows EXE without extra user installs, bundle OCR at OCR/tesseract.exe + OCR/tessdata/*.traineddata (including required DLLs).",
     "ocr.error_image_write_failed": "Failed to prepare the captured image for OCR.",
     "ocr.error_run_failed": "OCR failed: {reason}",
     "ocr.error_unexpected": "Unexpected OCR error: {reason}",

@@ -1,11 +1,10 @@
-import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
-from controller.ocr_import import (
+from controller.ocr.ocr_import import (
     OCRRunResult,
     _normalize_easyocr_gpu_mode,
     _resolve_easyocr_device,
@@ -13,99 +12,12 @@ from controller.ocr_import import (
     extract_candidate_names,
     extract_candidate_names_debug,
     extract_candidate_names_multi,
-    resolve_tesseract_cmd,
-    resolve_tessdata_dir,
     run_easyocr,
     run_ocr_multi,
 )
 
 
 class TestOCRImport(unittest.TestCase):
-    def setUp(self):
-        resolve_tesseract_cmd.cache_clear()
-        resolve_tessdata_dir.cache_clear()
-
-    def tearDown(self):
-        resolve_tesseract_cmd.cache_clear()
-        resolve_tessdata_dir.cache_clear()
-
-    @staticmethod
-    def _platform_tesseract_name() -> str:
-        return "tesseract.exe" if sys.platform == "win32" else "tesseract"
-
-    def test_resolve_tesseract_cmd_finds_bundled_binary(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            exe_name = self._platform_tesseract_name()
-            bundled_cmd = root / "OCR" / exe_name
-            bundled_cmd.parent.mkdir(parents=True, exist_ok=True)
-            bundled_cmd.write_text("stub", encoding="utf-8")
-            with (
-                patch("controller.ocr_import.shutil.which", return_value=None),
-                patch("controller.ocr_import._runtime_search_roots", return_value=[root]),
-            ):
-                resolved = resolve_tesseract_cmd("tesseract")
-            self.assertEqual(resolved, str(bundled_cmd))
-
-    def test_resolve_tesseract_cmd_auto_prefers_bundled_over_path(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            exe_name = self._platform_tesseract_name()
-            bundled_cmd = root / "OCR" / exe_name
-            bundled_cmd.parent.mkdir(parents=True, exist_ok=True)
-            bundled_cmd.write_text("stub", encoding="utf-8")
-            with (
-                patch("controller.ocr_import.shutil.which", return_value="/usr/bin/tesseract"),
-                patch("controller.ocr_import._runtime_search_roots", return_value=[root]),
-            ):
-                resolved = resolve_tesseract_cmd("auto")
-            self.assertEqual(resolved, str(bundled_cmd))
-
-    def test_resolve_tesseract_cmd_manual_prefers_path_before_bundle(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            exe_name = self._platform_tesseract_name()
-            bundled_cmd = root / "OCR" / exe_name
-            bundled_cmd.parent.mkdir(parents=True, exist_ok=True)
-            bundled_cmd.write_text("stub", encoding="utf-8")
-            with (
-                patch("controller.ocr_import.shutil.which", return_value="/usr/bin/tesseract"),
-                patch("controller.ocr_import._runtime_search_roots", return_value=[root]),
-            ):
-                resolved = resolve_tesseract_cmd("tesseract")
-            self.assertEqual(resolved, "/usr/bin/tesseract")
-
-    def test_resolve_tesseract_cmd_finds_nested_bundled_binary(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            exe_name = self._platform_tesseract_name()
-            bundled_cmd = root / "OCR" / "Tesseract-OCR" / "bin" / exe_name
-            bundled_cmd.parent.mkdir(parents=True, exist_ok=True)
-            bundled_cmd.write_text("stub", encoding="utf-8")
-            with (
-                patch("controller.ocr_import.shutil.which", return_value=None),
-                patch("controller.ocr_import._runtime_search_roots", return_value=[root]),
-            ):
-                resolved = resolve_tesseract_cmd("tesseract")
-            self.assertEqual(resolved, str(bundled_cmd))
-
-    def test_resolve_tessdata_dir_finds_bundled_traineddata(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            exe_name = self._platform_tesseract_name()
-            bundled_cmd = root / "OCR" / exe_name
-            bundled_cmd.parent.mkdir(parents=True, exist_ok=True)
-            bundled_cmd.write_text("stub", encoding="utf-8")
-            tessdata = root / "OCR" / "tessdata"
-            tessdata.mkdir(parents=True, exist_ok=True)
-            (tessdata / "eng.traineddata").write_text("stub", encoding="utf-8")
-            with (
-                patch("controller.ocr_import.shutil.which", return_value=None),
-                patch("controller.ocr_import._runtime_search_roots", return_value=[root]),
-            ):
-                resolved = resolve_tessdata_dir("tesseract")
-            self.assertEqual(resolved, str(tessdata))
-
     def test_extract_candidate_names_normalizes_and_deduplicates(self):
         text = """
         1) Nummersechs
@@ -427,7 +339,7 @@ class TestOCRImport(unittest.TestCase):
                         ),
                     ]
 
-            with patch("controller.ocr_import._resolve_easyocr_reader", return_value=(_Reader(), None)):
+            with patch("controller.ocr.ocr_import._resolve_easyocr_reader", return_value=(_Reader(), None)):
                 result = run_easyocr(image_path, quiet=True)
 
         self.assertIsNone(result.error)
@@ -457,7 +369,7 @@ class TestOCRImport(unittest.TestCase):
                         ),
                     ]
 
-            with patch("controller.ocr_import._resolve_easyocr_reader", return_value=(_Reader(), None)):
+            with patch("controller.ocr.ocr_import._resolve_easyocr_reader", return_value=(_Reader(), None)):
                 result = run_easyocr(image_path, quiet=True)
 
         self.assertIsNone(result.error)
@@ -487,7 +399,7 @@ class TestOCRImport(unittest.TestCase):
                         ),
                     ]
 
-            with patch("controller.ocr_import._resolve_easyocr_reader", return_value=(_Reader(), None)):
+            with patch("controller.ocr.ocr_import._resolve_easyocr_reader", return_value=(_Reader(), None)):
                 result = run_easyocr(image_path, quiet=True)
 
         self.assertIsNone(result.error)
@@ -496,18 +408,12 @@ class TestOCRImport(unittest.TestCase):
 
     def test_clear_ocr_runtime_caches_clears_cached_layers(self):
         with (
-            patch("controller.ocr_import._cached_easyocr_reader.cache_clear") as easyocr_clear,
-            patch("controller.ocr_import._list_tesseract_languages.cache_clear") as langs_clear,
-            patch("controller.ocr_import.resolve_tesseract_cmd.cache_clear") as cmd_clear,
-            patch("controller.ocr_import.resolve_tessdata_dir.cache_clear") as tessdata_clear,
-            patch("controller.ocr_import.gc.collect") as gc_collect,
+            patch("controller.ocr.ocr_import._cached_easyocr_reader.cache_clear") as easyocr_clear,
+            patch("controller.ocr.ocr_import.gc.collect") as gc_collect,
         ):
             clear_ocr_runtime_caches(release_gpu=False)
 
         easyocr_clear.assert_called_once()
-        langs_clear.assert_called_once()
-        cmd_clear.assert_called_once()
-        tessdata_clear.assert_called_once()
         gc_collect.assert_called_once()
 
     def test_extract_candidate_names_multi_falls_back_if_support_filter_would_be_empty(self):
@@ -522,24 +428,16 @@ class TestOCRImport(unittest.TestCase):
         )
 
     def test_run_ocr_multi_dispatches_to_easyocr(self):
-        with (
-            patch("controller.ocr_import.run_easyocr", return_value=OCRRunResult("Aero")) as easy_mock,
-            patch("controller.ocr_import.run_tesseract_multi") as tess_mock,
-        ):
+        with patch("controller.ocr.ocr_import.run_easyocr", return_value=OCRRunResult("Aero")) as easy_mock:
             result = run_ocr_multi(Path("dummy.png"), engine="easyocr")
         self.assertEqual(result.text, "Aero")
         easy_mock.assert_called_once()
-        tess_mock.assert_not_called()
 
     def test_run_ocr_multi_dispatches_to_easyocr_by_default(self):
-        with (
-            patch("controller.ocr_import.run_tesseract_multi") as tess_mock,
-            patch("controller.ocr_import.run_easyocr", return_value=OCRRunResult("Aero")) as easy_mock,
-        ):
+        with patch("controller.ocr.ocr_import.run_easyocr", return_value=OCRRunResult("Aero")) as easy_mock:
             result = run_ocr_multi(Path("dummy.png"))
         self.assertEqual(result.text, "Aero")
         easy_mock.assert_called_once()
-        tess_mock.assert_not_called()
 
     def test_gpu_mode_normalization(self):
         self.assertEqual(_normalize_easyocr_gpu_mode(False), "cpu")
@@ -551,24 +449,20 @@ class TestOCRImport(unittest.TestCase):
         self.assertEqual(_normalize_easyocr_gpu_mode("unexpected"), "auto")
 
     def test_resolve_easyocr_device_auto_prefers_accelerator(self):
-        with patch("controller.ocr_import._torch_device_support", return_value=(False, False)):
+        with patch("controller.ocr.ocr_import._torch_device_support", return_value=(False, False)):
             self.assertEqual(_resolve_easyocr_device("auto"), "cpu")
-        with patch("controller.ocr_import._torch_device_support", return_value=(False, True)):
+        with patch("controller.ocr.ocr_import._torch_device_support", return_value=(False, True)):
             self.assertEqual(_resolve_easyocr_device("auto"), "mps")
-        with patch("controller.ocr_import._torch_device_support", return_value=(True, True)):
+        with patch("controller.ocr.ocr_import._torch_device_support", return_value=(True, True)):
             self.assertEqual(_resolve_easyocr_device("auto"), "cuda")
 
     def test_run_ocr_multi_passes_gpu_mode_through(self):
-        with (
-            patch("controller.ocr_import.run_easyocr", return_value=OCRRunResult("Aero")) as easy_mock,
-            patch("controller.ocr_import.run_tesseract_multi") as tess_mock,
-        ):
+        with patch("controller.ocr.ocr_import.run_easyocr", return_value=OCRRunResult("Aero")) as easy_mock:
             result = run_ocr_multi(Path("dummy.png"), easyocr_gpu="mps")
         self.assertEqual(result.text, "Aero")
         easy_mock.assert_called_once()
         kwargs = easy_mock.call_args.kwargs
         self.assertEqual(kwargs.get("gpu"), "mps")
-        tess_mock.assert_not_called()
 
     def test_run_easyocr_disables_pin_memory_patch_for_non_cuda_device(self):
         class _Reader:
@@ -588,8 +482,8 @@ class TestOCRImport(unittest.TestCase):
             img = Path(tmp) / "sample.png"
             img.write_bytes(b"stub")
             with (
-                patch("controller.ocr_import._resolve_easyocr_reader", return_value=(_Reader(), None)),
-                patch("controller.ocr_import._patch_dataloader_pin_memory", side_effect=_fake_patch),
+                patch("controller.ocr.ocr_import._resolve_easyocr_reader", return_value=(_Reader(), None)),
+                patch("controller.ocr.ocr_import._patch_dataloader_pin_memory", side_effect=_fake_patch),
             ):
                 result = run_easyocr(img)
 
@@ -614,8 +508,8 @@ class TestOCRImport(unittest.TestCase):
             img = Path(tmp) / "sample.png"
             img.write_bytes(b"stub")
             with (
-                patch("controller.ocr_import._resolve_easyocr_reader", return_value=(_Reader(), None)),
-                patch("controller.ocr_import._patch_dataloader_pin_memory", side_effect=_fake_patch),
+                patch("controller.ocr.ocr_import._resolve_easyocr_reader", return_value=(_Reader(), None)),
+                patch("controller.ocr.ocr_import._patch_dataloader_pin_memory", side_effect=_fake_patch),
             ):
                 result = run_easyocr(img)
 

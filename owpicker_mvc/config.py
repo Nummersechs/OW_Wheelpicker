@@ -136,14 +136,13 @@ OCR_IDLE_CACHE_RELEASE_BUSY_RETRY_MS = 2500
 # Keep cache release on spin disabled by default to avoid UI-thread spikes at
 # spin start when OCR runtimes were initialized before.
 OCR_RELEASE_CACHE_ON_SPIN = False
-# The following names keep legacy compatibility with existing code paths/tests
-# even though the runtime backend is EasyOCR.
-OCR_TESSERACT_PSM = 11
-OCR_TESSERACT_FALLBACK_PSM = 6
-OCR_TESSERACT_RETRY_EXTRA_PSMS = [7, 13]
-OCR_TESSERACT_TIMEOUT_S = 8.0
+# OCR parsing/runtime knobs (engine-agnostic naming).
+OCR_PRIMARY_PSM = 11
+OCR_FALLBACK_PSM = 6
+OCR_RETRY_EXTRA_PSMS = [7, 13]
+OCR_TIMEOUT_S = 8.0
 # Windows override for OCR timeout (seconds). Lower = more responsive.
-OCR_TESSERACT_TIMEOUT_S_WINDOWS = 6.0
+OCR_TIMEOUT_S_WINDOWS = 6.0
 OCR_FAST_MODE = True
 # 0 = all generated variants, >0 = cap variant count per OCR run
 OCR_MAX_VARIANTS = 2
@@ -341,6 +340,10 @@ OCR_NAME_MAX_WORDS = 8
 # Add at most this many line-parser fallback candidates when strict multi-line
 # extraction missed lines (helps recover borderline rows without over-noising).
 OCR_LINE_RECALL_MAX_ADDITIONS = 2
+# Keep at most one parsed candidate per OCR text line.
+OCR_SINGLE_NAME_PER_LINE = False
+# If strict line parsing fails, run one relaxed parse pass for recall.
+OCR_LINE_RELAXED_FALLBACK = True
 OCR_NAME_MAX_DIGIT_RATIO = 0.45
 # If True, OCR parsing aggressively trims on special characters/icons.
 # Disabled by default to avoid cutting player lines too early.
