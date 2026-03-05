@@ -56,6 +56,12 @@ class TestTimerRegistry(unittest.TestCase):
         reg.stop_all()
         self.assertEqual(bad2.stop_calls, 1)
 
+    def test_stop_all_ignores_non_timer_like_objects(self):
+        reg = TimerRegistry()
+        reg.register(object())
+        reg.stop_all()
+        self.assertEqual(reg.snapshot()["registered"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

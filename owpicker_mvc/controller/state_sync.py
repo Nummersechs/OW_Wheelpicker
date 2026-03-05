@@ -73,7 +73,7 @@ class StateSyncController(QtCore.QObject):
                     data = json.load(f)
                 if isinstance(data, dict):
                     return data
-        except Exception:
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
             # Quiet failure; callers decide on logging/fallback
             pass
         return {}
@@ -86,7 +86,7 @@ class StateSyncController(QtCore.QObject):
             with path.open("w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             return True
-        except Exception:
+        except (OSError, TypeError, ValueError):
             # Quiet failure; callers decide on logging
             return False
 
@@ -94,7 +94,7 @@ class StateSyncController(QtCore.QObject):
     def _state_signature(data: Dict[str, Any]) -> str | None:
         try:
             return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-        except Exception:
+        except (TypeError, ValueError):
             return None
 
     @staticmethod
@@ -196,11 +196,11 @@ class StateSyncController(QtCore.QObject):
         sync_timer_active = False
         try:
             save_timer_active = bool(self._save_timer.isActive())
-        except Exception:
+        except RuntimeError:
             pass
         try:
             sync_timer_active = bool(self._sync_timer.isActive())
-        except Exception:
+        except RuntimeError:
             pass
         with self._network_threads_lock:
             active_threads = int(self._network_threads_active)
@@ -234,7 +234,7 @@ class StateSyncController(QtCore.QObject):
         self._requests_checked = True
         try:
             self._requests_module = importlib.import_module("requests")
-        except Exception:
+        except (ModuleNotFoundError, ImportError):
             self._requests_module = None
         return self._requests_module
 

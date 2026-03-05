@@ -12,8 +12,11 @@ def _cfg(mw, key: str, default=None):
     if callable(getter):
         try:
             return getter(key, default)
-        except Exception:
-            pass
+        except Exception as exc:
+            try:
+                config.debug_print(f"shutdown _cfg fallback for {key}: {exc}")
+            except Exception:
+                pass
     return getattr(config, key, default)
 
 
@@ -22,6 +25,36 @@ def merge_shutdown_snapshot(prefix: str, payload: dict | None, target: dict) -> 
         return
     for key, value in payload.items():
         target[f"{prefix}_{key}"] = value
+
+
+def _trace_shutdown_snapshot_error(mw, *, component: str, exc: Exception) -> None:
+    if not bool(_cfg(mw, "TRACE_SHUTDOWN", False)):
+        return
+    tracer = getattr(mw, "_trace_event", None)
+    if not callable(tracer):
+        return
+    tracer("shutdown_snapshot:error", component=component, error=repr(exc))
+
+
+def _append_component_snapshot(
+    mw,
+    *,
+    target: dict,
+    component: str,
+    prefix: str,
+    source: object | None,
+) -> None:
+    if source is None:
+        return
+    snapshot_fn = getattr(source, "resource_snapshot", None)
+    if not callable(snapshot_fn):
+        return
+    try:
+        payload = snapshot_fn()
+    except Exception as exc:
+        _trace_shutdown_snapshot_error(mw, component=component, exc=exc)
+        return
+    merge_shutdown_snapshot(prefix, payload, target)
 
 
 def shutdown_resource_snapshot(mw) -> dict:
@@ -33,55 +66,57 @@ def shutdown_resource_snapshot(mw) -> dict:
             try:
                 if timer.isActive():
                     active += 1
-            except Exception:
-                pass
+            except RuntimeError as exc:
+                _trace_shutdown_snapshot_error(mw, component="qt_timer", exc=exc)
         snap["qt_timers_total"] = len(timers)
         snap["qt_timers_active"] = active
-    except Exception:
+    except Exception as exc:
+        _trace_shutdown_snapshot_error(mw, component="qt_timers_total", exc=exc)
         snap["qt_timers_total"] = None
         snap["qt_timers_active"] = None
 
-    registry = getattr(mw, "_timers", None)
-    if registry is not None and hasattr(registry, "snapshot"):
-        try:
-            merge_shutdown_snapshot("registry", registry.snapshot(), snap)
-        except Exception:
-            pass
-
-    state_sync = getattr(mw, "state_sync", None)
-    if state_sync is not None and hasattr(state_sync, "resource_snapshot"):
-        try:
-            merge_shutdown_snapshot("state_sync", state_sync.resource_snapshot(), snap)
-        except Exception:
-            pass
-
-    tooltip = getattr(mw, "_tooltip_manager", None)
-    if tooltip is not None and hasattr(tooltip, "resource_snapshot"):
-        try:
-            merge_shutdown_snapshot("tooltip", tooltip.resource_snapshot(), snap)
-        except Exception:
-            pass
-
-    sound = getattr(mw, "sound", None)
-    if sound is not None and hasattr(sound, "resource_snapshot"):
-        try:
-            merge_shutdown_snapshot("sound", sound.resource_snapshot(), snap)
-        except Exception:
-            pass
-
-    panel = getattr(mw, "player_list_panel", None)
-    if panel is not None and hasattr(panel, "resource_snapshot"):
-        try:
-            merge_shutdown_snapshot("player_panel", panel.resource_snapshot(), snap)
-        except Exception:
-            pass
-
-    map_ui = getattr(mw, "map_ui", None)
-    if map_ui is not None and hasattr(map_ui, "resource_snapshot"):
-        try:
-            merge_shutdown_snapshot("map_ui", map_ui.resource_snapshot(), snap)
-        except Exception:
-            pass
+    _append_component_snapshot(
+        mw,
+        target=snap,
+        component="timer_registry",
+        prefix="registry",
+        source=getattr(mw, "_timers", None),
+    )
+    _append_component_snapshot(
+        mw,
+        target=snap,
+        component="state_sync",
+        prefix="state_sync",
+        source=getattr(mw, "state_sync", None),
+    )
+    _append_component_snapshot(
+        mw,
+        target=snap,
+        component="tooltip_manager",
+        prefix="tooltip",
+        source=getattr(mw, "_tooltip_manager", None),
+    )
+    _append_component_snapshot(
+        mw,
+        target=snap,
+        component="sound",
+        prefix="sound",
+        source=getattr(mw, "sound", None),
+    )
+    _append_component_snapshot(
+        mw,
+        target=snap,
+        component="player_list_panel",
+        prefix="player_panel",
+        source=getattr(mw, "player_list_panel", None),
+    )
+    _append_component_snapshot(
+        mw,
+        target=snap,
+        component="map_ui",
+        prefix="map_ui",
+        source=getattr(mw, "map_ui", None),
+    )
 
     return snap
 

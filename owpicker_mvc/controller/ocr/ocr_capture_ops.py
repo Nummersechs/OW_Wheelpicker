@@ -13,46 +13,17 @@ from PySide6 import QtCore, QtGui, QtWidgets
 import i18n
 from utils import qt_runtime
 
-try:
-    from controller.ocr import ocr_import as _ocr_import
-except Exception:
-    from . import ocr_import as _ocr_import
+from view import screen_region_selector as _screen_selector
 
-try:
-    from view import screen_region_selector as _screen_selector
-except Exception:
-    # Backward-compatibility for legacy typo-based import path.
-    from view import screen_redion_selector as _screen_selector
-
-try:
-    from controller.ocr import ocr_engine_utils as _ocr_engine_utils
-except Exception:
-    from . import ocr_engine_utils as _ocr_engine_utils
-
-try:
-    from controller.ocr import ocr_postprocess_utils as _ocr_postprocess_utils
-except Exception:
-    from . import ocr_postprocess_utils as _ocr_postprocess_utils
-
-try:
-    from controller.ocr import ocr_row_pass_utils as _ocr_row_pass_utils
-except Exception:
-    from . import ocr_row_pass_utils as _ocr_row_pass_utils
-
-try:
-    from controller.ocr import ocr_debug_utils as _ocr_debug_utils
-except Exception:
-    from . import ocr_debug_utils as _ocr_debug_utils
-
-try:
-    from controller.ocr import ocr_async_worker_utils as _ocr_async_worker_utils
-except Exception:
-    from . import ocr_async_worker_utils as _ocr_async_worker_utils
-
-try:
-    from controller.ocr import ocr_ordering_utils as _ocr_ordering_utils
-except Exception:
-    from . import ocr_ordering_utils as _ocr_ordering_utils
+from . import (
+    ocr_async_worker_utils as _ocr_async_worker_utils,
+    ocr_debug_utils as _ocr_debug_utils,
+    ocr_engine_utils as _ocr_engine_utils,
+    ocr_import as _ocr_import,
+    ocr_ordering_utils as _ocr_ordering_utils,
+    ocr_postprocess_utils as _ocr_postprocess_utils,
+    ocr_row_pass_utils as _ocr_row_pass_utils,
+)
 
 
 def _ocr_import_module():

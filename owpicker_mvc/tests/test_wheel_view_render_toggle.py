@@ -82,7 +82,7 @@ class TestWheelViewRenderToggle(unittest.TestCase):
             allow_pair_toggle=True,
             subrole_labels=["Main", "Off"],
         )
-        wheel.show()
+        wheel.layout().activate()
         QtWidgets.QApplication.processEvents()
 
         item0 = wheel.names.item(0)
@@ -114,7 +114,7 @@ class TestWheelViewRenderToggle(unittest.TestCase):
             subrole_labels=["Main", "Off"],
         )
         wheel.resize(420, 560)
-        wheel.show()
+        wheel.layout().activate()
         QtWidgets.QApplication.processEvents()
 
         row_before = wheel.names.itemWidget(wheel.names.item(0))

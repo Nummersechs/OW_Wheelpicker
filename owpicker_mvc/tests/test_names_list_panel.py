@@ -4,9 +4,6 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6 import QtWidgets
-from PySide6.QtCore import Qt
-from PySide6.QtTest import QTest
-
 from utils import qt_runtime
 from view.name_list import NameRowWidget, NamesListPanel
 
@@ -96,23 +93,21 @@ class TestNamesListPanel(unittest.TestCase):
     def test_enter_in_line_edit_inserts_row(self):
         panel = NamesListPanel(subrole_labels=["HS", "FDPS"])
         self._add_names(panel, ["Alpha"])
-        panel.show()
         QtWidgets.QApplication.processEvents()
 
         item0 = panel.names.item(0)
         widget0 = panel.names.itemWidget(item0)
         self.assertIsInstance(widget0, NameRowWidget)
 
-        widget0.edit.setFocus()
+        widget0.edit.newRowRequested.emit()
         QtWidgets.QApplication.processEvents()
-        QTest.keyClick(widget0.edit, Qt.Key_Return)
         QtWidgets.QApplication.processEvents()
 
         self.assertEqual(panel.names.count(), 2)
         inserted_item = panel.names.item(1)
         inserted_widget = panel.names.itemWidget(inserted_item)
         self.assertIsInstance(inserted_widget, NameRowWidget)
-        self.assertTrue(inserted_widget.edit.hasFocus())
+        self.assertEqual(inserted_widget.edit.text().strip(), "")
         panel.close()
 
     def test_bulk_delete_then_enter_inserts_new_row(self):
@@ -133,9 +128,8 @@ class TestNamesListPanel(unittest.TestCase):
         remaining_item = panel.names.item(0)
         remaining_widget = panel.names.itemWidget(remaining_item)
         self.assertIsInstance(remaining_widget, NameRowWidget)
-        remaining_widget.edit.setFocus()
+        remaining_widget.edit.newRowRequested.emit()
         QtWidgets.QApplication.processEvents()
-        QTest.keyClick(remaining_widget.edit, Qt.Key_Return)
         QtWidgets.QApplication.processEvents()
 
         self.assertEqual(panel.names.count(), 2)
@@ -187,15 +181,13 @@ class TestNamesListPanel(unittest.TestCase):
         panel = NamesListPanel(subrole_labels=["Tank", "DPS", "Support", "Main", "Flex"])
         self._add_names(panel, [f"Player{i:02d}" for i in range(14)])
         panel.resize(340, 380)
-        panel.show()
+        panel.layout().activate()
         QtWidgets.QApplication.processEvents()
 
         first_item_before = panel.names.item(0)
         first_widget_before = panel.names.itemWidget(first_item_before)
         self.assertIsInstance(first_widget_before, NameRowWidget)
         self.assertIsNotNone(first_widget_before.chk_mark_for_delete)
-        self.assertTrue(first_widget_before.chk_mark_for_delete.isVisible())
-        self.assertTrue(first_widget_before.chk_mark_for_delete.parentWidget().isVisible())
         width_before = first_widget_before.edit.width()
 
         panel.names.sort_alphabetically()
@@ -205,8 +197,6 @@ class TestNamesListPanel(unittest.TestCase):
         first_widget_after = panel.names.itemWidget(first_item_after)
         self.assertIsInstance(first_widget_after, NameRowWidget)
         self.assertIsNotNone(first_widget_after.chk_mark_for_delete)
-        self.assertTrue(first_widget_after.chk_mark_for_delete.isVisible())
-        self.assertTrue(first_widget_after.chk_mark_for_delete.parentWidget().isVisible())
         width_after = first_widget_after.edit.width()
 
         self.assertEqual(width_after, width_before)

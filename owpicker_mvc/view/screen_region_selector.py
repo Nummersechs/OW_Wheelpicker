@@ -190,3 +190,10 @@ def select_region_with_macos_screencapture(
         return None, "capture-invalid-image"
     # Detach from file-backed data before caller removes the temp file.
     return pix.copy(), None
+
+
+__all__ = [
+    "ScreenRegionSelectorDialog",
+    "select_region_from_primary_screen",
+    "select_region_with_macos_screencapture",
+]

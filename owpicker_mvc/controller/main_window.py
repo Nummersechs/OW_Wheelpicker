@@ -31,14 +31,14 @@ from view.overlay import ResultOverlay
 from view.wheel_view import WheelView
 from view.spin_mode_toggle import SpinModeToggle
 from view.profile_dropdown import PlayerProfileDropdown
-from controller.map_mode import MapModeController
-from controller.open_queue import OpenQueueController
-from controller.player_list_panel import PlayerListPanelController
-from controller.role_mode import RoleModeController
-from controller.state_sync import StateSyncController
-from controller.tooltip_manager import TooltipManager
-from controller.focus_policy import FocusPolicyManager
-from controller.timer_registry import TimerRegistry
+from .map_mode import MapModeController
+from .open_queue import OpenQueueController
+from .player_list_panel import PlayerListPanelController
+from .role_mode import RoleModeController
+from .state_sync import StateSyncController
+from .tooltip_manager import TooltipManager
+from .focus_policy import FocusPolicyManager
+from .timer_registry import TimerRegistry
 from view import style_helpers
 
 

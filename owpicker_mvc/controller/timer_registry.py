@@ -25,7 +25,7 @@ class TimerRegistry:
             try:
                 if timer.isActive():
                     timer.stop()
-            except Exception:
+            except (AttributeError, RuntimeError):
                 pass
         self._timers.clear()
 
@@ -36,7 +36,7 @@ class TimerRegistry:
             try:
                 if timer.isActive():
                     active += 1
-            except Exception:
+            except (AttributeError, RuntimeError):
                 pass
         return {
             "registered": len(self._timers),

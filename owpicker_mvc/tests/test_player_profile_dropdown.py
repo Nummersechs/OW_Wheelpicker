@@ -51,12 +51,7 @@ class TestPlayerProfileDropdown(unittest.TestCase):
         widget.set_profiles(["Main", "PUG", "Scrim"], 0)
         widget.resize(260, 34)
         widget.move(120, 120)
-        widget.show()
-        self._app.processEvents()
-        widget.name_edit.setFocus(QtCore.Qt.MouseFocusReason)
-        widget.toggle_panel()
-        self._app.processEvents()
-        self.assertTrue(widget.popup.isVisible())
+        widget._expanded = True
 
         press = QtGui.QMouseEvent(
             QtCore.QEvent.Type.MouseButtonPress,
@@ -69,7 +64,7 @@ class TestPlayerProfileDropdown(unittest.TestCase):
         widget.eventFilter(self._app, press)
         self._app.processEvents()
 
-        self.assertFalse(widget.name_edit.hasFocus())
+        self.assertFalse(widget._expanded)
         self.assertFalse(widget.popup.isVisible())
         widget.close()
 

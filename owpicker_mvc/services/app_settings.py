@@ -10,15 +10,18 @@ class AppSettings:
 
     @classmethod
     def from_module(cls, module: Any) -> "AppSettings":
-        data: dict[str, Any] = {}
-        for key in dir(module):
-            if not key.isupper():
-                continue
-            try:
-                data[key] = getattr(module, key)
-            except Exception:
-                pass
-        return cls(values=data)
+        if module is None:
+            return cls(values={})
+        try:
+            source = vars(module)
+        except TypeError:
+            source = {}
+        data = {
+            key: value
+            for key, value in source.items()
+            if isinstance(key, str) and key.isupper()
+        }
+        return cls(values=dict(data))
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.values.get(key, default)
@@ -29,11 +32,11 @@ class AppSettings:
     def int(self, key: str, default: int = 0) -> int:
         try:
             return int(self.values.get(key, default))
-        except Exception:
+        except (TypeError, ValueError):
             return int(default)
 
     def float(self, key: str, default: float = 0.0) -> float:
         try:
             return float(self.values.get(key, default))
-        except Exception:
+        except (TypeError, ValueError):
             return float(default)
