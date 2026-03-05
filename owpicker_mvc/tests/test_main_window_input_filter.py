@@ -414,6 +414,77 @@ class TestMainWindowInputFilter(unittest.TestCase):
         self.assertGreaterEqual(delay_ms, 2000)
         self.assertTrue(any(name == "startup_warmup:cooldown" for name, _extra in traces))
 
+    def test_poll_startup_ocr_preload_extends_wait_while_thread_is_running(self):
+        class _RunningThread:
+            def isRunning(self) -> bool:
+                return True
+
+        mw = MainWindow.__new__(MainWindow)
+        mw._startup_waiting_for_ocr_preload = True
+        mw._startup_ocr_preload_deadline = time.monotonic() - 0.01
+        mw._startup_ocr_preload_started_at = time.monotonic() - 1.0
+        mw._startup_ocr_preload_running_wait_logged = False
+        mw._ocr_preload_done = False
+        mw._ocr_preload_attempted = False
+        mw._ocr_preload_job = {"thread": _RunningThread()}
+        mw._trace_event = lambda *_args, **_kwargs: None
+        done_calls: list[str] = []
+        mw._startup_task_done = lambda name=None: done_calls.append(str(name or ""))
+        mw._cfg = (
+            lambda key, default=None: (
+                220
+                if key == "POST_CHOICE_INIT_BUSY_RETRY_MS"
+                else 5000
+                if key == "STARTUP_OCR_PRELOAD_RUNNING_MAX_WAIT_MS"
+                else default
+            )
+        )
+
+        with patch("controller.main_window.QtCore.QTimer.singleShot") as single_shot:
+            mw._poll_startup_ocr_preload()
+
+        self.assertTrue(single_shot.called)
+        self.assertEqual(int(single_shot.call_args[0][0]), 220)
+        self.assertEqual(done_calls, [])
+        self.assertTrue(mw._startup_waiting_for_ocr_preload)
+        self.assertTrue(bool(getattr(mw, "_startup_ocr_preload_running_wait_logged", False)))
+
+    def test_poll_startup_ocr_preload_times_out_after_running_budget(self):
+        class _RunningThread:
+            def isRunning(self) -> bool:
+                return True
+
+        mw = MainWindow.__new__(MainWindow)
+        mw._startup_waiting_for_ocr_preload = True
+        mw._startup_ocr_preload_deadline = time.monotonic() - 0.01
+        mw._startup_ocr_preload_started_at = time.monotonic() - 6.0
+        mw._startup_ocr_preload_running_wait_logged = False
+        mw._ocr_preload_done = False
+        mw._ocr_preload_attempted = False
+        mw._ocr_preload_job = {"thread": _RunningThread()}
+        traces: list[tuple[str, dict]] = []
+        mw._trace_event = lambda name, **extra: traces.append((name, extra))
+        done_calls: list[str] = []
+        mw._startup_task_done = lambda name=None: done_calls.append(str(name or ""))
+        mw._cfg = (
+            lambda key, default=None: (
+                220
+                if key == "POST_CHOICE_INIT_BUSY_RETRY_MS"
+                else 5000
+                if key == "STARTUP_OCR_PRELOAD_RUNNING_MAX_WAIT_MS"
+                else default
+            )
+        )
+
+        with patch("controller.main_window.QtCore.QTimer.singleShot") as single_shot:
+            mw._poll_startup_ocr_preload()
+
+        single_shot.assert_not_called()
+        self.assertEqual(done_calls, ["ocr_preload"])
+        self.assertFalse(bool(getattr(mw, "_startup_waiting_for_ocr_preload", False)))
+        self.assertIsNone(getattr(mw, "_startup_ocr_preload_deadline", None))
+        self.assertTrue(any(name == "startup_warmup:ocr_preload_timeout" for name, _extra in traces))
+
     def test_finalize_startup_defers_visual_finalize(self):
         mw = MainWindow.__new__(MainWindow)
         mw._startup_finalize_done = False

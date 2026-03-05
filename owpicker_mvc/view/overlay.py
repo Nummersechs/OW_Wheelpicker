@@ -413,6 +413,22 @@ class ResultOverlay(QtWidgets.QWidget):
         """Aktiviert/Deaktiviert die Online/Offline-Buttons (z.B. während des Ladens)."""
         self.btn_online.setEnabled(enabled)
         self.btn_offline.setEnabled(enabled)
+        self._apply_choice_button_tooltips()
+
+    def _choice_buttons_loading(self) -> bool:
+        try:
+            return (not self.btn_online.isEnabled()) and (not self.btn_offline.isEnabled())
+        except Exception:
+            return False
+
+    def _apply_choice_button_tooltips(self) -> None:
+        if self._choice_buttons_loading():
+            loading_tip = i18n.t("overlay.choice_loading_tooltip")
+            self.btn_online.setToolTip(loading_tip)
+            self.btn_offline.setToolTip(loading_tip)
+            return
+        self.btn_online.setToolTip(i18n.t("overlay.button_online_tooltip"))
+        self.btn_offline.setToolTip(i18n.t("overlay.button_offline_tooltip"))
 
     def _choose_online(self):
         self.hide()
@@ -545,9 +561,8 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_disable.setText(i18n.t("overlay.button_disable_results"))
         self.btn_disable.setToolTip(i18n.t("overlay.button_disable_results_tooltip"))
         self.btn_online.setText(i18n.t("overlay.button_online"))
-        self.btn_online.setToolTip(i18n.t("overlay.button_online_tooltip"))
         self.btn_offline.setText(i18n.t("overlay.button_offline"))
-        self.btn_offline.setToolTip(i18n.t("overlay.button_offline_tooltip"))
+        self._apply_choice_button_tooltips()
         self.btn_delete_cancel.setText(i18n.t("names.delete_confirm_cancel"))
         self.btn_delete_cancel.setToolTip(i18n.t("names.delete_confirm_cancel_tooltip"))
         self.btn_delete_confirm.setText(i18n.t("names.delete_confirm_delete"))

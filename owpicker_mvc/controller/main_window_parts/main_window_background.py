@@ -68,7 +68,8 @@ class MainWindowBackgroundMixin:
                 self._cancel_ocr_background_preload()
             except Exception:
                 pass
-        if hasattr(self, "_stop_ocr_background_preload_job"):
+        cancel_running = bool(self._cfg("OCR_PRELOAD_CANCEL_RUNNING_ON_SPIN", False))
+        if cancel_running and hasattr(self, "_stop_ocr_background_preload_job"):
             try:
                 self._stop_ocr_background_preload_job(reason="background_pause")
             except Exception:

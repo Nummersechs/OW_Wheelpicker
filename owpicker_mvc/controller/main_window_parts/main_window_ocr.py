@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import deque
 from difflib import SequenceMatcher
 import time
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 import i18n
 from logic.name_normalization import normalize_name_alnum_key
@@ -292,7 +292,7 @@ class MainWindowOCRMixin:
             return
         text_key, tooltip_key, padding = self._ocr_role_button_meta(key)
         btn.setText(i18n.t(text_key))
-        btn.setToolTip(i18n.t(tooltip_key))
+        self._set_ocr_button_tooltip(btn, self._ocr_button_tooltip_text(tooltip_key))
         ui_helpers.set_fixed_width_from_translations([btn], [text_key], padding=max(0, int(padding)))
 
     def _refresh_all_role_ocr_button_texts(self) -> None:
@@ -314,23 +314,85 @@ class MainWindowOCRMixin:
             return bool(role_keys) and all(self._target_wheel_for_ocr_role(k) is not None for k in role_keys)
         return self._target_wheel_for_ocr_role(key) is not None
 
-    def _update_role_ocr_button_enabled(self, role_key: str) -> None:
-        btn = self._role_ocr_buttons.get(str(role_key or "").strip().casefold())
+    def _ocr_preload_ui_block_active(self) -> bool:
+        if not self._ocr_background_preload_enabled():
+            return False
+        if bool(getattr(self, "_ocr_runtime_activated", False)):
+            return False
+        if bool(getattr(self, "_ocr_preload_done", False)):
+            return False
+        return not bool(getattr(self, "_ocr_preload_attempted", False))
+
+    def _ocr_button_tooltip_text(self, default_tooltip_key: str) -> str:
+        key = str(default_tooltip_key or "").strip() or "ocr.dps_button_tooltip"
+        if self._ocr_preload_ui_block_active():
+            return i18n.t("ocr.loading_tooltip")
+        return i18n.t(key)
+
+    def _refresh_live_tooltip_for_widget(self, widget: QtWidgets.QWidget, text: str) -> None:
+        if widget is None:
+            return
+        try:
+            if not QtWidgets.QToolTip.isVisible():
+                return
+        except Exception:
+            return
+        try:
+            global_pos = QtGui.QCursor.pos()
+        except Exception:
+            return
+        try:
+            local_pos = widget.mapFromGlobal(global_pos)
+            if not widget.rect().contains(local_pos):
+                return
+        except Exception:
+            try:
+                if not bool(widget.underMouse()):
+                    return
+            except Exception:
+                return
+        try:
+            QtWidgets.QToolTip.showText(global_pos, str(text or ""), widget, widget.rect())
+        except Exception:
+            pass
+
+    def _set_ocr_button_tooltip(self, btn: QtWidgets.QWidget, text: str) -> None:
         if btn is None:
             return
+        value = str(text or "")
+        btn.setToolTip(value)
+        self._refresh_live_tooltip_for_widget(btn, value)
+
+    def _update_role_ocr_button_enabled(self, role_key: str) -> None:
+        key = str(role_key or "").strip().casefold()
+        btn = self._role_ocr_buttons.get(key)
+        if btn is None:
+            return
+        _, tooltip_key, _ = self._ocr_role_button_meta(key)
         enabled = self._role_ocr_import_available(role_key)
         if self._overlay_choice_active():
             enabled = False
+        waiting_preload = self._ocr_preload_ui_block_active()
+        if waiting_preload:
+            enabled = False
         btn.setEnabled(enabled)
+        self._set_ocr_button_tooltip(btn, self._ocr_button_tooltip_text(tooltip_key))
 
     def _update_role_ocr_buttons_enabled(self) -> None:
+        waiting_preload = self._ocr_preload_ui_block_active()
         for role_key in tuple(self._role_ocr_buttons.keys()):
             self._update_role_ocr_button_enabled(role_key)
         if hasattr(self, "btn_open_q_ocr"):
             enabled = self._role_ocr_import_available("all")
             if self._overlay_choice_active():
                 enabled = False
+            if waiting_preload:
+                enabled = False
             self.btn_open_q_ocr.setEnabled(enabled)
+            self._set_ocr_button_tooltip(
+                self.btn_open_q_ocr,
+                self._ocr_button_tooltip_text("ocr.open_q_button_tooltip"),
+            )
 
     def _ocr_runtime_sleep_until_used(self) -> bool:
         return bool(self._cfg("OCR_RUNTIME_SLEEP_UNTIL_USED", True))
@@ -339,6 +401,11 @@ class MainWindowOCRMixin:
         self._ocr_runtime_activated = True
         self._ocr_preload_done = True
         self._ocr_preload_attempted = True
+        if hasattr(self, "_update_role_ocr_buttons_enabled"):
+            try:
+                self._update_role_ocr_buttons_enabled()
+            except Exception:
+                pass
         if hasattr(self, "_cancel_ocr_background_preload"):
             try:
                 self._cancel_ocr_background_preload()
@@ -383,7 +450,12 @@ class MainWindowOCRMixin:
         except Exception:
             pass
 
-    def _stop_ocr_background_preload_job(self, *, reason: str = "") -> None:
+    def _stop_ocr_background_preload_job(
+        self,
+        *,
+        reason: str = "",
+        wait_ms: int = 0,
+    ) -> None:
         job = getattr(self, "_ocr_preload_job", None)
         if not isinstance(job, dict):
             self._ocr_preload_job = None
@@ -404,13 +476,23 @@ class MainWindowOCRMixin:
                 thread.quit()
             except Exception:
                 pass
-        self._ocr_preload_job = None
+        waited = False
+        if was_running and int(wait_ms) > 0 and thread is not None:
+            try:
+                waited = bool(thread.wait(int(wait_ms)))
+            except Exception:
+                waited = False
+        keep_job = bool(was_running and not waited)
+        if not keep_job:
+            self._ocr_preload_job = None
         if hasattr(self, "_trace_event"):
             try:
                 self._trace_event(
                     "ocr_preload_cancelled",
                     reason=str(reason or "unspecified"),
                     was_running=bool(was_running),
+                    waited=bool(waited),
+                    keep_job=bool(keep_job),
                 )
             except Exception:
                 pass
@@ -538,6 +620,11 @@ class MainWindowOCRMixin:
                 self._ocr_preload_done = True
                 self._ocr_runtime_activated = True
                 self._schedule_ocr_runtime_cache_release()
+            if hasattr(self, "_update_role_ocr_buttons_enabled"):
+                try:
+                    self._update_role_ocr_buttons_enabled()
+                except Exception:
+                    pass
             if hasattr(self, "_trace_event"):
                 try:
                     self._trace_event(
@@ -551,11 +638,23 @@ class MainWindowOCRMixin:
         worker.finished.connect(relay.forward_done, QtCore.Qt.QueuedConnection)
         relay.done.connect(_finalize_preload)
         worker.finished.connect(thread.quit)
+        def _cleanup_cancelled_preload() -> None:
+            current = getattr(self, "_ocr_preload_job", None)
+            if current is job:
+                self._ocr_preload_job = None
+                if hasattr(self, "_trace_event"):
+                    try:
+                        self._trace_event("ocr_preload_thread_finished")
+                    except Exception:
+                        pass
+        thread.finished.connect(_cleanup_cancelled_preload)
         thread.started.connect(worker.run)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
+        startup_warmup = bool(getattr(self, "_startup_warmup_running", False))
+        desired_priority = QtCore.QThread.NormalPriority if startup_warmup else QtCore.QThread.LowPriority
         try:
-            thread.start(QtCore.QThread.LowPriority)
+            thread.start(desired_priority)
         except Exception:
             thread.start()
 

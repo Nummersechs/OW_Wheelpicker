@@ -190,6 +190,8 @@ class MainWindow(
         self._startup_map_prebuild_deadline: float | None = None
         self._startup_waiting_for_ocr_preload = False
         self._startup_ocr_preload_deadline: float | None = None
+        self._startup_ocr_preload_started_at: float | None = None
+        self._startup_ocr_preload_running_wait_logged = False
         self._blocked_input_total = 0
         self._blocked_input_counts: dict[int, int] = {}
         self._blocked_input_first_t: float | None = None

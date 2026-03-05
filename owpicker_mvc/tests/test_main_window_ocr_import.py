@@ -1,6 +1,8 @@
 import unittest
 import time
+from unittest.mock import patch
 
+import i18n
 from controller.main_window import MainWindow
 from controller.ocr.ocr_role_import import PendingOCRImport
 
@@ -58,6 +60,33 @@ class _FakeStateSync:
 
     def save_state(self, *args, **kwargs):
         self.save_calls += 1
+
+
+class _FakeButton:
+    def __init__(self) -> None:
+        self.enabled = True
+        self.tooltip = ""
+        self.text = ""
+
+    def setEnabled(self, value: bool) -> None:
+        self.enabled = bool(value)
+
+    def setToolTip(self, value: str) -> None:
+        self.tooltip = str(value or "")
+
+    def setText(self, value: str) -> None:
+        self.text = str(value or "")
+
+    def mapFromGlobal(self, value):
+        return value
+
+    def rect(self):
+        class _Rect:
+            @staticmethod
+            def contains(_value) -> bool:
+                return True
+
+        return _Rect()
 
 
 class TestMainWindowOCRImport(unittest.TestCase):
@@ -365,7 +394,7 @@ class TestMainWindowOCRImport(unittest.TestCase):
         self.assertTrue(mw._ocr_preload_attempted)
         self.assertEqual(cancel_calls["count"], 1)
 
-    def test_stop_ocr_background_preload_job_clears_running_thread(self):
+    def test_stop_ocr_background_preload_job_keeps_running_thread_reference_without_wait(self):
         class _FakeThread:
             def __init__(self) -> None:
                 self.interrupt_calls = 0
@@ -388,10 +417,41 @@ class TestMainWindowOCRImport(unittest.TestCase):
 
         MainWindow._stop_ocr_background_preload_job(mw, reason="unit")
 
-        self.assertIsNone(mw._ocr_preload_job)
+        self.assertIsNotNone(mw._ocr_preload_job)
         self.assertEqual(thread.interrupt_calls, 1)
         self.assertEqual(thread.quit_calls, 1)
         self.assertTrue(any(name == "ocr_preload_cancelled" for name, _ in traces))
+
+    def test_stop_ocr_background_preload_job_clears_when_wait_succeeds(self):
+        class _FakeThread:
+            def __init__(self) -> None:
+                self.interrupt_calls = 0
+                self.quit_calls = 0
+                self.wait_calls = 0
+
+            def isRunning(self) -> bool:
+                return True
+
+            def requestInterruption(self) -> None:
+                self.interrupt_calls += 1
+
+            def quit(self) -> None:
+                self.quit_calls += 1
+
+            def wait(self, _timeout_ms: int) -> bool:
+                self.wait_calls += 1
+                return True
+
+        mw = self._make_window()
+        thread = _FakeThread()
+        mw._ocr_preload_job = {"thread": thread}
+
+        MainWindow._stop_ocr_background_preload_job(mw, reason="unit", wait_ms=200)
+
+        self.assertIsNone(mw._ocr_preload_job)
+        self.assertEqual(thread.interrupt_calls, 1)
+        self.assertEqual(thread.quit_calls, 1)
+        self.assertEqual(thread.wait_calls, 1)
 
     def test_ocr_background_preload_block_reason_uses_startup_cooldown(self):
         mw = self._make_window()
@@ -407,18 +467,119 @@ class TestMainWindowOCRImport(unittest.TestCase):
 
         self.assertEqual(reason, "startup_cooldown")
 
-    def test_prepare_spin_request_stops_ocr_preload_job_early(self):
+    def test_update_role_ocr_buttons_disabled_while_preload_pending(self):
+        mw = self._make_window()
+        mw._role_ocr_buttons = {
+            "tank": _FakeButton(),
+            "dps": _FakeButton(),
+            "support": _FakeButton(),
+        }
+        mw.btn_open_q_ocr = _FakeButton()
+        mw._overlay_choice_active = lambda: False
+        mw._closing = False
+        mw.pending = 0
+        mw.current_mode = "players"
+        mw.hero_ban_active = False
+        mw._ocr_runtime_activated = False
+        mw._ocr_preload_done = False
+        mw._ocr_preload_attempted = False
+        mw._cfg = lambda key, default=None: True if key == "OCR_BACKGROUND_PRELOAD_ENABLED" else default
+
+        MainWindow._update_role_ocr_buttons_enabled(mw)
+
+        self.assertFalse(mw._role_ocr_buttons["tank"].enabled)
+        self.assertFalse(mw._role_ocr_buttons["dps"].enabled)
+        self.assertFalse(mw._role_ocr_buttons["support"].enabled)
+        self.assertFalse(mw.btn_open_q_ocr.enabled)
+        self.assertEqual(mw._role_ocr_buttons["tank"].tooltip, i18n.t("ocr.loading_tooltip"))
+        self.assertEqual(mw.btn_open_q_ocr.tooltip, i18n.t("ocr.loading_tooltip"))
+
+    def test_refresh_role_ocr_button_text_keeps_loading_tooltip_while_preload_pending(self):
+        mw = self._make_window()
+        mw._role_ocr_buttons = {
+            "tank": _FakeButton(),
+        }
+        mw._ocr_runtime_activated = False
+        mw._ocr_preload_done = False
+        mw._ocr_preload_attempted = False
+        mw._cfg = lambda key, default=None: True if key == "OCR_BACKGROUND_PRELOAD_ENABLED" else default
+
+        with patch("controller.main_window_parts.main_window_ocr.ui_helpers.set_fixed_width_from_translations"):
+            MainWindow._refresh_role_ocr_button_text(mw, "tank")
+
+        self.assertEqual(mw._role_ocr_buttons["tank"].tooltip, i18n.t("ocr.loading_tooltip"))
+
+    def test_set_ocr_button_tooltip_refreshes_live_tooltip_when_visible(self):
+        mw = self._make_window()
+        btn = _FakeButton()
+
+        with patch("controller.main_window_parts.main_window_ocr.QtWidgets.QToolTip.isVisible", return_value=True):
+            with patch("controller.main_window_parts.main_window_ocr.QtGui.QCursor.pos", return_value=(10, 10)):
+                with patch("controller.main_window_parts.main_window_ocr.QtWidgets.QToolTip.showText") as show_text:
+                    MainWindow._set_ocr_button_tooltip(mw, btn, "LIVE")
+
+        self.assertEqual(btn.tooltip, "LIVE")
+        show_text.assert_called_once()
+
+    def test_update_role_ocr_buttons_enabled_after_preload_done(self):
+        mw = self._make_window()
+        mw._role_ocr_buttons = {
+            "tank": _FakeButton(),
+            "dps": _FakeButton(),
+            "support": _FakeButton(),
+        }
+        mw.btn_open_q_ocr = _FakeButton()
+        mw._overlay_choice_active = lambda: False
+        mw._closing = False
+        mw.pending = 0
+        mw.current_mode = "players"
+        mw.hero_ban_active = False
+        mw._ocr_runtime_activated = True
+        mw._ocr_preload_done = True
+        mw._ocr_preload_attempted = True
+        mw._cfg = lambda key, default=None: True if key == "OCR_BACKGROUND_PRELOAD_ENABLED" else default
+
+        MainWindow._update_role_ocr_buttons_enabled(mw)
+
+        self.assertTrue(mw._role_ocr_buttons["tank"].enabled)
+        self.assertTrue(mw._role_ocr_buttons["dps"].enabled)
+        self.assertTrue(mw._role_ocr_buttons["support"].enabled)
+        self.assertTrue(mw.btn_open_q_ocr.enabled)
+        self.assertEqual(mw.btn_open_q_ocr.tooltip, i18n.t("ocr.open_q_button_tooltip"))
+
+    def test_prepare_spin_request_keeps_running_ocr_preload_by_default(self):
         mw = self._make_window()
         mw._post_choice_init_done = True
         mw._restoring_state = False
         mw._recover_stale_pending_if_idle = lambda source: None
-        calls: list[str] = []
-        mw._stop_ocr_background_preload_job = lambda *, reason="": calls.append(str(reason))
+        cancel_calls = {"count": 0}
+        stop_calls: list[str] = []
+        mw._cancel_ocr_background_preload = lambda: cancel_calls.__setitem__("count", cancel_calls["count"] + 1)
+        mw._stop_ocr_background_preload_job = lambda *, reason="": stop_calls.append(str(reason))
+        mw.settings["OCR_PRELOAD_CANCEL_RUNNING_ON_SPIN"] = False
 
         ok = MainWindow._prepare_spin_request(mw, "spin_all")
 
         self.assertTrue(ok)
-        self.assertEqual(calls, ["spin_all_request"])
+        self.assertEqual(cancel_calls["count"], 1)
+        self.assertEqual(stop_calls, [])
+
+    def test_prepare_spin_request_can_stop_running_ocr_preload_when_configured(self):
+        mw = self._make_window()
+        mw._post_choice_init_done = True
+        mw._restoring_state = False
+        mw._recover_stale_pending_if_idle = lambda source: None
+        cancel_calls = {"count": 0}
+        stop_calls: list[str] = []
+        mw._cancel_ocr_background_preload = lambda: cancel_calls.__setitem__("count", cancel_calls["count"] + 1)
+        mw._stop_ocr_background_preload_job = lambda *, reason="": stop_calls.append(str(reason))
+        mw.settings["OCR_PRELOAD_CANCEL_RUNNING_ON_SPIN"] = True
+
+        ok = MainWindow._prepare_spin_request(mw, "spin_all")
+
+        self.assertTrue(ok)
+        self.assertEqual(cancel_calls["count"], 1)
+        self.assertEqual(stop_calls, ["spin_all_request"])
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 from PySide6 import QtCore, QtGui
 
@@ -10,6 +11,72 @@ from .. import shutdown_manager
 
 
 class MainWindowShutdownMixin:
+    def _defer_close_for_running_thread(self, event: QtGui.QCloseEvent, *, reason: str) -> None:
+        retry_ms = max(50, int(self._cfg("SHUTDOWN_THREAD_RETRY_MS", 180)))
+        now = time.monotonic()
+        wait_started = getattr(self, "_close_thread_wait_started_at", None)
+        if wait_started is None:
+            self._close_thread_wait_started_at = now
+            elapsed_ms = 0
+        else:
+            elapsed_ms = max(0, int((now - float(wait_started)) * 1000.0))
+        if hasattr(self, "_trace_event"):
+            try:
+                self._trace_event(
+                    "shutdown_deferred_for_thread",
+                    reason=str(reason or "thread_running"),
+                    retry_ms=retry_ms,
+                    elapsed_ms=elapsed_ms,
+                )
+            except Exception:
+                pass
+        event.ignore()
+        QtCore.QTimer.singleShot(retry_ms, self.close)
+
+    def _stop_qthread_for_close(
+        self,
+        thread: object | None,
+        *,
+        graceful_wait_ms: int,
+        terminate_wait_ms: int,
+    ) -> bool:
+        if thread is None:
+            return True
+        try:
+            running = bool(thread.isRunning())
+        except Exception:
+            running = False
+        if not running:
+            return True
+        try:
+            thread.requestInterruption()
+        except Exception:
+            pass
+        try:
+            thread.quit()
+        except Exception:
+            pass
+        stopped = False
+        try:
+            stopped = bool(thread.wait(int(max(0, graceful_wait_ms))))
+        except Exception:
+            stopped = False
+        if not stopped:
+            try:
+                thread.terminate()
+            except Exception:
+                pass
+            try:
+                stopped = bool(thread.wait(int(max(0, terminate_wait_ms))))
+            except Exception:
+                stopped = False
+        if stopped:
+            return True
+        try:
+            return not bool(thread.isRunning())
+        except Exception:
+            return False
+
     def _merge_shutdown_snapshot(self, prefix: str, payload: dict | None, target: dict) -> None:
         shutdown_manager.merge_shutdown_snapshot(prefix, payload, target)
 
@@ -97,23 +164,18 @@ class MainWindowShutdownMixin:
                 except Exception:
                     pass
             thread = job.get("thread")
-            try:
-                if thread is not None and thread.isRunning():
-                    thread.quit()
-                    thread.wait(300)
-            except Exception:
-                pass
+            if not self._stop_qthread_for_close(thread, graceful_wait_ms=300, terminate_wait_ms=500):
+                self._defer_close_for_running_thread(event, reason="ocr_async_thread")
+                return
             self._ocr_async_job = None
         preload_job = getattr(self, "_ocr_preload_job", None)
         if isinstance(preload_job, dict):
             preload_thread = preload_job.get("thread")
-            try:
-                if preload_thread is not None and preload_thread.isRunning():
-                    preload_thread.quit()
-                    preload_thread.wait(300)
-            except Exception:
-                pass
+            if not self._stop_qthread_for_close(preload_thread, graceful_wait_ms=2500, terminate_wait_ms=800):
+                self._defer_close_for_running_thread(event, reason="ocr_preload_thread")
+                return
             self._ocr_preload_job = None
+        self._close_thread_wait_started_at = None
         if hasattr(self, "_cancel_ocr_background_preload"):
             try:
                 self._cancel_ocr_background_preload()

@@ -398,11 +398,18 @@ class MainWindowSpinMixin:
 
     def _prepare_spin_request(self, source: str) -> bool:
         self._recover_stale_pending_if_idle(source=source)
-        if hasattr(self, "_stop_ocr_background_preload_job"):
+        # Keep already-running preload by default; only stop pending timer here.
+        if hasattr(self, "_cancel_ocr_background_preload"):
             try:
-                self._stop_ocr_background_preload_job(reason=f"{source}_request")
+                self._cancel_ocr_background_preload()
             except Exception:
                 pass
+        if bool(self._cfg("OCR_PRELOAD_CANCEL_RUNNING_ON_SPIN", False)):
+            if hasattr(self, "_stop_ocr_background_preload_job"):
+                try:
+                    self._stop_ocr_background_preload_job(reason=f"{source}_request")
+                except Exception:
+                    pass
         if not bool(getattr(self, "_post_choice_init_done", True)):
             # Keep the spin click-path minimal. Deferred startup/UI tasks are
             # scheduled asynchronously and never forced inline here.

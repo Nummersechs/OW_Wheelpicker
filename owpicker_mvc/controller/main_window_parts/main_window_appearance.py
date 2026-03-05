@@ -278,6 +278,11 @@ class MainWindowAppearanceMixin:
             self.btn_open_q_ocr.setToolTip(i18n.t("ocr.open_q_button_tooltip"))
             ui_helpers.set_fixed_width_from_translations([self.btn_open_q_ocr], ["ocr.open_q_button"], padding=40)
         self._refresh_all_role_ocr_button_texts()
+        if hasattr(self, "_update_role_ocr_buttons_enabled"):
+            try:
+                self._update_role_ocr_buttons_enabled()
+            except Exception:
+                pass
         if hasattr(self, "player_list_panel"):
             self.player_list_panel.set_language(self.language)
         self._update_title()

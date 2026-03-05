@@ -216,6 +216,8 @@ class MainWindowStartupMixin:
         self._startup_map_prebuild_deadline = None
         self._startup_waiting_for_ocr_preload = False
         self._startup_ocr_preload_deadline = None
+        self._startup_ocr_preload_started_at = None
+        self._startup_ocr_preload_running_wait_logged = False
         # Heavy UI updates were deferred; apply once warmup is done.
         self._flush_pending_heavy_ui_updates(step_ms=int(self._post_choice_step_ms))
         self._sync_mode_stack()
@@ -286,6 +288,8 @@ class MainWindowStartupMixin:
             self._startup_task_done("ocr_preload")
             return
         self._startup_waiting_for_ocr_preload = True
+        self._startup_ocr_preload_running_wait_logged = False
+        self._startup_ocr_preload_started_at = None
         max_wait_ms = max(250, int(self._cfg("STARTUP_OCR_PRELOAD_MAX_WAIT_MS", 1800)))
         self._startup_ocr_preload_deadline = time.monotonic() + (max_wait_ms / 1000.0)
         try:
@@ -293,9 +297,24 @@ class MainWindowStartupMixin:
         except Exception:
             self._startup_waiting_for_ocr_preload = False
             self._startup_ocr_preload_deadline = None
+            self._startup_ocr_preload_started_at = None
             self._startup_task_done("ocr_preload")
             return
+        if self._startup_ocr_preload_thread_running():
+            self._startup_ocr_preload_started_at = time.monotonic()
         self._poll_startup_ocr_preload()
+
+    def _startup_ocr_preload_thread_running(self) -> bool:
+        preload_job = getattr(self, "_ocr_preload_job", None)
+        if not isinstance(preload_job, dict):
+            return False
+        preload_thread = preload_job.get("thread")
+        if preload_thread is None:
+            return False
+        try:
+            return bool(preload_thread.isRunning())
+        except Exception:
+            return False
 
     def _poll_startup_ocr_preload(self) -> None:
         if not bool(getattr(self, "_startup_waiting_for_ocr_preload", False)):
@@ -303,16 +322,42 @@ class MainWindowStartupMixin:
         if bool(getattr(self, "_ocr_preload_done", False)) or bool(getattr(self, "_ocr_preload_attempted", False)):
             self._startup_waiting_for_ocr_preload = False
             self._startup_ocr_preload_deadline = None
-            self._startup_task_done("ocr_preload")
-            return
-        deadline = getattr(self, "_startup_ocr_preload_deadline", None)
-        if deadline is not None and time.monotonic() >= float(deadline):
-            self._startup_waiting_for_ocr_preload = False
-            self._startup_ocr_preload_deadline = None
-            self._trace_event("startup_warmup:ocr_preload_timeout")
+            self._startup_ocr_preload_started_at = None
             self._startup_task_done("ocr_preload")
             return
         wait_ms = max(40, int(self._cfg("POST_CHOICE_INIT_BUSY_RETRY_MS", 220)))
+        deadline = getattr(self, "_startup_ocr_preload_deadline", None)
+        if deadline is not None and time.monotonic() >= float(deadline):
+            now = time.monotonic()
+            if self._startup_ocr_preload_thread_running():
+                started_at = getattr(self, "_startup_ocr_preload_started_at", None)
+                if started_at is None:
+                    started_at = now
+                    self._startup_ocr_preload_started_at = started_at
+                running_max_wait_ms = max(
+                    int(self._cfg("STARTUP_OCR_PRELOAD_MAX_WAIT_MS", 1800)),
+                    int(self._cfg("STARTUP_OCR_PRELOAD_RUNNING_MAX_WAIT_MS", 14000)),
+                )
+                running_elapsed_ms = max(0, int((now - float(started_at)) * 1000.0))
+                running_remaining_ms = max(0, int(running_max_wait_ms - running_elapsed_ms))
+                if running_remaining_ms > 0:
+                    wait_running_ms = max(40, min(wait_ms, running_remaining_ms))
+                    self._startup_ocr_preload_deadline = now + (wait_running_ms / 1000.0)
+                    if not bool(getattr(self, "_startup_ocr_preload_running_wait_logged", False)):
+                        self._startup_ocr_preload_running_wait_logged = True
+                        self._trace_event(
+                            "startup_warmup:ocr_preload_wait_running",
+                            elapsed_ms=running_elapsed_ms,
+                            max_wait_ms=running_max_wait_ms,
+                        )
+                    QtCore.QTimer.singleShot(wait_running_ms, self._poll_startup_ocr_preload)
+                    return
+            self._startup_waiting_for_ocr_preload = False
+            self._startup_ocr_preload_deadline = None
+            self._startup_ocr_preload_started_at = None
+            self._trace_event("startup_warmup:ocr_preload_timeout")
+            self._startup_task_done("ocr_preload")
+            return
         preload_job = getattr(self, "_ocr_preload_job", None)
         preload_timer = getattr(self, "_ocr_preload_timer", None)
         timer_active = False
@@ -326,9 +371,14 @@ class MainWindowStartupMixin:
             if callable(run_preload):
                 try:
                     run_preload()
+                    if self._startup_ocr_preload_thread_running() and getattr(
+                        self, "_startup_ocr_preload_started_at", None
+                    ) is None:
+                        self._startup_ocr_preload_started_at = time.monotonic()
                 except Exception:
                     self._startup_waiting_for_ocr_preload = False
                     self._startup_ocr_preload_deadline = None
+                    self._startup_ocr_preload_started_at = None
                     self._startup_task_done("ocr_preload")
                     return
         QtCore.QTimer.singleShot(wait_ms, self._poll_startup_ocr_preload)

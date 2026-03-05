@@ -97,10 +97,14 @@ MAP_PREBUILD_ON_START = True
 SOUND_WARMUP_ON_START = True
 # Warm wheel caches during startup warmup so first spin starts immediately.
 STARTUP_WHEEL_CACHE_WARMUP = True
-# Run OCR preload during startup warmup when enabled.
-STARTUP_OCR_PRELOAD = True
+# Keep OCR preload out of the main startup warmup so Online/Offline choice
+# becomes clickable faster. OCR preload still runs in its own background path.
+STARTUP_OCR_PRELOAD = False
 # Do not block mode-choice forever if OCR preload stalls.
 STARTUP_OCR_PRELOAD_MAX_WAIT_MS = 1800
+# If OCR preload has already started in a worker thread, allow extra warmup
+# wait so startup warmup does not finish while preload is still in progress.
+STARTUP_OCR_PRELOAD_RUNNING_MAX_WAIT_MS = 14000
 # Do not block mode-choice forever if map prebuild stalls.
 STARTUP_MAP_PREBUILD_MAX_WAIT_MS = 2200
 # Tooltip cache refresh remains asynchronous (post-choice/post-init) and is
@@ -150,6 +154,10 @@ OCR_BACKGROUND_PRELOAD_MIN_UPTIME_MS = 8000
 OCR_BACKGROUND_PRELOAD_ALLOW_DURING_STARTUP = True
 # If startup/spin is still busy when preload is due, retry later.
 OCR_BACKGROUND_PRELOAD_BUSY_RETRY_MS = 1800
+# Keep an already running preload thread alive during spin/background pause by
+# default. This improves preload reliability and avoids repeated cold starts.
+# Enable only if spin smoothness on very weak systems is more important.
+OCR_PRELOAD_CANCEL_RUNNING_ON_SPIN = False
 # Release cached OCR runtimes after idle (0 disables automatic release).
 # Lower value = faster sleep when OCR is not used.
 OCR_IDLE_CACHE_RELEASE_MS = 30000
