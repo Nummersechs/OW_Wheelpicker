@@ -179,6 +179,11 @@ class TestOCRCaptureOps(unittest.TestCase):
             "row_pass_min_candidates": 5,
         }
 
+    def test_runtime_cfg_enables_single_name_per_row_by_default(self):
+        mw = _DummyMainWindow({})
+        cfg = ocr_capture_ops._ocr_runtime_cfg_snapshot(mw)
+        self.assertTrue(bool(cfg.get("row_pass_single_name_per_row")))
+
     def test_select_row_names_from_ranked_votes_single_when_best_vote_low(self):
         cfg = {}
         ranked = [
@@ -194,6 +199,7 @@ class TestOCRCaptureOps(unittest.TestCase):
 
     def test_select_row_names_from_ranked_votes_allows_multiline_candidates(self):
         cfg = {
+            "row_pass_single_name_per_row": False,
             "row_pass_multiline_min_vote_count": 2,
             "row_pass_max_names_per_row": 5,
             "row_pass_multiline_min_avg_conf": 30.0,
@@ -214,6 +220,359 @@ class TestOCRCaptureOps(unittest.TestCase):
             ["Mogojyan The Lacie Lover", "Rontarou", "The Bookseller"],
         )
 
+    def test_select_row_names_from_ranked_votes_single_name_per_row_when_enabled(self):
+        cfg = {"row_pass_single_name_per_row": True}
+        ranked = [
+            {"display": "Mogojyan The Lacie Lover", "count": 2, "conf_sum": 170.0, "conf_weight": 2.0},
+            {"display": "Rontarou", "count": 2, "conf_sum": 168.0, "conf_weight": 2.0},
+            {"display": "The Bookseller", "count": 2, "conf_sum": 160.0, "conf_weight": 2.0},
+        ]
+        result = ocr_capture_ops._select_row_names_from_ranked_votes(
+            ranked,
+            cfg=cfg,
+            best_vote_count=2,
+        )
+        self.assertEqual(result, ["Mogojyan The Lacie Lover"])
+
+    def test_candidate_stats_counts_only_one_candidate_per_line(self):
+        class _ParseCtx:
+            @staticmethod
+            def extract_line_candidates(line_text):
+                text = str(line_text or "").strip()
+                if text == "Player Player2":
+                    return ["Player", "Player2"]
+                return [text] if text else []
+
+        stats = ocr_capture_ops._candidate_stats_from_runs(
+            [
+                {
+                    "lines": [
+                        {"text": "Player Player2", "conf": 80.0},
+                    ]
+                }
+            ],
+            _ParseCtx(),
+        )
+        self.assertEqual(len(stats), 1)
+        self.assertTrue("player" in stats or "player2" in stats)
+
+    def test_candidate_stats_prefers_stronger_line_candidate_over_short_noise(self):
+        class _ParseCtx:
+            @staticmethod
+            def extract_line_candidates(_line_text):
+                return ["TK", "The Bookseller"]
+
+        stats = ocr_capture_ops._candidate_stats_from_runs(
+            [
+                {
+                    "lines": [
+                        {"text": "dummy", "conf": 80.0},
+                    ]
+                }
+            ],
+            _ParseCtx(),
+        )
+        self.assertEqual(len(stats), 1)
+        self.assertIn("thebookseller", stats)
+        self.assertNotIn("tk", stats)
+
+    def test_candidate_stats_uses_alternate_candidate_when_primary_already_seen(self):
+        class _ParseCtx:
+            @staticmethod
+            def extract_line_candidates(line_text):
+                text = str(line_text or "").strip()
+                if text == "line1":
+                    return ["Aero", "AJAR"]
+                if text == "line2":
+                    return ["Aero", "Massith"]
+                return []
+
+        stats = ocr_capture_ops._candidate_stats_from_runs(
+            [
+                {
+                    "lines": [
+                        {"text": "line1", "conf": 80.0},
+                        {"text": "line2", "conf": 79.0},
+                    ]
+                }
+            ],
+            _ParseCtx(),
+        )
+        self.assertEqual(len(stats), 2)
+        self.assertIn("aero", stats)
+        self.assertIn("massith", stats)
+
+    def test_candidate_stats_trace_entries_include_drop_and_selection(self):
+        class _ParseCtx:
+            @staticmethod
+            def extract_line_candidates(line_text):
+                text = str(line_text or "").strip()
+                if text == "line1":
+                    return ["Aero", "AJAR"]
+                if text == "line2":
+                    return ["Aero", "Massith"]
+                return []
+
+            @staticmethod
+            def extract_debug_for_text(line_text):
+                text = str(line_text or "").strip()
+                if text == "line3":
+                    return [], [{"status": "dropped", "reason": "failed-name-heuristics", "cleaned": text}]
+                return [], [{"status": "accepted", "reason": "-", "cleaned": text}]
+
+        trace: list[dict] = []
+        _stats = ocr_capture_ops._candidate_stats_from_runs(
+            [
+                {
+                    "pass": "primary",
+                    "image": "tmp.png",
+                    "lines": [
+                        {"text": "line1", "conf": 80.0},
+                        {"text": "line2", "conf": 79.0},
+                        {"text": "line3", "conf": 20.0},
+                    ],
+                }
+            ],
+            _ParseCtx(),
+            trace_entries=trace,
+            include_debug_meta=True,
+        )
+        self.assertEqual(len(trace), 3)
+        self.assertEqual(trace[0].get("selection_reason"), "best")
+        self.assertEqual(trace[1].get("selection_reason"), "alternate-after-duplicate")
+        self.assertEqual(trace[2].get("drop_reason"), "no-line-candidates")
+        self.assertEqual(trace[2].get("strict_reason"), "failed-name-heuristics")
+
+    def test_candidate_stats_counts_only_one_support_for_same_primary_line_across_runs(self):
+        class _ParseCtx:
+            @staticmethod
+            def extract_line_candidates(line_text):
+                value = str(line_text or "").strip()
+                return [value] if value else []
+
+        stats = ocr_capture_ops._candidate_stats_from_runs(
+            [
+                {
+                    "pass": "primary",
+                    "image": "a.png",
+                    "lines": [{"text": "funnyName", "conf": 70.0}],
+                },
+                {
+                    "pass": "primary",
+                    "image": "b.png",
+                    "lines": [{"text": "funnyName2", "conf": 92.0}],
+                },
+            ],
+            _ParseCtx(),
+        )
+        support_sum = int(stats.get("funnyname", {}).get("support", 0)) + int(
+            stats.get("funnyname2", {}).get("support", 0)
+        )
+        self.assertEqual(support_sum, 1)
+        self.assertLessEqual(int(stats.get("funnyname", {}).get("support", 0)), 1)
+        self.assertLessEqual(int(stats.get("funnyname2", {}).get("support", 0)), 1)
+
+    def test_candidate_stats_keeps_two_names_when_they_come_from_two_row_slots(self):
+        class _ParseCtx:
+            @staticmethod
+            def extract_line_candidates(line_text):
+                value = str(line_text or "").strip()
+                return [value] if value else []
+
+        stats = ocr_capture_ops._candidate_stats_from_runs(
+            [
+                {
+                    "pass": "row",
+                    "image": "src#1[10:20]/name.base",
+                    "lines": [{"text": "funnyName2", "conf": 62.0}],
+                },
+                {
+                    "pass": "row",
+                    "image": "src#1[10:20]/name.scaled_x4",
+                    "lines": [{"text": "funnyName2", "conf": 88.0}],
+                },
+                {
+                    "pass": "row",
+                    "image": "src#2[24:34]/name.base",
+                    "lines": [{"text": "funnyName", "conf": 91.0}],
+                },
+            ],
+            _ParseCtx(),
+        )
+        self.assertEqual(int(stats.get("funnyname", {}).get("support", 0)), 1)
+        self.assertEqual(int(stats.get("funnyname2", {}).get("support", 0)), 1)
+
+    def test_candidate_stats_row_slot_prefers_clean_name_over_short_high_conf_variant(self):
+        class _ParseCtx:
+            @staticmethod
+            def extract_line_candidates(line_text):
+                value = str(line_text or "").strip()
+                return [value] if value else []
+
+        stats = ocr_capture_ops._candidate_stats_from_runs(
+            [
+                {
+                    "pass": "row",
+                    "image": "src#2[10:20]/name.base",
+                    "lines": [{"text": "AJAR", "conf": 77.5}],
+                },
+                {
+                    "pass": "row",
+                    "image": "src#2[10:20]/name.scaled_x4",
+                    "lines": [{"text": "AR", "conf": 98.1}],
+                },
+            ],
+            _ParseCtx(),
+        )
+        self.assertEqual(int(stats.get("ajar", {}).get("support", 0)), 1)
+        self.assertEqual(int(stats.get("ar", {}).get("support", 0)), 0)
+
+    def test_candidate_stats_row_slot_prefers_letter_only_variant_over_digit_noise(self):
+        class _ParseCtx:
+            @staticmethod
+            def extract_line_candidates(line_text):
+                value = str(line_text or "").strip()
+                return [value] if value else []
+
+        stats = ocr_capture_ops._candidate_stats_from_runs(
+            [
+                {
+                    "pass": "row",
+                    "image": "src#4[30:40]/name.base",
+                    "lines": [{"text": "Mika Moonbrcw", "conf": 65.1}],
+                },
+                {
+                    "pass": "row",
+                    "image": "src#4[30:40]/name.mono",
+                    "lines": [{"text": "liliil 1 Vjhru", "conf": 49.5}],
+                },
+            ],
+            _ParseCtx(),
+        )
+        self.assertEqual(int(stats.get("mikamoonbrcw", {}).get("support", 0)), 1)
+        self.assertEqual(int(stats.get("liliil1vjhru", {}).get("support", 0)), 0)
+
+    def test_candidate_stats_row_conflict_does_not_add_extra_support_line(self):
+        class _ParseCtx:
+            @staticmethod
+            def extract_line_candidates(line_text):
+                value = str(line_text or "").strip()
+                return [value] if value else []
+
+        stats = ocr_capture_ops._candidate_stats_from_runs(
+            [
+                {
+                    "pass": "primary",
+                    "image": "a.png",
+                    "lines": [
+                        {"text": "Line1", "conf": 92.0},
+                        {"text": "Line2", "conf": 90.0},
+                        {"text": "Line3", "conf": 88.0},
+                        {"text": "Line4", "conf": 86.0},
+                    ],
+                },
+                # OCR row-pass misread for row #4: variant from another row.
+                {
+                    "pass": "row",
+                    "image": "src#4[40:50]/name.base",
+                    "lines": [{"text": "Line3", "conf": 31.0}],
+                },
+            ],
+            _ParseCtx(),
+        )
+        # The conflicting row-pass variant must not create an additional
+        # supported line candidate.
+        self.assertEqual(int(stats.get("line1", {}).get("support", 0)), 1)
+        self.assertEqual(int(stats.get("line2", {}).get("support", 0)), 1)
+        self.assertEqual(int(stats.get("line3", {}).get("support", 0)), 1)
+        self.assertEqual(int(stats.get("line4", {}).get("support", 0)), 1)
+
+    def test_candidate_stats_primary_keeps_slot_even_when_row_variant_looks_cleaner(self):
+        class _ParseCtx:
+            @staticmethod
+            def extract_line_candidates(line_text):
+                value = str(line_text or "").strip()
+                return [value] if value else []
+
+        stats = ocr_capture_ops._candidate_stats_from_runs(
+            [
+                {
+                    "pass": "primary",
+                    "image": "a.png",
+                    "lines": [
+                        {"text": "Line1", "conf": 91.0},
+                        {"text": "Line2", "conf": 90.0},
+                        {"text": "Line3", "conf": 88.0},
+                        {"text": "Line4", "conf": 70.0},
+                    ],
+                },
+                {
+                    "pass": "row",
+                    "image": "src#4[40:50]/name.base",
+                    "lines": [{"text": "Line3", "conf": 99.0}],
+                },
+            ],
+            _ParseCtx(),
+        )
+        # Even a strong row variant for slot #4 should not override an
+        # existing primary line winner for that slot.
+        self.assertEqual(int(stats.get("line4", {}).get("support", 0)), 1)
+        self.assertEqual(int(stats.get("line3", {}).get("support", 0)), 1)
+
+    def test_extract_names_from_texts_adds_missing_line_fallback_candidate(self):
+        class _Import:
+            @staticmethod
+            def extract_candidate_names_multi(_texts, **_kwargs):
+                return [
+                    "Teste bitte nochmal genau den 7-Zeilen",
+                    "nachsten Schritt eine Debug-Ausgabe",
+                ]
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                line = str(text or "").strip()
+                if not line:
+                    return []
+                words = [tok for tok in line.replace(";", " ").replace(",", " ").split() if tok]
+                max_words = int(kwargs.get("max_words", 2))
+                if len(words) > max_words:
+                    return []
+                return [line]
+
+        texts = [
+            "\n".join(
+                [
+                    "Teste bitte nochmal genau den 7-Zeilen",
+                    "Case. Wenn es noch fehlt; baue ich dir als",
+                    "nachsten Schritt eine Debug-Ausgabe",
+                ]
+            )
+        ]
+        names = ocr_capture_ops._extract_names_from_texts(
+            _Import(),
+            texts,
+            {
+                "name_min_chars": 2,
+                "name_max_chars": 64,
+                "name_max_words": 8,
+                "name_max_digit_ratio": 0.45,
+                "name_special_char_constraint": False,
+                "line_relaxed_fallback": True,
+                "line_recall_max_additions": 2,
+                "single_name_per_line": False,
+                "name_min_support": 1,
+                "name_high_count_threshold": 8,
+                "name_high_count_min_support": 2,
+                "name_max_candidates": 12,
+                "name_near_dup_min_chars": 8,
+                "name_near_dup_max_len_delta": 1,
+                "name_near_dup_similarity": 0.90,
+                "name_near_dup_tail_min_chars": 3,
+                "name_near_dup_tail_head_similarity": 0.70,
+            },
+        )
+        self.assertIn("Case. Wenn es noch fehlt; baue ich dir als", names)
+
     def test_build_final_names_without_stats_prefers_preferred_sequence(self):
         names = ocr_capture_ops._build_final_names_from_runs(
             cfg={"expected_candidates": 5},
@@ -225,6 +584,1062 @@ class TestOCRCaptureOps(unittest.TestCase):
             row_preferred=False,
         )
         self.assertEqual(names, ["Bravo", "Alpha", "Charlie"])
+
+    def test_build_final_names_remerges_seeded_near_duplicates(self):
+        stats = {
+            "thebookseller": {
+                "display": "The Bookseller",
+                "support": 3,
+                "occurrences": 3,
+                "best_conf": 86.0,
+            }
+        }
+        names = ocr_capture_ops._build_final_names_from_runs(
+            cfg={
+                "expected_candidates": 5,
+                "name_min_support": 1,
+                "name_min_confidence": 0.0,
+                "name_low_confidence_min_support": 1,
+                "name_near_dup_min_chars": 8,
+                "name_near_dup_max_len_delta": 1,
+                "name_near_dup_similarity": 0.90,
+            },
+            stats=stats,
+            preferred_names=["The Bookselier", "The Bookseller"],
+            primary_names=["The Bookseller"],
+            retry_names=["The Bookselier"],
+            row_names=["The Bookselier"],
+            row_preferred=False,
+        )
+        self.assertEqual(names, ["The Bookseller"])
+
+    def test_build_final_names_row_preferred_keeps_fuzzy_matched_preferred_key(self):
+        stats = {
+            "aero": {"display": "Aero", "support": 5, "occurrences": 5, "best_conf": 98.0},
+            "ajar": {"display": "AJAR", "support": 5, "occurrences": 5, "best_conf": 99.0},
+            "massithmarcdu": {
+                "display": "Massith Marc #Du",
+                "support": 5,
+                "occurrences": 5,
+                "best_conf": 85.0,
+            },
+            "mikamoonbrcw4w": {
+                "display": "Mika Moonbrcw \"0 ^",
+                "support": 6,
+                "occurrences": 6,
+                "best_conf": 81.0,
+            },
+            "nikeosmnke": {
+                "display": "NIKEOS MNKE",
+                "support": 5,
+                "occurrences": 5,
+                "best_conf": 96.0,
+            },
+        }
+        names = ocr_capture_ops._build_final_names_from_runs(
+            cfg={
+                "expected_candidates": 5,
+                "name_min_support": 1,
+                "name_min_confidence": 43.0,
+                "name_low_confidence_min_support": 2,
+            },
+            stats=stats,
+            preferred_names=[
+                "Aero",
+                "AJAR",
+                "Massith Marc #Du",
+                "Mika Moonbrcw \"0 ^",
+                "NIKEOS MNKE",
+            ],
+            primary_names=[
+                "Aero",
+                "AJAR",
+                "Massith Marc #DW",
+                "Mika | Moonbrcw 4 W ^",
+                "NIKEOS MNKE",
+            ],
+            retry_names=[],
+            row_names=[
+                "Aero",
+                "AJAR",
+                "Massith Marc #Du",
+                "Mika Moonbrcw \"0 ^",
+                "NIKEOS MNKE",
+            ],
+            row_preferred=True,
+        )
+        name_keys = {ocr_capture_ops._simple_name_key(name) for name in names}
+        self.assertEqual(len(names), 5)
+        self.assertIn("aero", name_keys)
+        self.assertIn("ajar", name_keys)
+        self.assertIn("massithmarcdu", name_keys)
+        self.assertIn("nikeosmnke", name_keys)
+        self.assertTrue(any(key.startswith("mikamoonbrcw") for key in name_keys))
+
+    def test_merge_near_duplicate_candidate_stats_merges_low_support_variants(self):
+        stats = {
+            "thebookseller": {
+                "display": "The Bookseller",
+                "support": 3,
+                "occurrences": 3,
+                "best_conf": 86.0,
+            },
+            "thebookselier": {
+                "display": "The Bookselier",
+                "support": 1,
+                "occurrences": 1,
+                "best_conf": 59.0,
+            },
+        }
+        merged = ocr_capture_ops._merge_near_duplicate_candidate_stats(stats, self._ocr_cfg())
+        self.assertEqual(len(merged), 1)
+        bucket = next(iter(merged.values()))
+        self.assertEqual(int(bucket.get("support", 0)), 4)
+        self.assertEqual(int(bucket.get("occurrences", 0)), 4)
+
+    def test_merge_prefix_candidate_stats_merges_truncated_multiword_variant(self):
+        stats = {
+            "casewennesnochfehltbaueichdirals": {
+                "display": "Case. Wenn es noch fehlt; baue ich dir als",
+                "support": 2,
+                "occurrences": 2,
+                "best_conf": 84.0,
+            },
+            "casewennesnochfehltbaueic": {
+                "display": "Case_ Wenn es noch fehlt, baue ic",
+                "support": 3,
+                "occurrences": 3,
+                "best_conf": 82.0,
+            },
+        }
+        merged = ocr_capture_ops._merge_prefix_candidate_stats(stats)
+        self.assertEqual(len(merged), 1)
+        bucket = next(iter(merged.values()))
+        self.assertEqual(int(bucket.get("support", 0)), 5)
+        self.assertEqual(int(bucket.get("occurrences", 0)), 5)
+
+    def test_merge_prefix_candidate_stats_keeps_numeric_suffix_variant(self):
+        stats = {
+            "player": {
+                "display": "Player",
+                "support": 2,
+                "occurrences": 2,
+                "best_conf": 80.0,
+            },
+            "player2": {
+                "display": "Player2",
+                "support": 2,
+                "occurrences": 2,
+                "best_conf": 81.0,
+            },
+        }
+        merged = ocr_capture_ops._merge_prefix_candidate_stats(stats)
+        self.assertEqual(len(merged), 2)
+        self.assertIn("player", merged)
+        self.assertIn("player2", merged)
+
+    def test_name_display_quality_prefers_clean_variant_over_noisy_tail(self):
+        clean = ocr_capture_ops._name_display_quality("Mika Moonbrcw")
+        noisy = ocr_capture_ops._name_display_quality("Mika Moonbrcw \"0 ^")
+        self.assertLess(clean, noisy)
+
+    def test_merge_prefix_candidate_stats_prefers_clean_short_when_suffix_is_noise(self):
+        stats = {
+            "mikamoonbrcw": {
+                "display": "Mika Moonbrcw",
+                "support": 3,
+                "occurrences": 3,
+                "best_conf": 80.9,
+            },
+            "mikamoonbrcw4w": {
+                "display": "Mika | Moonbrcw 4 W ^",
+                "support": 1,
+                "occurrences": 1,
+                "best_conf": 77.9,
+            },
+        }
+        merged = ocr_capture_ops._merge_prefix_candidate_stats(stats)
+        self.assertEqual(len(merged), 1)
+        self.assertIn("mikamoonbrcw", merged)
+        bucket = merged["mikamoonbrcw"]
+        self.assertEqual(bucket.get("display"), "Mika Moonbrcw")
+        self.assertEqual(int(bucket.get("support", 0)), 4)
+
+    def test_merge_near_duplicate_candidate_stats_keeps_distinct_strong_names(self):
+        stats = {
+            "massith": {
+                "display": "Massith",
+                "support": 2,
+                "occurrences": 2,
+                "best_conf": 84.0,
+            },
+            "mossith": {
+                "display": "Mossith",
+                "support": 2,
+                "occurrences": 2,
+                "best_conf": 83.0,
+            },
+        }
+        merged = ocr_capture_ops._merge_near_duplicate_candidate_stats(stats, self._ocr_cfg())
+        self.assertEqual(len(merged), 2)
+
+    def test_merge_near_duplicate_candidate_stats_keeps_numeric_suffix_variants(self):
+        stats = {
+            "player": {
+                "display": "Player",
+                "support": 2,
+                "occurrences": 2,
+                "best_conf": 84.0,
+            },
+            "player2": {
+                "display": "Player2",
+                "support": 1,
+                "occurrences": 1,
+                "best_conf": 79.0,
+            },
+        }
+        merged = ocr_capture_ops._merge_near_duplicate_candidate_stats(stats, self._ocr_cfg())
+        self.assertEqual(len(merged), 2)
+        self.assertIn("player", merged)
+        self.assertIn("player2", merged)
+
+    def test_order_names_by_line_trace_uses_primary_line_order(self):
+        names = ["Charlie", "Alpha", "Bravo"]
+        trace = [
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 1,
+                "selected_key": "alpha",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 2,
+                "selected_key": "bravo",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 3,
+                "selected_key": "charlie",
+                "support_incremented": True,
+            },
+        ]
+        ordered = ocr_capture_ops._order_names_by_line_trace(names, trace, row_preferred=False)
+        self.assertEqual(ordered, ["Alpha", "Bravo", "Charlie"])
+
+    def test_order_names_by_line_trace_prefers_row_order_when_row_preferred(self):
+        names = ["Charlie", "Alpha", "Bravo"]
+        trace = [
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 1,
+                "selected_key": "charlie",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 2,
+                "selected_key": "alpha",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 3,
+                "selected_key": "bravo",
+                "support_incremented": True,
+            },
+            {
+                "pass": "row",
+                "run_index": 2,
+                "line_index": 1,
+                "selected_key": "alpha",
+                "support_incremented": True,
+            },
+            {
+                "pass": "row",
+                "run_index": 2,
+                "line_index": 2,
+                "selected_key": "bravo",
+                "support_incremented": True,
+            },
+            {
+                "pass": "row",
+                "run_index": 2,
+                "line_index": 3,
+                "selected_key": "charlie",
+                "support_incremented": True,
+            },
+        ]
+        ordered = ocr_capture_ops._order_names_by_line_trace(names, trace, row_preferred=True)
+        self.assertEqual(ordered, ["Alpha", "Bravo", "Charlie"])
+
+    def test_order_names_by_line_trace_row_preferred_keeps_primary_only_key_in_slot(self):
+        names = ["Aero", "AJAR", "Mika Moonbrcw", "NIKEOS MNKE", "Massith Marc #QW"]
+        trace = [
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 1,
+                "selected_key": "aero",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 2,
+                "selected_key": "ajar",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 3,
+                "selected_key": "massithmarcqw",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 4,
+                "selected_key": "mikamoonbrcw",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 5,
+                "selected_key": "nikeosmnke",
+                "support_incremented": True,
+            },
+            {
+                "pass": "row",
+                "run_index": 10,
+                "line_index": 1,
+                "image": "src#1[0:0]/name.base",
+                "selected_key": "aero",
+                "support_incremented": True,
+            },
+            {
+                "pass": "row",
+                "run_index": 11,
+                "line_index": 1,
+                "image": "src#2[0:0]/name.base",
+                "selected_key": "ajar",
+                "support_incremented": True,
+            },
+            {
+                "pass": "row",
+                "run_index": 12,
+                "line_index": 1,
+                "image": "src#4[0:0]/name.base",
+                "selected_key": "mikamoonbrcw",
+                "support_incremented": True,
+            },
+            {
+                "pass": "row",
+                "run_index": 13,
+                "line_index": 1,
+                "image": "src#5[0:0]/name.base",
+                "selected_key": "nikeosmnke",
+                "support_incremented": True,
+            },
+        ]
+        ordered = ocr_capture_ops._order_names_by_line_trace(
+            names,
+            trace,
+            row_preferred=True,
+        )
+        self.assertEqual(
+            ordered,
+            ["Aero", "AJAR", "Massith Marc #QW", "Mika Moonbrcw", "NIKEOS MNKE"],
+        )
+
+    def test_order_names_by_line_trace_reorders_known_subset_and_appends_unknown(self):
+        names = ["Noise", "Charlie", "Alpha", "Bravo"]
+        trace = [
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 1,
+                "selected_key": "alpha",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 2,
+                "selected_key": "bravo",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 3,
+                "selected_key": "charlie",
+                "support_incremented": True,
+            },
+        ]
+        ordered = ocr_capture_ops._order_names_by_line_trace(names, trace, row_preferred=False)
+        self.assertEqual(ordered, ["Alpha", "Bravo", "Charlie", "Noise"])
+
+    def test_order_names_by_line_trace_aliases_row_only_variant_to_primary_position(self):
+        names = [
+            "Mogojyan The Lacie Lover FWMC",
+            "The Gookseller {The Food lover}",
+            "Jockie Music 1 (ml) 66",
+            "Rontorou {Best Cojo Moin} 10OK",
+        ]
+        trace = [
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 1,
+                "selected_key": "jockiemusic1ml",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 2,
+                "selected_key": "mogojyanthelacieloverfwmc",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 3,
+                "selected_key": "rontorougestgojomoin1ook",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 4,
+                "selected_key": "thegooksellerthefoodlover",
+                "support_incremented": True,
+            },
+            {
+                "pass": "row",
+                "run_index": 5,
+                "line_index": 1,
+                "selected_key": "jockiemusic1ml66",
+                "support_incremented": True,
+            },
+            {
+                "pass": "row",
+                "run_index": 13,
+                "line_index": 1,
+                "selected_key": "rontoroubestcojomoin10ok",
+                "support_incremented": True,
+            },
+        ]
+
+        ordered = ocr_capture_ops._order_names_by_line_trace(names, trace, row_preferred=False)
+        self.assertEqual(
+            ordered,
+            [
+                "Jockie Music 1 (ml) 66",
+                "Mogojyan The Lacie Lover FWMC",
+                "Rontorou {Best Cojo Moin} 10OK",
+                "The Gookseller {The Food lover}",
+            ],
+        )
+
+    def test_order_names_by_line_trace_keeps_slot_for_ambiguous_primary_aliases(self):
+        names = [
+            "Alpha",
+            "Bravo",
+            "Charlie",
+            "Echo",
+            "Foxtrot",
+            "II welche Zeile wurde auf welchen Kandidaten",
+        ]
+        trace = [
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 1,
+                "selected_key": "alpha",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 2,
+                "selected_key": "bravo",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 3,
+                "selected_key": "charlie",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 4,
+                "selected_key": "welchezeilewurdeaufwelchenkandidaten",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 5,
+                "selected_key": "echo",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 6,
+                "selected_key": "foxtrot",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 2,
+                "line_index": 4,
+                "selected_key": "iwelchezeilewurdeaufwelchenkandidaten",
+                "support_incremented": True,
+            },
+            {
+                "pass": "row",
+                "run_index": 5,
+                "line_index": 4,
+                "selected_key": "iiwelchezeilewurdeaufwelchenkandidaten",
+                "support_incremented": True,
+                "image": "full.base",
+            },
+        ]
+
+        ordered = ocr_capture_ops._order_names_by_line_trace(
+            names,
+            trace,
+            row_preferred=False,
+        )
+        self.assertEqual(
+            ordered,
+            [
+                "Alpha",
+                "Bravo",
+                "Charlie",
+                "II welche Zeile wurde auf welchen Kandidaten",
+                "Echo",
+                "Foxtrot",
+            ],
+        )
+
+    def test_order_names_by_line_trace_does_not_swap_two_row_variants_when_only_one_aliases(self):
+        names = ["HIDE & SEEK funktionie", "Das DUMMSTE VERST"]
+        trace = [
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 1,
+                "selected_key": "dasdummsteversteckin",
+                "support_incremented": True,
+                "occurrence_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 2,
+                "selected_key": "hideseekfunktioniert",
+                "support_incremented": True,
+                "occurrence_incremented": True,
+            },
+            {
+                "pass": "row",
+                "run_index": 7,
+                "line_index": 1,
+                "image": "name.base",
+                "selected_key": "dasdummsteverst",
+                "support_incremented": False,
+                "occurrence_incremented": True,
+            },
+            {
+                "pass": "row",
+                "run_index": 8,
+                "line_index": 2,
+                "image": "name.scaled_x4",
+                "selected_key": "hideseekfunktionie",
+                "support_incremented": False,
+                "occurrence_incremented": True,
+            },
+        ]
+
+        ordered = ocr_capture_ops._order_names_by_line_trace(
+            names,
+            trace,
+            row_preferred=False,
+        )
+        self.assertEqual(
+            ordered,
+            ["Das DUMMSTE VERST", "HIDE & SEEK funktionie"],
+        )
+
+    def test_order_names_by_line_trace_uses_occurrence_when_support_missing(self):
+        names = ["Aero", "Mika Moonbrcw", "NIKEOS MNKE", "AJAR", "Massith Marc #Ou"]
+        trace = [
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 1,
+                "selected_key": "aero",
+                "occurrence_incremented": True,
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 2,
+                "selected_key": "ajar",
+                "occurrence_incremented": True,
+                "support_incremented": False,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 3,
+                "selected_key": "massithmarcou",
+                "occurrence_incremented": True,
+                "support_incremented": False,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 4,
+                "selected_key": "mikamoonbrcw",
+                "occurrence_incremented": True,
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 5,
+                "selected_key": "nikeosmnke",
+                "occurrence_incremented": True,
+                "support_incremented": True,
+            },
+        ]
+
+        ordered = ocr_capture_ops._order_names_by_line_trace(
+            names,
+            trace,
+            row_preferred=False,
+        )
+        self.assertEqual(
+            ordered,
+            ["Aero", "AJAR", "Massith Marc #Ou", "Mika Moonbrcw", "NIKEOS MNKE"],
+        )
+
+    def test_collapse_names_by_trace_slots_removes_duplicate_variant_at_tail(self):
+        names = [
+            "Jockie Music 1 (ml)",
+            "Mogojyan The Lacie Lover FWMC",
+            "Rontorou {Gest Gojo Moin} 1OOK",
+            "The Gookseller {The Foodlover}",
+            "The Bookseller {The FoodIover}",
+        ]
+        trace = [
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 1,
+                "selected_key": "jockiemusic1ml",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 2,
+                "selected_key": "mogojyanthelacieloverfwmc",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 3,
+                "selected_key": "rontorougestgojomoin1ook",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 4,
+                "selected_key": "thegooksellerthefoodlover",
+                "support_incremented": True,
+            },
+            {
+                "pass": "row",
+                "run_index": 3,
+                "line_index": 1,
+                "image": "name.base",
+                "selected_key": "jockiemusic1ml",
+                "support_incremented": True,
+            },
+            {
+                "pass": "row",
+                "run_index": 6,
+                "line_index": 1,
+                "image": "name.base",
+                "selected_key": "mogojyanthelacieloverfwmc",
+                "support_incremented": True,
+            },
+            {
+                "pass": "row",
+                "run_index": 10,
+                "line_index": 1,
+                "image": "name.base",
+                "selected_key": "rontoroubestcojomoin10ok",
+                "support_incremented": True,
+            },
+            {
+                "pass": "row",
+                "run_index": 14,
+                "line_index": 1,
+                "image": "name.base",
+                "selected_key": "thebooksellerthefoodiover",
+                "support_incremented": True,
+            },
+        ]
+        stats = {
+            "jockiemusic1ml": {"display": "Jockie Music 1 (ml)", "support": 3, "occurrences": 3, "best_conf": 90.0},
+            "mogojyanthelacieloverfwmc": {
+                "display": "Mogojyan The Lacie Lover FWMC",
+                "support": 3,
+                "occurrences": 3,
+                "best_conf": 90.0,
+            },
+            "rontorougestgojomoin1ook": {
+                "display": "Rontorou {Gest Gojo Moin} 1OOK",
+                "support": 2,
+                "occurrences": 2,
+                "best_conf": 81.0,
+            },
+            "thegooksellerthefoodlover": {
+                "display": "The Gookseller {The Foodlover}",
+                "support": 2,
+                "occurrences": 2,
+                "best_conf": 75.0,
+            },
+            "thebooksellerthefoodiover": {
+                "display": "The Bookseller {The FoodIover}",
+                "support": 1,
+                "occurrences": 1,
+                "best_conf": 75.0,
+            },
+        }
+        collapsed = ocr_capture_ops._collapse_names_by_trace_slots(
+            names,
+            trace_entries=trace,
+            row_preferred=False,
+            candidate_stats=stats,
+            cfg=self._ocr_cfg(),
+        )
+        self.assertEqual(
+            collapsed,
+            [
+                "Jockie Music 1 (ml)",
+                "Mogojyan The Lacie Lover FWMC",
+                "Rontorou {Gest Gojo Moin} 1OOK",
+                "The Gookseller {The Foodlover}",
+            ],
+        )
+
+    def test_collapse_names_by_trace_slots_keeps_similar_names_on_different_lines(self):
+        names = ["funnyName", "funnyName2"]
+        trace = [
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 1,
+                "selected_key": "funnyname",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 2,
+                "selected_key": "funnyname2",
+                "support_incremented": True,
+            },
+        ]
+        stats = {
+            "funnyname": {"display": "funnyName", "support": 2, "occurrences": 2, "best_conf": 84.0},
+            "funnyname2": {"display": "funnyName2", "support": 2, "occurrences": 2, "best_conf": 83.0},
+        }
+        collapsed = ocr_capture_ops._collapse_names_by_trace_slots(
+            names,
+            trace_entries=trace,
+            row_preferred=False,
+            candidate_stats=stats,
+            cfg=self._ocr_cfg(),
+        )
+        self.assertEqual(collapsed, ["funnyName", "funnyName2"])
+
+    def test_collapse_names_by_trace_slots_merges_one_char_prefix_drift_in_same_slot(self):
+        names = ["Line1", "flatiqz", "Line3", "Line4", "Line5", "yukino", "vukino"]
+        trace = [
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 1,
+                "selected_key": "line1",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 2,
+                "selected_key": "flatiqz",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 3,
+                "selected_key": "line3",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 4,
+                "selected_key": "line4",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 5,
+                "selected_key": "line5",
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 6,
+                "selected_key": "yukino",
+                "support_incremented": True,
+            },
+            {
+                "pass": "row",
+                "run_index": 7,
+                "line_index": 1,
+                "image": "src#6[0:0]/name.base",
+                "selected_key": "vukino",
+                "support_incremented": True,
+            },
+        ]
+        stats = {
+            "line1": {"display": "Line1", "support": 2, "occurrences": 2, "best_conf": 90.0},
+            "flatiqz": {"display": "flatiqz", "support": 1, "occurrences": 1, "best_conf": 61.0},
+            "line3": {"display": "Line3", "support": 2, "occurrences": 2, "best_conf": 90.0},
+            "line4": {"display": "Line4", "support": 2, "occurrences": 2, "best_conf": 90.0},
+            "line5": {"display": "Line5", "support": 2, "occurrences": 2, "best_conf": 90.0},
+            "yukino": {"display": "yukino", "support": 2, "occurrences": 2, "best_conf": 94.0},
+            "vukino": {"display": "vukino", "support": 1, "occurrences": 3, "best_conf": 97.0},
+        }
+        collapsed = ocr_capture_ops._collapse_names_by_trace_slots(
+            names,
+            trace_entries=trace,
+            row_preferred=False,
+            candidate_stats=stats,
+            cfg=self._ocr_cfg(),
+        )
+        self.assertEqual(collapsed, ["Line1", "flatiqz", "Line3", "Line4", "Line5", "yukino"])
+
+    def test_refill_names_to_target_prefers_trace_alternative_for_missing_line(self):
+        names = ["Aero", "Mika Moonbrcw", "NIKEOS MNKE"]
+        stats = {
+            "aero": {"display": "Aero", "support": 4, "occurrences": 4, "best_conf": 95.0},
+            "ajar": {"display": "AJAR", "support": 1, "occurrences": 1, "best_conf": 60.0},
+            "mikamoonbrcw": {
+                "display": "Mika Moonbrcw",
+                "support": 4,
+                "occurrences": 4,
+                "best_conf": 84.0,
+            },
+            "nikeosmnke": {
+                "display": "NIKEOS MNKE",
+                "support": 4,
+                "occurrences": 4,
+                "best_conf": 92.0,
+            },
+            "zzztopnoise": {
+                "display": "ZZZ TOP NOISE",
+                "support": 9,
+                "occurrences": 9,
+                "best_conf": 99.0,
+            },
+        }
+        trace = [
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 1,
+                "selected_key": "aero",
+                "occurrence_incremented": True,
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 2,
+                "selected_key": "ajar",
+                "occurrence_incremented": True,
+                "support_incremented": False,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 3,
+                "selected_key": "mikamoonbrcw",
+                "occurrence_incremented": True,
+                "support_incremented": True,
+            },
+            {
+                "pass": "primary",
+                "run_index": 1,
+                "line_index": 4,
+                "selected_key": "nikeosmnke",
+                "occurrence_incremented": True,
+                "support_incremented": True,
+            },
+        ]
+
+        refilled = ocr_capture_ops._refill_names_to_target(
+            names,
+            refill_target=4,
+            candidate_stats=stats,
+            cfg=self._ocr_cfg(),
+            trace_entries=trace,
+            row_preferred=False,
+        )
+        ordered = ocr_capture_ops._order_names_by_line_trace(
+            refilled,
+            trace,
+            row_preferred=False,
+        )
+        self.assertEqual(
+            ordered,
+            ["Aero", "AJAR", "Mika Moonbrcw", "NIKEOS MNKE"],
+        )
+
+    def test_resolve_effective_precount_rows_prefers_stable_primary_on_visual_overcount(self):
+        primary_runs = [
+            {
+                "lines": [
+                    {"text": "A", "conf": 90.0},
+                    {"text": "B", "conf": 90.0},
+                    {"text": "C", "conf": 90.0},
+                    {"text": "D", "conf": 90.0},
+                    {"text": "E", "conf": 90.0},
+                    {"text": "F", "conf": 90.0},
+                ]
+            },
+            {
+                "lines": [
+                    {"text": "A", "conf": 90.0},
+                    {"text": "B", "conf": 90.0},
+                    {"text": "C", "conf": 90.0},
+                    {"text": "D", "conf": 90.0},
+                    {"text": "E", "conf": 90.0},
+                    {"text": "F", "conf": 90.0},
+                ]
+            },
+        ]
+        effective = ocr_capture_ops._resolve_effective_precount_rows(7, primary_runs)
+        self.assertEqual(effective, 6)
+
+    def test_resolve_effective_precount_rows_keeps_visual_when_primary_unstable(self):
+        primary_runs = [
+            {
+                "lines": [
+                    {"text": "A", "conf": 90.0},
+                    {"text": "B", "conf": 90.0},
+                    {"text": "C", "conf": 90.0},
+                    {"text": "D", "conf": 90.0},
+                    {"text": "E", "conf": 90.0},
+                    {"text": "F", "conf": 90.0},
+                ]
+            },
+            {
+                "lines": [
+                    {"text": "A", "conf": 90.0},
+                    {"text": "B", "conf": 90.0},
+                    {"text": "C", "conf": 90.0},
+                    {"text": "D", "conf": 90.0},
+                    {"text": "E", "conf": 90.0},
+                ]
+            },
+        ]
+        effective = ocr_capture_ops._resolve_effective_precount_rows(7, primary_runs)
+        self.assertEqual(effective, 7)
+
+    def test_resolve_precount_row_bounds_locks_upper_bound_when_primary_stable(self):
+        minimum, maximum, refill_target = ocr_capture_ops._resolve_precount_row_bounds(
+            effective_precount_rows=6,
+            stable_primary_rows=6,
+        )
+        self.assertEqual((minimum, maximum, refill_target), (5, 6, 6))
+
+    def test_resolve_precount_row_bounds_allows_soft_upper_without_stable_primary(self):
+        minimum, maximum, refill_target = ocr_capture_ops._resolve_precount_row_bounds(
+            effective_precount_rows=6,
+            stable_primary_rows=None,
+        )
+        self.assertEqual((minimum, maximum, refill_target), (5, 7, 6))
+
+    def test_precount_extra_allowance_ignores_weak_singleton_extra(self):
+        stats: dict[str, dict[str, float | int | str]] = {}
+        for idx in range(1, 8):
+            name = f"Line{idx}"
+            key = ocr_capture_ops._simple_name_key(name)
+            if not key:
+                continue
+            stats[key] = {
+                "display": name,
+                "support": 2 if idx <= 6 else 1,
+                "occurrences": 2 if idx <= 6 else 1,
+                "best_conf": 80.0 if idx <= 6 else 33.0,
+            }
+        allowance = ocr_capture_ops._precount_extra_allowance_from_stats(
+            base_max_rows=6,
+            stats=stats,
+            cfg=self._ocr_cfg(),
+        )
+        self.assertEqual(allowance, 0)
+
+    def test_precount_extra_allowance_accepts_strong_extra(self):
+        stats: dict[str, dict[str, float | int | str]] = {}
+        for idx in range(1, 8):
+            name = f"Line{idx}"
+            key = ocr_capture_ops._simple_name_key(name)
+            if not key:
+                continue
+            stats[key] = {
+                "display": name,
+                "support": 2,
+                "occurrences": 2,
+                "best_conf": 80.0,
+            }
+        allowance = ocr_capture_ops._precount_extra_allowance_from_stats(
+            base_max_rows=6,
+            stats=stats,
+            cfg=self._ocr_cfg(),
+        )
+        self.assertEqual(allowance, 1)
 
     def test_build_final_names_respects_preferred_order_when_row_not_preferred(self):
         stats = {
@@ -698,6 +2113,394 @@ class TestOCRCaptureOps(unittest.TestCase):
         self.assertIn("The Bookseller", merged_text)
         self.assertIsNone(error)
 
+    def test_extract_names_row_preferred_primary_stabilization_fixes_single_shifted_line(self):
+        class _StubOCRImport:
+            @staticmethod
+            def run_tesseract_multi(
+                image_path,
+                *,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+            ):
+                del image_path, cmd, psm_values, timeout_s, lang, stop_on_first_success
+                return SimpleNamespace(text="", error=None)
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                return real_ocr_import.extract_candidate_names(text, **kwargs)
+
+            @staticmethod
+            def extract_candidate_names_multi(texts, **kwargs):
+                return real_ocr_import.extract_candidate_names_multi(texts, **kwargs)
+
+        primary_names = [
+            "Jockie Music 1 (ml)",
+            "Mogojyan The Lacie Lover FWMC",
+            "Rontorou {Gest Cojo Moin} 1OOK",
+            "The Gookseller {The Foodlover}",
+        ]
+        primary_runs = [
+            {
+                "pass": "primary",
+                "image": "a.png",
+                "lines": [
+                    {"text": primary_names[0], "conf": 92.0},
+                    {"text": primary_names[1], "conf": 90.0},
+                    {"text": primary_names[2], "conf": 88.0},
+                    {"text": primary_names[3], "conf": 86.0},
+                ],
+                "text": "\n".join(primary_names),
+            },
+            {
+                "pass": "primary",
+                "image": "b.png",
+                "lines": [
+                    {"text": primary_names[0], "conf": 93.0},
+                    {"text": primary_names[1], "conf": 91.0},
+                    {"text": primary_names[2], "conf": 89.0},
+                    {"text": primary_names[3], "conf": 87.0},
+                ],
+                "text": "\n".join(primary_names),
+            },
+        ]
+        row_names = [
+            "Fa 4",
+            "Lenj LCCiits 4aai n e",
+            "Mogojyan The Lacie Lover FWMC",
+            "Rontorou {Gest Cojo Moin} 10OH %",
+            "Tk? pacLSSIS_ tks Fc3A Ic",
+        ]
+        row_texts = ["\n".join(row_names)]
+        row_runs = [
+            {
+                "pass": "row",
+                "image": "dummy.png#1[0:20]",
+                "psm_values": [7, 6, 13],
+                "timeout_s": 1.0,
+                "lang": "eng",
+                "fast_mode": False,
+                "text": row_texts[0],
+                "error": "",
+            }
+        ]
+        stats: dict[str, dict[str, float | int | str]] = {}
+        for text in primary_names + row_names:
+            key = ocr_capture_ops._simple_name_key(text)
+            if not key or key in stats:
+                continue
+            stats[key] = {"display": text, "support": 1, "occurrences": 1, "best_conf": 90.0}
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "recall_retry_enabled": False,
+                "row_pass_enabled": True,
+                "row_pass_min_candidates": 5,
+                "expected_candidates": 5,
+            }
+        )
+
+        def _candidate_stats_with_trace(_runs, _parse_ctx, *, trace_entries=None, include_debug_meta=False):
+            del _runs, _parse_ctx, include_debug_meta
+            if trace_entries is not None:
+                for idx, text in enumerate(primary_names, start=1):
+                    trace_entries.append(
+                        {
+                            "pass": "primary",
+                            "run_index": 1,
+                            "line_index": idx,
+                            "selected_key": ocr_capture_ops._simple_name_key(text),
+                            "support_incremented": True,
+                            "occurrence_incremented": True,
+                        }
+                    )
+                trace_entries.extend(
+                    [
+                        {
+                            "pass": "row",
+                            "run_index": 5,
+                            "line_index": 1,
+                            "image": "src#1[0:0]/name.base",
+                            "selected_key": ocr_capture_ops._simple_name_key(row_names[0]),
+                            "support_incremented": True,
+                            "occurrence_incremented": True,
+                        },
+                        {
+                            "pass": "row",
+                            "run_index": 9,
+                            "line_index": 1,
+                            "image": "src#2[0:0]/name.base",
+                            "selected_key": ocr_capture_ops._simple_name_key(row_names[1]),
+                            "support_incremented": True,
+                            "occurrence_incremented": True,
+                        },
+                        {
+                            "pass": "row",
+                            "run_index": 23,
+                            "line_index": 1,
+                            "image": "src#3[0:0]/name.base",
+                            "selected_key": ocr_capture_ops._simple_name_key(row_names[2]),
+                            "support_incremented": True,
+                            "occurrence_incremented": True,
+                        },
+                        {
+                            "pass": "row",
+                            "run_index": 29,
+                            "line_index": 1,
+                            "image": "src#4[0:0]/name.base",
+                            "selected_key": ocr_capture_ops._simple_name_key(row_names[3]),
+                            "support_incremented": True,
+                            "occurrence_incremented": True,
+                        },
+                    ]
+                )
+            return dict(stats)
+
+        with (
+            patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+            patch("controller.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=5),
+            patch(
+                "controller.ocr_capture_ops._run_ocr_pass",
+                return_value=(["\n".join(primary_names)], [], primary_runs),
+            ),
+            patch(
+                "controller.ocr_capture_ops._run_row_segmentation_pass",
+                return_value=(row_names, row_texts, row_runs),
+            ),
+            patch("controller.ocr_capture_ops._extract_names_from_texts", return_value=list(primary_names)),
+            patch("controller.ocr_capture_ops._prefer_row_candidates", return_value=True),
+            patch(
+                "controller.ocr_capture_ops._candidate_stats_from_runs",
+                side_effect=_candidate_stats_with_trace,
+            ),
+            patch(
+                "controller.ocr_capture_ops._build_final_names_from_runs",
+                return_value=[
+                    primary_names[0],
+                    primary_names[2],
+                    primary_names[3],
+                    primary_names[1],
+                ],
+            ),
+            patch(
+                "controller.ocr_capture_ops._filter_low_confidence_candidates",
+                side_effect=lambda names, *_args, **_kwargs: list(names),
+            ),
+            patch(
+                "controller.ocr_capture_ops._expand_config_identifier_prefixes",
+                side_effect=lambda names: list(names),
+            ),
+        ):
+            names, _merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
+                [Path("dummy.png")],
+                ocr_cmd="auto",
+                cfg=cfg,
+            )
+
+        self.assertEqual(
+            names,
+            [
+                "Jockie Music 1 (ml)",
+                "Mogojyan The Lacie Lover FWMC",
+                "Rontorou {Gest Cojo Moin} 1OOK",
+                "The Gookseller {The Foodlover}",
+            ],
+        )
+        self.assertIsNone(error)
+
+    def test_extract_names_row_preferred_restores_missing_primary_slot_from_overflow_tail(self):
+        class _StubOCRImport:
+            @staticmethod
+            def run_tesseract_multi(
+                image_path,
+                *,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+            ):
+                del image_path, cmd, psm_values, timeout_s, lang, stop_on_first_success
+                return SimpleNamespace(text="", error=None)
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                return real_ocr_import.extract_candidate_names(text, **kwargs)
+
+            @staticmethod
+            def extract_candidate_names_multi(texts, **kwargs):
+                return real_ocr_import.extract_candidate_names_multi(texts, **kwargs)
+
+        primary_names = [
+            "[+] Rhug TLC",
+            "flatiqz",
+            "Kylo BMTH",
+            "mikix TLC",
+            "Pxssesive",
+            "rqlled AIM",
+            "yukino",
+        ]
+        row_names = [
+            "[+] Rhug TLC",
+            "tlatiaz",
+            "Kylo BMTH",
+            "mikix TLC",
+            "pxssesive",
+            "ralled AIM",
+            "vukino",
+        ]
+        primary_runs = [
+            {
+                "pass": "primary",
+                "image": "a.png",
+                "lines": [
+                    {"text": primary_names[0], "conf": 99.0},
+                    {"text": primary_names[1], "conf": 92.0},
+                    {"text": primary_names[2], "conf": 99.0},
+                    {"text": primary_names[3], "conf": 99.0},
+                    {"text": primary_names[4], "conf": 99.0},
+                    {"text": primary_names[5], "conf": 79.0},
+                    {"text": primary_names[6], "conf": 99.0},
+                ],
+                "text": "\n".join(primary_names),
+            },
+            {
+                "pass": "primary",
+                "image": "b.png",
+                "lines": [
+                    {"text": primary_names[0], "conf": 82.0},
+                    {"text": primary_names[1], "conf": 82.0},
+                    {"text": primary_names[2], "conf": 99.0},
+                    {"text": primary_names[3], "conf": 99.0},
+                    {"text": primary_names[4], "conf": 68.0},
+                    {"text": primary_names[5], "conf": 62.0},
+                    {"text": primary_names[6], "conf": 99.0},
+                ],
+                "text": "\n".join(primary_names),
+            },
+        ]
+        row_texts = ["\n".join(row_names)]
+        row_runs = [
+            {
+                "pass": "row",
+                "image": "src#8[0:0]/name.base",
+                "psm_values": [7, 6, 13],
+                "timeout_s": 1.0,
+                "lang": "eng",
+                "fast_mode": False,
+                "text": "vukino",
+                "error": "",
+            }
+        ]
+        stats: dict[str, dict[str, float | int | str]] = {
+            "rhugtlc": {"display": "[+] Rhug TLC", "support": 2, "occurrences": 5, "best_conf": 99.0},
+            "flatiqz": {"display": "flatiqz", "support": 2, "occurrences": 2, "best_conf": 92.0},
+            "kylobmth": {"display": "Kylo BMTH", "support": 2, "occurrences": 2, "best_conf": 99.0},
+            "mikixtlc": {"display": "mikix TLC", "support": 2, "occurrences": 2, "best_conf": 99.0},
+            "pxssesive": {"display": "Pxssesive", "support": 2, "occurrences": 2, "best_conf": 99.0},
+            "rqlledaim": {"display": "rqlled AIM", "support": 1, "occurrences": 2, "best_conf": 79.0},
+            "yukino": {"display": "yukino", "support": 1, "occurrences": 2, "best_conf": 99.0},
+            "vukino": {"display": "vukino", "support": 1, "occurrences": 3, "best_conf": 91.0},
+        }
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "recall_retry_enabled": False,
+                "row_pass_enabled": True,
+                "row_pass_min_candidates": 5,
+                "expected_candidates": 7,
+            }
+        )
+
+        def _candidate_stats_with_trace(_runs, _parse_ctx, *, trace_entries=None, include_debug_meta=False):
+            del _runs, _parse_ctx, include_debug_meta
+            if trace_entries is not None:
+                for idx, name in enumerate(primary_names, start=1):
+                    trace_entries.append(
+                        {
+                            "pass": "primary",
+                            "run_index": 1,
+                            "line_index": idx,
+                            "selected_key": ocr_capture_ops._simple_name_key(name),
+                            "support_incremented": True,
+                            "occurrence_incremented": True,
+                        }
+                    )
+                trace_entries.append(
+                    {
+                        "pass": "row",
+                        "run_index": 29,
+                        "line_index": 1,
+                        "image": "src#8[0:0]/name.base",
+                        "selected_key": "vukino",
+                        "support_incremented": True,
+                        "occurrence_incremented": True,
+                    }
+                )
+            return dict(stats)
+
+        with (
+            patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+            patch("controller.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=7),
+            patch(
+                "controller.ocr_capture_ops._run_ocr_pass",
+                return_value=(["\n".join(primary_names)], [], primary_runs),
+            ),
+            patch(
+                "controller.ocr_capture_ops._run_row_segmentation_pass",
+                return_value=(row_names, row_texts, row_runs),
+            ),
+            patch("controller.ocr_capture_ops._extract_names_from_texts", return_value=list(primary_names)),
+            patch("controller.ocr_capture_ops._prefer_row_candidates", return_value=True),
+            patch(
+                "controller.ocr_capture_ops._candidate_stats_from_runs",
+                side_effect=_candidate_stats_with_trace,
+            ),
+            patch(
+                "controller.ocr_capture_ops._build_final_names_from_runs",
+                return_value=[
+                    "[+] Rhug TLC",
+                    "flatiqz",
+                    "Kylo BMTH",
+                    "mikix TLC",
+                    "Pxssesive",
+                    "yukino",
+                    "vukino",
+                ],
+            ),
+            patch(
+                "controller.ocr_capture_ops._filter_low_confidence_candidates",
+                side_effect=lambda names, *_args, **_kwargs: list(names),
+            ),
+            patch(
+                "controller.ocr_capture_ops._expand_config_identifier_prefixes",
+                side_effect=lambda names: list(names),
+            ),
+        ):
+            names, _merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
+                [Path("dummy.png")],
+                ocr_cmd="auto",
+                cfg=cfg,
+            )
+
+        self.assertEqual(
+            names,
+            [
+                "[+] Rhug TLC",
+                "flatiqz",
+                "Kylo BMTH",
+                "mikix TLC",
+                "Pxssesive",
+                "rqlled AIM",
+                "yukino",
+            ],
+        )
+        self.assertIsNone(error)
+
     def test_row_pass_retries_full_width_when_right_edge_looks_clipped(self):
         call_no = {"n": 0}
 
@@ -871,6 +2674,594 @@ class TestOCRCaptureOps(unittest.TestCase):
 
         self.assertEqual(names, ["Aero", "AJAR", "Massith", "Mika"])
         self.assertIn("MNKE", merged_text)
+        self.assertIsNone(error)
+
+    def test_extract_names_keeps_expected_count_in_noisy_only_mode(self):
+        outputs = [
+            "Aero\nAJAR\nMassith\nMika\nMNKE",
+        ]
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_tesseract_multi(
+                image_path,
+                *,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+            ):
+                text = outputs.pop(0) if outputs else ""
+                lines = [
+                    SimpleNamespace(text="Aero", confidence=88.0),
+                    SimpleNamespace(text="AJAR", confidence=77.0),
+                    SimpleNamespace(text="Massith", confidence=74.0),
+                    SimpleNamespace(text="Mika", confidence=72.0),
+                    SimpleNamespace(text="MNKE", confidence=12.0),
+                ]
+                return SimpleNamespace(text=text, error=None, lines=lines)
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                return real_ocr_import.extract_candidate_names(text, **kwargs)
+
+            @staticmethod
+            def extract_candidate_names_multi(texts, **kwargs):
+                return real_ocr_import.extract_candidate_names_multi(texts, **kwargs)
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "recall_retry_enabled": False,
+                "row_pass_enabled": False,
+                "name_confidence_filter_noisy_only": True,
+                "name_min_confidence": 43.0,
+                "name_low_confidence_min_support": 2,
+                "expected_candidates": 5,
+            }
+        )
+
+        with patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
+            names, merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
+                [Path("dummy.png")],
+                ocr_cmd="auto",
+                cfg=cfg,
+            )
+
+        self.assertEqual(names, ["Aero", "AJAR", "Massith", "Mika", "MNKE"])
+        self.assertIn("MNKE", merged_text)
+        self.assertIsNone(error)
+
+    def test_extract_names_precount_rows_soft_cap_allows_plus_one_without_stable_primary(self):
+        outputs = [
+            "Alpha\nBravo\nCharlie\nDelta",
+        ]
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_tesseract_multi(
+                image_path,
+                *,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+            ):
+                text = outputs.pop(0) if outputs else ""
+                lines = [
+                    SimpleNamespace(text="Alpha", confidence=88.0),
+                    SimpleNamespace(text="Bravo", confidence=84.0),
+                    SimpleNamespace(text="Charlie", confidence=82.0),
+                    SimpleNamespace(text="Delta", confidence=80.0),
+                ]
+                return SimpleNamespace(text=text, error=None, lines=lines)
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                return real_ocr_import.extract_candidate_names(text, **kwargs)
+
+            @staticmethod
+            def extract_candidate_names_multi(texts, **kwargs):
+                return real_ocr_import.extract_candidate_names_multi(texts, **kwargs)
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "recall_retry_enabled": False,
+                "row_pass_enabled": False,
+                "name_confidence_filter_noisy_only": False,
+                "name_min_confidence": 0.0,
+                "name_low_confidence_min_support": 1,
+                "expected_candidates": 5,
+            }
+        )
+
+        with (
+            patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+            patch("controller.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=3),
+        ):
+            names, _merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
+                [Path("dummy.png")],
+                ocr_cmd="auto",
+                cfg=cfg,
+            )
+
+        self.assertEqual(names, ["Alpha", "Bravo", "Charlie", "Delta"])
+        self.assertIsNone(error)
+
+    def test_extract_names_precount_stable_rows_do_not_refill_duplicate_tail(self):
+        primary_names = [
+            "Line1",
+            "Line2",
+            "Line3",
+            "Line4",
+            "Line5",
+            "Line6",
+            "NoiseTail",
+        ]
+        line_entries = [
+            {"text": "Line1", "conf": 90.0},
+            {"text": "Line2", "conf": 90.0},
+            {"text": "Line3", "conf": 90.0},
+            {"text": "Line4", "conf": 90.0},
+            {"text": "Line5", "conf": 90.0},
+            {"text": "Line6", "conf": 90.0},
+        ]
+        primary_runs = [
+            {"pass": "primary", "image": "a.png", "lines": list(line_entries), "text": "\n".join(primary_names[:6])},
+            {"pass": "primary", "image": "b.png", "lines": list(line_entries), "text": "\n".join(primary_names[:6])},
+        ]
+        stats: dict[str, dict[str, float | int | str]] = {}
+        for idx, name in enumerate(primary_names, start=1):
+            key = ocr_capture_ops._simple_name_key(name)
+            if not key:
+                continue
+            stats[key] = {
+                "display": name,
+                "support": 2 if idx <= 6 else 1,
+                "occurrences": 2 if idx <= 6 else 1,
+                "best_conf": 80.0 if idx <= 6 else 35.0,
+            }
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "recall_retry_enabled": False,
+                "row_pass_enabled": False,
+                "name_confidence_filter_noisy_only": True,
+            }
+        )
+
+        with (
+            patch("controller.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=7),
+            patch(
+                "controller.ocr_capture_ops._run_ocr_pass",
+                return_value=(["\n".join(primary_names[:6])], [], primary_runs),
+            ),
+            patch("controller.ocr_capture_ops._extract_names_from_texts", return_value=list(primary_names)),
+            patch("controller.ocr_capture_ops._candidate_stats_from_runs", return_value=dict(stats)),
+            patch("controller.ocr_capture_ops._build_final_names_from_runs", return_value=list(primary_names)),
+            patch(
+                "controller.ocr_capture_ops._filter_low_confidence_candidates",
+                side_effect=lambda names, *_args, **_kwargs: list(names),
+            ),
+            patch(
+                "controller.ocr_capture_ops._order_names_by_line_trace",
+                side_effect=lambda names, *_args, **_kwargs: list(names),
+            ),
+            patch(
+                "controller.ocr_capture_ops._expand_config_identifier_prefixes",
+                side_effect=lambda names: list(names),
+            ),
+        ):
+            names, _merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
+                [Path("dummy.png")],
+                ocr_cmd="auto",
+                cfg=cfg,
+            )
+
+        self.assertEqual(names, primary_names[:6])
+        self.assertNotIn("NoiseTail", names)
+        self.assertIsNone(error)
+
+    def test_extract_names_refill_reorders_by_trace_instead_of_appending_tail(self):
+        primary_names = ["Line1", "Line2", "Line3", "Line4", "Line5", "Line6"]
+        primary_runs = [
+            {
+                "pass": "primary",
+                "image": "a.png",
+                "lines": [
+                    {"text": "Line1", "conf": 95.0},
+                    {"text": "Line2", "conf": 95.0},
+                    {"text": "Line3", "conf": 95.0},
+                    {"text": "Line4", "conf": 95.0},
+                    {"text": "Line5", "conf": 95.0},
+                    {"text": "Line6", "conf": 95.0},
+                ],
+                "text": "\n".join(primary_names),
+            },
+            {
+                "pass": "primary",
+                "image": "b.png",
+                "lines": [
+                    {"text": "Line1", "conf": 95.0},
+                    {"text": "Line2", "conf": 95.0},
+                    {"text": "Line3", "conf": 95.0},
+                    {"text": "Line4", "conf": 95.0},
+                    {"text": "Line5", "conf": 95.0},
+                    {"text": "Line6", "conf": 95.0},
+                ],
+                "text": "\n".join(primary_names),
+            },
+        ]
+        stats: dict[str, dict[str, float | int | str]] = {}
+        for name in primary_names:
+            key = ocr_capture_ops._simple_name_key(name)
+            if not key:
+                continue
+            stats[key] = {
+                "display": name,
+                "support": 2,
+                "occurrences": 2,
+                "best_conf": 90.0,
+            }
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "recall_retry_enabled": False,
+                "row_pass_enabled": False,
+                "name_confidence_filter_noisy_only": True,
+                "expected_candidates": 6,
+            }
+        )
+
+        def _candidate_stats_with_trace(_runs, _parse_ctx, *, trace_entries=None, include_debug_meta=False):
+            del _runs, _parse_ctx, include_debug_meta
+            if trace_entries is not None:
+                for idx, name in enumerate(primary_names, start=1):
+                    trace_entries.append(
+                        {
+                            "pass": "primary",
+                            "run_index": 1,
+                            "line_index": idx,
+                            "selected_key": ocr_capture_ops._simple_name_key(name),
+                            "support_incremented": True,
+                        }
+                    )
+            return dict(stats)
+
+        with (
+            patch("controller.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=6),
+            patch(
+                "controller.ocr_capture_ops._run_ocr_pass",
+                return_value=(["\n".join(primary_names)], [], primary_runs),
+            ),
+            patch("controller.ocr_capture_ops._extract_names_from_texts", return_value=list(primary_names)),
+            patch(
+                "controller.ocr_capture_ops._candidate_stats_from_runs",
+                side_effect=_candidate_stats_with_trace,
+            ),
+            patch(
+                "controller.ocr_capture_ops._build_final_names_from_runs",
+                return_value=["Line1", "Line3", "Line4", "Line5", "Line6"],
+            ),
+            patch(
+                "controller.ocr_capture_ops._filter_low_confidence_candidates",
+                side_effect=lambda names, *_args, **_kwargs: list(names),
+            ),
+            patch(
+                "controller.ocr_capture_ops._expand_config_identifier_prefixes",
+                side_effect=lambda names: list(names),
+            ),
+        ):
+            names, _merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
+                [Path("dummy.png")],
+                ocr_cmd="auto",
+                cfg=cfg,
+            )
+
+        self.assertEqual(names, ["Line1", "Line2", "Line3", "Line4", "Line5", "Line6"])
+        self.assertIsNone(error)
+
+    def test_extract_names_precount_clamp_keeps_middle_line_after_slot_duplicate_collapse(self):
+        primary_names = ["Line1", "flatiqz", "Line3", "Line4", "Line5", "Line6", "yukino"]
+        primary_runs = [
+            {
+                "pass": "primary",
+                "image": "a.png",
+                "lines": [
+                    {"text": "Line1", "conf": 95.0},
+                    {"text": "flatiqz", "conf": 60.0},
+                    {"text": "Line3", "conf": 95.0},
+                    {"text": "Line4", "conf": 95.0},
+                    {"text": "Line5", "conf": 95.0},
+                    {"text": "Line6", "conf": 95.0},
+                    {"text": "yukino", "conf": 95.0},
+                ],
+                "text": "\n".join(primary_names),
+            },
+            {
+                "pass": "primary",
+                "image": "b.png",
+                "lines": [
+                    {"text": "Line1", "conf": 95.0},
+                    {"text": "flatiqz", "conf": 60.0},
+                    {"text": "Line3", "conf": 95.0},
+                    {"text": "Line4", "conf": 95.0},
+                    {"text": "Line5", "conf": 95.0},
+                    {"text": "Line6", "conf": 95.0},
+                    {"text": "yukino", "conf": 95.0},
+                ],
+                "text": "\n".join(primary_names),
+            },
+        ]
+        stats: dict[str, dict[str, float | int | str]] = {
+            "line1": {"display": "Line1", "support": 2, "occurrences": 2, "best_conf": 95.0},
+            "flatiqz": {"display": "flatiqz", "support": 1, "occurrences": 2, "best_conf": 60.0},
+            "line3": {"display": "Line3", "support": 2, "occurrences": 2, "best_conf": 95.0},
+            "line4": {"display": "Line4", "support": 2, "occurrences": 2, "best_conf": 95.0},
+            "line5": {"display": "Line5", "support": 2, "occurrences": 2, "best_conf": 95.0},
+            "line6": {"display": "Line6", "support": 2, "occurrences": 2, "best_conf": 95.0},
+            "yukino": {"display": "yukino", "support": 2, "occurrences": 2, "best_conf": 95.0},
+            "vukino": {"display": "vukino", "support": 1, "occurrences": 3, "best_conf": 97.0},
+        }
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "recall_retry_enabled": False,
+                "row_pass_enabled": False,
+                "name_confidence_filter_noisy_only": True,
+                "expected_candidates": 7,
+            }
+        )
+
+        def _candidate_stats_with_trace(_runs, _parse_ctx, *, trace_entries=None, include_debug_meta=False):
+            del _runs, _parse_ctx, include_debug_meta
+            if trace_entries is not None:
+                for idx, name in enumerate(primary_names, start=1):
+                    trace_entries.append(
+                        {
+                            "pass": "primary",
+                            "run_index": 1,
+                            "line_index": idx,
+                            "selected_key": ocr_capture_ops._simple_name_key(name),
+                            "support_incremented": True,
+                            "occurrence_incremented": True,
+                        }
+                    )
+                trace_entries.append(
+                    {
+                        "pass": "row",
+                        "run_index": 30,
+                        "line_index": 1,
+                        "image": "src#7[0:0]/name.base",
+                        "selected_key": "vukino",
+                        "support_incremented": True,
+                        "occurrence_incremented": True,
+                    }
+                )
+            return dict(stats)
+
+        with (
+            patch("controller.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=7),
+            patch(
+                "controller.ocr_capture_ops._run_ocr_pass",
+                return_value=(["\n".join(primary_names)], [], primary_runs),
+            ),
+            patch("controller.ocr_capture_ops._extract_names_from_texts", return_value=list(primary_names)),
+            patch(
+                "controller.ocr_capture_ops._candidate_stats_from_runs",
+                side_effect=_candidate_stats_with_trace,
+            ),
+            patch(
+                "controller.ocr_capture_ops._build_final_names_from_runs",
+                return_value=["Line1", "flatiqz", "Line3", "Line4", "Line5", "Line6", "yukino", "vukino"],
+            ),
+            patch(
+                "controller.ocr_capture_ops._filter_low_confidence_candidates",
+                side_effect=lambda names, *_args, **_kwargs: list(names),
+            ),
+            patch(
+                "controller.ocr_capture_ops._expand_config_identifier_prefixes",
+                side_effect=lambda names: list(names),
+            ),
+        ):
+            names, _merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
+                [Path("dummy.png")],
+                ocr_cmd="auto",
+                cfg=cfg,
+            )
+
+        self.assertEqual(names, ["Line1", "flatiqz", "Line3", "Line4", "Line5", "Line6", "yukino"])
+        self.assertIsNone(error)
+
+    def test_extract_names_without_precount_rows_keeps_all_detected(self):
+        outputs = [
+            "Alpha\nBravo\nCharlie\nDelta",
+        ]
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_tesseract_multi(
+                image_path,
+                *,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+            ):
+                text = outputs.pop(0) if outputs else ""
+                lines = [
+                    SimpleNamespace(text="Alpha", confidence=88.0),
+                    SimpleNamespace(text="Bravo", confidence=84.0),
+                    SimpleNamespace(text="Charlie", confidence=82.0),
+                    SimpleNamespace(text="Delta", confidence=80.0),
+                ]
+                return SimpleNamespace(text=text, error=None, lines=lines)
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                return real_ocr_import.extract_candidate_names(text, **kwargs)
+
+            @staticmethod
+            def extract_candidate_names_multi(texts, **kwargs):
+                return real_ocr_import.extract_candidate_names_multi(texts, **kwargs)
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "recall_retry_enabled": False,
+                "row_pass_enabled": False,
+                "name_confidence_filter_noisy_only": False,
+                "name_min_confidence": 0.0,
+                "name_low_confidence_min_support": 1,
+                "expected_candidates": 5,
+            }
+        )
+
+        with (
+            patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()),
+            patch("controller.ocr_capture_ops._estimate_expected_rows_from_paths", return_value=None),
+        ):
+            names, _merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
+                [Path("dummy.png")],
+                ocr_cmd="auto",
+                cfg=cfg,
+            )
+
+        self.assertEqual(names, ["Alpha", "Bravo", "Charlie", "Delta"])
+        self.assertIsNone(error)
+
+    def test_extract_names_relaxed_line_fallback_recovers_missing_line(self):
+        outputs = [
+            "Aero\nAJAR\nMassith\nMika\nZeta | meta",
+        ]
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_tesseract_multi(
+                image_path,
+                *,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+            ):
+                text = outputs.pop(0) if outputs else ""
+                lines = [
+                    SimpleNamespace(text="Aero", confidence=88.0),
+                    SimpleNamespace(text="AJAR", confidence=87.0),
+                    SimpleNamespace(text="Massith", confidence=86.0),
+                    SimpleNamespace(text="Mika", confidence=85.0),
+                    SimpleNamespace(text="Zeta | meta", confidence=72.0),
+                ]
+                return SimpleNamespace(text=text, error=None, lines=lines)
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                value = str(text or "").strip()
+                enforce_special = bool(kwargs.get("enforce_special_char_constraint", True))
+                if value == "Zeta | meta":
+                    return [] if enforce_special else ["Zeta"]
+                if value:
+                    return [value]
+                return []
+
+            @staticmethod
+            def extract_candidate_names_multi(texts, **kwargs):
+                del kwargs
+                # Simulate a multi-pass miss of the last line.
+                return ["Aero", "AJAR", "Massith", "Mika"]
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "recall_retry_enabled": False,
+                "row_pass_enabled": False,
+                "line_relaxed_fallback": True,
+                "expected_candidates": 5,
+            }
+        )
+
+        with patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
+            names, merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
+                [Path("dummy.png")],
+                ocr_cmd="auto",
+                cfg=cfg,
+            )
+
+        self.assertIn("Zeta", names)
+        self.assertEqual(len(names), 5)
+        self.assertIn("Zeta | meta", merged_text)
+        self.assertIsNone(error)
+
+    def test_extract_names_relaxed_line_fallback_when_strict_only_returns_noise(self):
+        outputs = [
+            "Aero\nAJAR\nMassith\nMika\nZeta | meta",
+        ]
+
+        class _StubOCRImport:
+            @staticmethod
+            def run_tesseract_multi(
+                image_path,
+                *,
+                cmd,
+                psm_values,
+                timeout_s,
+                lang,
+                stop_on_first_success,
+            ):
+                text = outputs.pop(0) if outputs else ""
+                lines = [
+                    SimpleNamespace(text="Aero", confidence=88.0),
+                    SimpleNamespace(text="AJAR", confidence=87.0),
+                    SimpleNamespace(text="Massith", confidence=86.0),
+                    SimpleNamespace(text="Mika", confidence=85.0),
+                    SimpleNamespace(text="Zeta | meta", confidence=72.0),
+                ]
+                return SimpleNamespace(text=text, error=None, lines=lines)
+
+            @staticmethod
+            def extract_candidate_names(text, **kwargs):
+                value = str(text or "").strip()
+                enforce_special = bool(kwargs.get("enforce_special_char_constraint", True))
+                if value == "Zeta | meta":
+                    return ["TK"] if enforce_special else ["Zeta"]
+                if value:
+                    return [value]
+                return []
+
+            @staticmethod
+            def extract_candidate_names_multi(texts, **kwargs):
+                del kwargs
+                return ["Aero", "AJAR", "Massith", "Mika"]
+
+        cfg = self._ocr_cfg()
+        cfg.update(
+            {
+                "recall_retry_enabled": False,
+                "row_pass_enabled": False,
+                "line_relaxed_fallback": True,
+                "expected_candidates": 5,
+            }
+        )
+
+        with patch("controller.ocr_capture_ops._ocr_import_module", return_value=_StubOCRImport()):
+            names, merged_text, error = ocr_capture_ops._extract_names_from_ocr_files(
+                [Path("dummy.png")],
+                ocr_cmd="auto",
+                cfg=cfg,
+            )
+
+        self.assertIn("Zeta", names)
+        self.assertEqual(len(names), 5)
+        self.assertIn("Zeta | meta", merged_text)
         self.assertIsNone(error)
 
     def test_append_ocr_debug_log_writes_file(self):

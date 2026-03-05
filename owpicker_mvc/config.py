@@ -163,8 +163,6 @@ OCR_RECALL_RETRY_TIMEOUT_SCALE = 1.35
 # If low-count OCR results remain after retry, relax support filtering to avoid
 # dropping single-pass names.
 OCR_RECALL_RELAX_SUPPORT_ON_LOW_COUNT = True
-# Used for OCR candidate quality scoring and pass selection.
-OCR_EXPECTED_CANDIDATES = 5
 # Row-based fallback OCR for low-count results (tries to OCR each detected text row).
 OCR_ROW_PASS_ENABLED = True
 OCR_ROW_PASS_ALWAYS_RUN = True
@@ -188,6 +186,9 @@ OCR_ROW_PASS_SCALE_FACTOR = 4
 OCR_ROW_PASS_INCLUDE_MONO = True
 OCR_ROW_PASS_TIMEOUT_SCALE = 0.55
 OCR_ROW_PASS_PSMS = [7, 13, 6]
+# Keep one OCR winner per detected visual row to avoid duplicates from
+# alternate render variants of the same line.
+OCR_ROW_PASS_SINGLE_NAME_PER_ROW = True
 # OCR debug: shows a detailed report dialog after each OCR run.
 OCR_DEBUG_SHOW_REPORT = False
 # Keep enabled with OCR_DEBUG_SHOW_REPORT so the dialog receives the full report text.
@@ -200,6 +201,9 @@ OCR_DEBUG_LOG_MAX_CHARS = 200000
 # Per-line parser diagnostics (accepted/dropped + reason) inside debug report.
 OCR_DEBUG_LINE_ANALYSIS = True
 OCR_DEBUG_LINE_MAX_ENTRIES_PER_RUN = 60
+# High-level mapping trace: each OCR line with strict/relaxed parse + final selection.
+OCR_DEBUG_TRACE_LINE_MAPPING = True
+OCR_DEBUG_TRACE_MAX_ENTRIES = 220
 # QUIET erzwingt zusätzlich: keine OCR-Debug-Reports/Dateilogs.
 _disable_flags_if_quiet(
     "OCR_DEBUG_SHOW_REPORT",
@@ -224,6 +228,9 @@ OCR_NAME_MIN_CHARS = 2
 # Allow longer OCR names so trailing parts are not dropped prematurely.
 OCR_NAME_MAX_CHARS = 64
 OCR_NAME_MAX_WORDS = 8
+# Add at most this many line-parser fallback candidates when strict multi-line
+# extraction missed lines (helps recover borderline rows without over-noising).
+OCR_LINE_RECALL_MAX_ADDITIONS = 2
 OCR_NAME_MAX_DIGIT_RATIO = 0.45
 # If True, OCR parsing aggressively trims on special characters/icons.
 # Disabled by default to avoid cutting player lines too early.
