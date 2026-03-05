@@ -126,12 +126,17 @@ class MainWindowStartupMixin:
                 pass
             return
         tasks: list[tuple[str, callable]] = []
+        if self._cfg("STARTUP_WHEEL_CACHE_WARMUP", True):
+            tasks.append(("wheel_cache", self._startup_task_wheel_cache))
         if self._cfg("SOUND_WARMUP_ON_START", False):
             tasks.append(("sound_warmup", self._startup_task_sound))
-        if self._cfg("TOOLTIP_CACHE_ON_START", False) and not self._cfg("DISABLE_TOOLTIPS", False):
-            tasks.append(("tooltip_cache", self._startup_task_tooltips))
+        # Tooltip cache refresh is intentionally not part of startup warmup.
+        # It is handled asynchronously after mode choice/post-init so warmup
+        # remains focused on expensive, user-visible startup costs.
         if self._cfg("MAP_PREBUILD_ON_START", False):
             tasks.append(("map_prebuild", self._startup_task_map_prebuild))
+        if self._cfg("STARTUP_OCR_PRELOAD", True):
+            tasks.append(("ocr_preload", self._startup_task_ocr_preload))
         min_block_ms = max(0, int(self._cfg("STARTUP_MIN_BLOCK_INPUT_MS", 0)))
         # Fast-path for normal startup: no warmup tasks and no explicit lock.
         if not tasks and min_block_ms <= 0:
@@ -208,6 +213,9 @@ class MainWindowStartupMixin:
         self._startup_task_queue = []
         self._startup_current_task = None
         self._startup_waiting_for_map = False
+        self._startup_map_prebuild_deadline = None
+        self._startup_waiting_for_ocr_preload = False
+        self._startup_ocr_preload_deadline = None
         # Heavy UI updates were deferred; apply once warmup is done.
         self._flush_pending_heavy_ui_updates(step_ms=int(self._post_choice_step_ms))
         self._sync_mode_stack()
@@ -228,6 +236,103 @@ class MainWindowStartupMixin:
             on_done=lambda: self._startup_task_done("tooltip_cache"),
         )
 
+    def _startup_task_wheel_cache(self) -> None:
+        if not self._cfg("STARTUP_WHEEL_CACHE_WARMUP", True):
+            self._startup_task_done("wheel_cache")
+            return
+        queue: list[object] = []
+        seen: set[int] = set()
+        for _role, wheel in self._role_wheels():
+            if not wheel:
+                continue
+            wid = id(wheel)
+            if wid in seen:
+                continue
+            seen.add(wid)
+            queue.append(wheel)
+        map_main = getattr(self, "map_main", None)
+        if map_main is not None:
+            wid = id(map_main)
+            if wid not in seen:
+                queue.append(map_main)
+
+        warmed = 0
+        for wheel_view in queue:
+            wheel_disc = getattr(wheel_view, "wheel", None)
+            if wheel_disc is None or not hasattr(wheel_disc, "_ensure_cache"):
+                continue
+            try:
+                wheel_disc._ensure_cache(force=False)
+                warmed += 1
+            except Exception:
+                pass
+        self._trace_event("startup_warmup:wheel_cache", warmed=warmed, total=len(queue))
+        self._startup_task_done("wheel_cache")
+
+    def _startup_task_ocr_preload(self) -> None:
+        if not self._cfg("STARTUP_OCR_PRELOAD", True):
+            self._startup_task_done("ocr_preload")
+            return
+        if not bool(self._cfg("OCR_BACKGROUND_PRELOAD_ENABLED", True)):
+            self._startup_task_done("ocr_preload")
+            return
+        if bool(getattr(self, "_ocr_runtime_activated", False)) or bool(
+            getattr(self, "_ocr_preload_done", False)
+        ):
+            self._startup_task_done("ocr_preload")
+            return
+        run_preload = getattr(self, "_run_ocr_background_preload", None)
+        if not callable(run_preload):
+            self._startup_task_done("ocr_preload")
+            return
+        self._startup_waiting_for_ocr_preload = True
+        max_wait_ms = max(250, int(self._cfg("STARTUP_OCR_PRELOAD_MAX_WAIT_MS", 1800)))
+        self._startup_ocr_preload_deadline = time.monotonic() + (max_wait_ms / 1000.0)
+        try:
+            run_preload()
+        except Exception:
+            self._startup_waiting_for_ocr_preload = False
+            self._startup_ocr_preload_deadline = None
+            self._startup_task_done("ocr_preload")
+            return
+        self._poll_startup_ocr_preload()
+
+    def _poll_startup_ocr_preload(self) -> None:
+        if not bool(getattr(self, "_startup_waiting_for_ocr_preload", False)):
+            return
+        if bool(getattr(self, "_ocr_preload_done", False)) or bool(getattr(self, "_ocr_preload_attempted", False)):
+            self._startup_waiting_for_ocr_preload = False
+            self._startup_ocr_preload_deadline = None
+            self._startup_task_done("ocr_preload")
+            return
+        deadline = getattr(self, "_startup_ocr_preload_deadline", None)
+        if deadline is not None and time.monotonic() >= float(deadline):
+            self._startup_waiting_for_ocr_preload = False
+            self._startup_ocr_preload_deadline = None
+            self._trace_event("startup_warmup:ocr_preload_timeout")
+            self._startup_task_done("ocr_preload")
+            return
+        wait_ms = max(40, int(self._cfg("POST_CHOICE_INIT_BUSY_RETRY_MS", 220)))
+        preload_job = getattr(self, "_ocr_preload_job", None)
+        preload_timer = getattr(self, "_ocr_preload_timer", None)
+        timer_active = False
+        if preload_timer is not None:
+            try:
+                timer_active = bool(preload_timer.isActive())
+            except Exception:
+                timer_active = False
+        if not preload_job and not timer_active:
+            run_preload = getattr(self, "_run_ocr_background_preload", None)
+            if callable(run_preload):
+                try:
+                    run_preload()
+                except Exception:
+                    self._startup_waiting_for_ocr_preload = False
+                    self._startup_ocr_preload_deadline = None
+                    self._startup_task_done("ocr_preload")
+                    return
+        QtCore.QTimer.singleShot(wait_ms, self._poll_startup_ocr_preload)
+
     def _startup_task_map_prebuild(self) -> None:
         if not self._cfg("MAP_PREBUILD_ON_START", False):
             self._startup_task_done("map_prebuild")
@@ -236,7 +341,30 @@ class MainWindowStartupMixin:
             self._startup_task_done("map_prebuild")
             return
         self._startup_waiting_for_map = True
+        max_wait_ms = max(400, int(self._cfg("STARTUP_MAP_PREBUILD_MAX_WAIT_MS", 2200)))
+        self._startup_map_prebuild_deadline = time.monotonic() + (max_wait_ms / 1000.0)
         self._schedule_map_prebuild()
+        self._poll_startup_map_prebuild()
+
+    def _poll_startup_map_prebuild(self) -> None:
+        if not bool(getattr(self, "_startup_waiting_for_map", False)):
+            return
+        if bool(getattr(self, "_map_initialized", False)) and bool(getattr(self, "_map_lists_ready", False)):
+            self._startup_waiting_for_map = False
+            self._startup_map_prebuild_deadline = None
+            self._startup_task_done("map_prebuild")
+            return
+        deadline = getattr(self, "_startup_map_prebuild_deadline", None)
+        if deadline is not None and time.monotonic() >= float(deadline):
+            self._startup_waiting_for_map = False
+            self._startup_map_prebuild_deadline = None
+            self._trace_event("startup_warmup:map_prebuild_timeout")
+            self._startup_task_done("map_prebuild")
+            return
+        if not bool(getattr(self, "_map_prebuild_in_progress", False)):
+            self._schedule_map_prebuild()
+        wait_ms = max(60, int(self._cfg("POST_CHOICE_INIT_BUSY_RETRY_MS", 220)))
+        QtCore.QTimer.singleShot(wait_ms, self._poll_startup_map_prebuild)
 
     def _finalize_startup(self) -> None:
         if getattr(self, "_startup_finalize_done", False):
@@ -310,6 +438,11 @@ class MainWindowStartupMixin:
         self._schedule_map_prebuild()
         self._post_choice_init_done = True
         self._schedule_wheel_cache_warmup(delay_ms=0)
+        if hasattr(self, "_schedule_ocr_background_preload"):
+            try:
+                self._schedule_ocr_background_preload(reason="post_choice_init")
+            except Exception:
+                pass
         self._sync_mode_stack()
         self._trace_event("run_post_choice_init:done")
         self._refresh_app_event_filter_state()
@@ -350,4 +483,5 @@ class MainWindowStartupMixin:
             QtCore.QTimer.singleShot(0, lambda: self._on_mode_button_clicked("maps"))
         if getattr(self, "_startup_waiting_for_map", False):
             self._startup_waiting_for_map = False
+            self._startup_map_prebuild_deadline = None
             self._startup_task_done("map_prebuild")

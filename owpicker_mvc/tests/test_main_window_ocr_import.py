@@ -1,4 +1,5 @@
 import unittest
+import time
 
 from controller.main_window import MainWindow
 from controller.ocr.ocr_role_import import PendingOCRImport
@@ -293,6 +294,131 @@ class TestMainWindowOCRImport(unittest.TestCase):
 
         self.assertEqual(cancel_calls["count"], 1)
         self.assertEqual(schedule_calls["count"], 1)
+
+    def test_schedule_ocr_background_preload_starts_timer_once(self):
+        class _FakeTimer:
+            def __init__(self) -> None:
+                self.started: list[int] = []
+
+            def start(self, timeout_ms: int) -> None:
+                self.started.append(int(timeout_ms))
+
+        mw = self._make_window()
+        mw.settings.update(
+            {
+                "OCR_BACKGROUND_PRELOAD_ENABLED": True,
+                "OCR_BACKGROUND_PRELOAD_DELAY_MS": 1234,
+            }
+        )
+        mw._closing = False
+        mw.pending = 0
+        mw._background_services_paused = False
+        mw._ocr_async_job = None
+        mw._ocr_preload_job = None
+        mw._ocr_runtime_activated = False
+        mw._ocr_preload_done = False
+        mw._ocr_preload_attempted = False
+        timer = _FakeTimer()
+        mw._ensure_ocr_background_preload_timer = lambda: timer
+
+        MainWindow._schedule_ocr_background_preload(mw, reason="unit")
+
+        self.assertEqual(timer.started, [1234])
+
+    def test_run_ocr_background_preload_defers_when_busy(self):
+        mw = self._make_window()
+        mw.settings.update(
+            {
+                "OCR_BACKGROUND_PRELOAD_ENABLED": True,
+                "OCR_BACKGROUND_PRELOAD_BUSY_RETRY_MS": 777,
+            }
+        )
+        mw._closing = False
+        mw.pending = 1
+        mw._background_services_paused = False
+        mw._ocr_async_job = None
+        mw._ocr_preload_job = None
+        mw._ocr_runtime_activated = False
+        mw._ocr_preload_done = False
+        mw._ocr_preload_attempted = False
+        calls: list[tuple[int | None, str]] = []
+        mw._schedule_ocr_background_preload = (
+            lambda *, delay_ms=None, reason="": calls.append((delay_ms, str(reason)))
+        )
+
+        MainWindow._run_ocr_background_preload(mw)
+
+        self.assertEqual(calls, [(777, "busy")])
+
+    def test_mark_ocr_runtime_activated_marks_preload_as_done(self):
+        mw = self._make_window()
+        mw._ocr_runtime_activated = False
+        mw._ocr_preload_done = False
+        mw._ocr_preload_attempted = False
+        cancel_calls = {"count": 0}
+        mw._cancel_ocr_background_preload = lambda: cancel_calls.__setitem__("count", cancel_calls["count"] + 1)
+
+        MainWindow._mark_ocr_runtime_activated(mw)
+
+        self.assertTrue(mw._ocr_runtime_activated)
+        self.assertTrue(mw._ocr_preload_done)
+        self.assertTrue(mw._ocr_preload_attempted)
+        self.assertEqual(cancel_calls["count"], 1)
+
+    def test_stop_ocr_background_preload_job_clears_running_thread(self):
+        class _FakeThread:
+            def __init__(self) -> None:
+                self.interrupt_calls = 0
+                self.quit_calls = 0
+
+            def isRunning(self) -> bool:
+                return True
+
+            def requestInterruption(self) -> None:
+                self.interrupt_calls += 1
+
+            def quit(self) -> None:
+                self.quit_calls += 1
+
+        mw = self._make_window()
+        thread = _FakeThread()
+        mw._ocr_preload_job = {"thread": thread}
+        traces: list[tuple[str, dict]] = []
+        mw._trace_event = lambda name, **extra: traces.append((name, extra))
+
+        MainWindow._stop_ocr_background_preload_job(mw, reason="unit")
+
+        self.assertIsNone(mw._ocr_preload_job)
+        self.assertEqual(thread.interrupt_calls, 1)
+        self.assertEqual(thread.quit_calls, 1)
+        self.assertTrue(any(name == "ocr_preload_cancelled" for name, _ in traces))
+
+    def test_ocr_background_preload_block_reason_uses_startup_cooldown(self):
+        mw = self._make_window()
+        mw.settings.update({"OCR_BACKGROUND_PRELOAD_MIN_UPTIME_MS": 5000})
+        mw._closing = False
+        mw.pending = 0
+        mw._background_services_paused = False
+        mw._choice_shown_at = time.monotonic()
+        mw._overlay_choice_active = lambda: False
+        mw._has_active_spin_animations = lambda include_internal_flags=False: False
+
+        reason = MainWindow._ocr_background_preload_block_reason(mw)
+
+        self.assertEqual(reason, "startup_cooldown")
+
+    def test_prepare_spin_request_stops_ocr_preload_job_early(self):
+        mw = self._make_window()
+        mw._post_choice_init_done = True
+        mw._restoring_state = False
+        mw._recover_stale_pending_if_idle = lambda source: None
+        calls: list[str] = []
+        mw._stop_ocr_background_preload_job = lambda *, reason="": calls.append(str(reason))
+
+        ok = MainWindow._prepare_spin_request(mw, "spin_all")
+
+        self.assertTrue(ok)
+        self.assertEqual(calls, ["spin_all_request"])
 
 
 if __name__ == "__main__":

@@ -93,8 +93,18 @@ _disable_flags_if_quiet(
 )
 
 # ---------- Performance / Resource policy ----------
-MAP_PREBUILD_ON_START = False
-SOUND_WARMUP_ON_START = False
+MAP_PREBUILD_ON_START = True
+SOUND_WARMUP_ON_START = True
+# Warm wheel caches during startup warmup so first spin starts immediately.
+STARTUP_WHEEL_CACHE_WARMUP = True
+# Run OCR preload during startup warmup when enabled.
+STARTUP_OCR_PRELOAD = True
+# Do not block mode-choice forever if OCR preload stalls.
+STARTUP_OCR_PRELOAD_MAX_WAIT_MS = 1800
+# Do not block mode-choice forever if map prebuild stalls.
+STARTUP_MAP_PREBUILD_MAX_WAIT_MS = 2200
+# Tooltip cache refresh remains asynchronous (post-choice/post-init) and is
+# intentionally not counted as a startup warmup task.
 TOOLTIP_CACHE_ON_START = False
 SOUND_WARMUP_LAZY_STEP_MS = 25
 # Use a lightweight control lock during spin so large name lists are not fully
@@ -129,6 +139,17 @@ OCR_EASYOCR_GPU = "auto"
 OCR_EASYOCR_DOWNLOAD_ENABLED = False
 # Keep OCR runtime fully asleep until the first OCR import click.
 OCR_RUNTIME_SLEEP_UNTIL_USED = True
+# Optional low-priority background preload after startup warmup.
+# Helps reduce first-click OCR latency while keeping startup responsive.
+OCR_BACKGROUND_PRELOAD_ENABLED = True
+OCR_BACKGROUND_PRELOAD_DELAY_MS = 2500
+# Keep preload off during the first startup seconds to avoid contention with
+# the first user interaction/spin click.
+OCR_BACKGROUND_PRELOAD_MIN_UPTIME_MS = 8000
+# Allow startup warmup to bypass overlay/cooldown gating for upfront preload.
+OCR_BACKGROUND_PRELOAD_ALLOW_DURING_STARTUP = True
+# If startup/spin is still busy when preload is due, retry later.
+OCR_BACKGROUND_PRELOAD_BUSY_RETRY_MS = 1800
 # Release cached OCR runtimes after idle (0 disables automatic release).
 # Lower value = faster sleep when OCR is not used.
 OCR_IDLE_CACHE_RELEASE_MS = 30000

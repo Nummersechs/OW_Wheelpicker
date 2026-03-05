@@ -187,6 +187,9 @@ class MainWindow(
         self._startup_task_queue: list[tuple[str, Callable[[], None]]] = []
         self._startup_current_task: str | None = None
         self._startup_waiting_for_map = False
+        self._startup_map_prebuild_deadline: float | None = None
+        self._startup_waiting_for_ocr_preload = False
+        self._startup_ocr_preload_deadline: float | None = None
         self._blocked_input_total = 0
         self._blocked_input_counts: dict[int, int] = {}
         self._blocked_input_first_t: float | None = None
@@ -238,6 +241,9 @@ class MainWindow(
         self._pending_ocr_import: PendingOCRImport | None = None
         self._ocr_async_job = None
         self._ocr_runtime_activated = False
+        self._ocr_preload_job = None
+        self._ocr_preload_done = False
+        self._ocr_preload_attempted = False
         self._role_ocr_buttons: dict[str, QtWidgets.QPushButton] = {}
         central, root = self._build_root()
         self._build_header(root, saved)

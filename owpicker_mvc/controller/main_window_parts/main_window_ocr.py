@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from difflib import SequenceMatcher
+import time
 from PySide6 import QtCore, QtWidgets
 
 import i18n
@@ -12,6 +13,55 @@ from ..ocr.ocr_role_import import (
     resolve_selected_candidates as resolve_selected_ocr_candidates,
 )
 from utils import ui_helpers
+
+
+class _OCRPreloadWorker(QtCore.QObject):
+    finished = QtCore.Signal(bool, str)
+
+    def __init__(self, *, easyocr_kwargs: dict[str, object]) -> None:
+        super().__init__()
+        self._easyocr_kwargs = dict(easyocr_kwargs)
+
+    @QtCore.Slot()
+    def run(self) -> None:
+        try:
+            from ..ocr import ocr_import
+        except Exception as exc:
+            self.finished.emit(False, f"import-error:{exc!r}")
+            return
+
+        availability_fn = getattr(ocr_import, "easyocr_available", None)
+        if not callable(availability_fn):
+            self.finished.emit(False, "easyocr-availability-missing")
+            return
+        try:
+            ready = bool(availability_fn(**self._easyocr_kwargs))
+        except Exception as exc:
+            self.finished.emit(False, f"availability-error:{exc!r}")
+            return
+
+        if ready:
+            self.finished.emit(True, "ready")
+            return
+
+        diag_fn = getattr(ocr_import, "easyocr_resolution_diagnostics", None)
+        if callable(diag_fn):
+            try:
+                diag = str(diag_fn(**self._easyocr_kwargs)).strip()
+            except Exception as exc:
+                self.finished.emit(False, f"diagnostics-error:{exc!r}")
+                return
+            self.finished.emit(False, diag or "not-ready")
+            return
+        self.finished.emit(False, "not-ready")
+
+
+class _OCRPreloadRelay(QtCore.QObject):
+    done = QtCore.Signal(bool, str)
+
+    @QtCore.Slot(bool, str)
+    def forward_done(self, ok: bool, detail: str) -> None:
+        self.done.emit(bool(ok), str(detail or ""))
 
 
 class MainWindowOCRMixin:
@@ -58,19 +108,31 @@ class MainWindowOCRMixin:
 
         return names
 
+    def _ocr_name_similarity_score_keys(self, left: str, right: str) -> float:
+        left_key = str(left or "").strip()
+        right_key = str(right or "").strip()
+        if not left_key or not right_key:
+            return 0.0
+        if left_key == right_key:
+            return 1.0
+
+        max_len = max(len(left_key), len(right_key))
+        if max_len >= 8:
+            len_delta_ratio = abs(len(left_key) - len(right_key)) / max_len
+            if len_delta_ratio > 0.45:
+                return 0.0
+
+        score = SequenceMatcher(None, left_key, right_key).ratio()
+        if left_key in right_key or right_key in left_key:
+            score += 0.12
+        if left_key[:1] == right_key[:1]:
+            score += 0.05
+        return min(1.0, score)
+
     def _ocr_name_similarity_score(self, ocr_name: str, hint_name: str) -> float:
         left = normalize_name_alnum_key(ocr_name)
         right = normalize_name_alnum_key(hint_name)
-        if not left or not right:
-            return 0.0
-        if left == right:
-            return 1.0
-        score = SequenceMatcher(None, left, right).ratio()
-        if left in right or right in left:
-            score += 0.12
-        if left[:1] == right[:1]:
-            score += 0.05
-        return min(1.0, score)
+        return self._ocr_name_similarity_score_keys(left, right)
 
     def _apply_ocr_name_hints(self, role_key: str, names: list[str]) -> list[str]:
         if not bool(self._cfg("OCR_USE_NAME_HINTS", False)):
@@ -82,6 +144,18 @@ class MainWindowOCRMixin:
         min_score = float(self._cfg("OCR_HINT_CORRECTION_MIN_SCORE", 0.62))
         low_conf_min_score = float(self._cfg("OCR_HINT_CORRECTION_LOW_CONF_MIN_SCORE", 0.28))
 
+        hint_entries: list[tuple[str, str]] = []
+        seen_hint_keys: set[str] = set()
+        for hint in list(hints or []):
+            hint_text = str(hint or "").strip()
+            hint_key = normalize_ocr_name_key(hint_text)
+            if not hint_key or hint_key in seen_hint_keys:
+                continue
+            seen_hint_keys.add(hint_key)
+            hint_entries.append((hint_text, hint_key))
+        if not hint_entries:
+            return list(names or [])
+
         normalized_input = [str(value or "").strip() for value in list(names or []) if str(value or "").strip()]
         if not normalized_input:
             return []
@@ -89,30 +163,28 @@ class MainWindowOCRMixin:
 
         corrected: list[str] = []
         used_hints: set[str] = set()
-        hint_keys = {
-            normalize_ocr_name_key(hint)
-            for hint in hints
-            if normalize_ocr_name_key(hint)
-        }
+        hint_keys = {hint_key for _hint, hint_key in hint_entries}
         unmatched_input = 0
         short_count = 0
 
         for raw_name in normalized_input:
+            raw_key = normalize_ocr_name_key(raw_name)
             if len(raw_name) <= 3:
                 short_count += 1
             best_hint = ""
+            best_hint_key = ""
             best_score = 0.0
-            for hint in hints:
-                hint_key = normalize_ocr_name_key(hint)
+            for hint, hint_key in hint_entries:
                 if not hint_key or hint_key in used_hints:
                     continue
-                score = self._ocr_name_similarity_score(raw_name, hint)
+                score = self._ocr_name_similarity_score_keys(raw_key, hint_key)
                 if score > best_score:
                     best_score = score
                     best_hint = hint
+                    best_hint_key = hint_key
             if best_hint and best_score >= min_score:
                 corrected.append(best_hint)
-                used_hints.add(normalize_ocr_name_key(best_hint))
+                used_hints.add(best_hint_key)
             else:
                 corrected.append(raw_name)
                 unmatched_input += 1
@@ -123,36 +195,39 @@ class MainWindowOCRMixin:
         )
         if looks_noisy:
             for idx, raw_name in enumerate(list(corrected)):
-                if normalize_ocr_name_key(raw_name) in hint_keys:
+                raw_key = normalize_ocr_name_key(raw_name)
+                if raw_key in hint_keys:
                     continue
                 best_hint = ""
+                best_hint_key = ""
                 best_score = 0.0
-                for hint in hints:
-                    hint_key = normalize_ocr_name_key(hint)
+                for hint, hint_key in hint_entries:
                     if not hint_key or hint_key in used_hints:
                         continue
-                    score = self._ocr_name_similarity_score(raw_name, hint)
+                    score = self._ocr_name_similarity_score_keys(raw_key, hint_key)
                     if score > best_score:
                         best_score = score
                         best_hint = hint
+                        best_hint_key = hint_key
                 if best_hint and best_score >= low_conf_min_score:
                     corrected[idx] = best_hint
-                    used_hints.add(normalize_ocr_name_key(best_hint))
+                    used_hints.add(best_hint_key)
 
-            if len(hints) <= (expected + 3):
+            if len(hint_entries) <= (expected + 3):
                 for idx, raw_name in enumerate(list(corrected)):
                     if normalize_ocr_name_key(raw_name) in hint_keys:
                         continue
                     replacement = ""
-                    for hint in hints:
-                        hint_key = normalize_ocr_name_key(hint)
+                    replacement_key = ""
+                    for hint, hint_key in hint_entries:
                         if not hint_key or hint_key in used_hints:
                             continue
                         replacement = hint
+                        replacement_key = hint_key
                         break
                     if replacement:
                         corrected[idx] = replacement
-                        used_hints.add(normalize_ocr_name_key(replacement))
+                        used_hints.add(replacement_key)
 
         deduped: list[str] = []
         seen: set[str] = set()
@@ -164,8 +239,7 @@ class MainWindowOCRMixin:
             deduped.append(value)
 
         if looks_noisy and len(deduped) < expected:
-            for hint in hints:
-                key_norm = normalize_ocr_name_key(hint)
+            for hint, key_norm in hint_entries:
                 if not key_norm or key_norm in seen:
                     continue
                 deduped.append(hint)
@@ -263,6 +337,227 @@ class MainWindowOCRMixin:
 
     def _mark_ocr_runtime_activated(self) -> None:
         self._ocr_runtime_activated = True
+        self._ocr_preload_done = True
+        self._ocr_preload_attempted = True
+        if hasattr(self, "_cancel_ocr_background_preload"):
+            try:
+                self._cancel_ocr_background_preload()
+            except Exception:
+                pass
+
+    def _ocr_background_preload_enabled(self) -> bool:
+        return bool(self._cfg("OCR_BACKGROUND_PRELOAD_ENABLED", True))
+
+    def _easyocr_resolution_kwargs(self) -> dict[str, object]:
+        def _optional_str(key: str) -> str | None:
+            value = str(self._cfg(key, "") or "").strip()
+            return value or None
+
+        return {
+            "lang": _optional_str("OCR_EASYOCR_LANG"),
+            "model_dir": _optional_str("OCR_EASYOCR_MODEL_DIR"),
+            "user_network_dir": _optional_str("OCR_EASYOCR_USER_NETWORK_DIR"),
+            "gpu": self._cfg("OCR_EASYOCR_GPU", "auto"),
+            "download_enabled": bool(self._cfg("OCR_EASYOCR_DOWNLOAD_ENABLED", False)),
+            "quiet": bool(self._cfg("QUIET", False)),
+        }
+
+    def _ensure_ocr_background_preload_timer(self) -> QtCore.QTimer:
+        timer = getattr(self, "_ocr_preload_timer", None)
+        if timer is not None:
+            return timer
+        timer = QtCore.QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(self._run_ocr_background_preload)
+        if hasattr(self, "_timers"):
+            self._timers.register(timer)
+        self._ocr_preload_timer = timer
+        return timer
+
+    def _cancel_ocr_background_preload(self) -> None:
+        timer = getattr(self, "_ocr_preload_timer", None)
+        if timer is None:
+            return
+        try:
+            timer.stop()
+        except Exception:
+            pass
+
+    def _stop_ocr_background_preload_job(self, *, reason: str = "") -> None:
+        job = getattr(self, "_ocr_preload_job", None)
+        if not isinstance(job, dict):
+            self._ocr_preload_job = None
+            return
+        thread = job.get("thread")
+        was_running = False
+        if thread is not None:
+            try:
+                was_running = bool(thread.isRunning())
+            except Exception:
+                was_running = False
+        if was_running:
+            try:
+                thread.requestInterruption()
+            except Exception:
+                pass
+            try:
+                thread.quit()
+            except Exception:
+                pass
+        self._ocr_preload_job = None
+        if hasattr(self, "_trace_event"):
+            try:
+                self._trace_event(
+                    "ocr_preload_cancelled",
+                    reason=str(reason or "unspecified"),
+                    was_running=bool(was_running),
+                )
+            except Exception:
+                pass
+
+    def _schedule_ocr_background_preload(
+        self,
+        *,
+        delay_ms: int | None = None,
+        reason: str = "",
+    ) -> None:
+        if getattr(self, "_closing", False):
+            return
+        if not self._ocr_background_preload_enabled():
+            return
+        if bool(getattr(self, "_ocr_preload_done", False)):
+            return
+        if bool(getattr(self, "_ocr_preload_attempted", False)):
+            return
+        if bool(getattr(self, "_ocr_runtime_activated", False)):
+            self._ocr_preload_done = True
+            self._ocr_preload_attempted = True
+            return
+        if getattr(self, "_ocr_async_job", None) or getattr(self, "_ocr_preload_job", None):
+            return
+        if delay_ms is None:
+            delay_ms = int(self._cfg("OCR_BACKGROUND_PRELOAD_DELAY_MS", 2500))
+        timer = self._ensure_ocr_background_preload_timer()
+        delay = max(0, int(delay_ms))
+        timer.start(delay)
+        if hasattr(self, "_trace_event"):
+            try:
+                self._trace_event(
+                    "ocr_preload_scheduled",
+                    delay_ms=delay,
+                    reason=str(reason or "unspecified"),
+                )
+            except Exception:
+                pass
+
+    def _ocr_background_preload_block_reason(self) -> str | None:
+        startup_warmup = bool(getattr(self, "_startup_warmup_running", False))
+        allow_during_startup = bool(self._cfg("OCR_BACKGROUND_PRELOAD_ALLOW_DURING_STARTUP", True))
+        if getattr(self, "_closing", False):
+            return "closing"
+        if self._overlay_choice_active() and not (startup_warmup and allow_during_startup):
+            return "overlay_choice"
+        min_uptime_ms = max(0, int(self._cfg("OCR_BACKGROUND_PRELOAD_MIN_UPTIME_MS", 8000)))
+        if min_uptime_ms > 0 and not (startup_warmup and allow_during_startup):
+            shown_at = getattr(self, "_choice_shown_at", None)
+            if shown_at is not None:
+                try:
+                    elapsed_ms = int((time.monotonic() - float(shown_at)) * 1000.0)
+                except Exception:
+                    elapsed_ms = min_uptime_ms
+                if elapsed_ms < min_uptime_ms:
+                    return "startup_cooldown"
+        if bool(getattr(self, "_background_services_paused", False)) and not (
+            startup_warmup and allow_during_startup
+        ):
+            return "background_services_paused"
+        try:
+            if int(getattr(self, "pending", 0) or 0) > 0:
+                return "spin_pending"
+        except Exception:
+            pass
+        has_spin_anim = getattr(self, "_has_active_spin_animations", None)
+        if callable(has_spin_anim):
+            try:
+                if bool(has_spin_anim(include_internal_flags=True)):
+                    return "spin_anim_running"
+            except Exception:
+                pass
+        return None
+
+    def _run_ocr_background_preload(self) -> None:
+        if getattr(self, "_closing", False):
+            return
+        if not self._ocr_background_preload_enabled():
+            return
+        if bool(getattr(self, "_ocr_preload_done", False)):
+            return
+        if bool(getattr(self, "_ocr_preload_attempted", False)):
+            return
+        if bool(getattr(self, "_ocr_runtime_activated", False)):
+            self._ocr_preload_done = True
+            self._ocr_preload_attempted = True
+            return
+        if getattr(self, "_ocr_async_job", None) or getattr(self, "_ocr_preload_job", None):
+            return
+
+        block_reason = self._ocr_background_preload_block_reason()
+        if block_reason:
+            retry_ms = max(250, int(self._cfg("OCR_BACKGROUND_PRELOAD_BUSY_RETRY_MS", 1800)))
+            self._schedule_ocr_background_preload(delay_ms=retry_ms, reason="busy")
+            if hasattr(self, "_trace_event"):
+                try:
+                    self._trace_event(
+                        "ocr_preload_deferred",
+                        reason=block_reason,
+                        retry_ms=retry_ms,
+                    )
+                except Exception:
+                    pass
+            return
+
+        kwargs = self._easyocr_resolution_kwargs()
+        thread = QtCore.QThread(self)
+        worker = _OCRPreloadWorker(easyocr_kwargs=kwargs)
+        worker.moveToThread(thread)
+        relay = _OCRPreloadRelay(self)
+        job = {
+            "thread": thread,
+            "worker": worker,
+            "relay": relay,
+        }
+        self._ocr_preload_job = job
+
+        def _finalize_preload(ok: bool, detail: str) -> None:
+            current = getattr(self, "_ocr_preload_job", None)
+            if current is not job:
+                return
+            self._ocr_preload_job = None
+            self._ocr_preload_attempted = True
+            if bool(ok):
+                self._ocr_preload_done = True
+                self._ocr_runtime_activated = True
+                self._schedule_ocr_runtime_cache_release()
+            if hasattr(self, "_trace_event"):
+                try:
+                    self._trace_event(
+                        "ocr_preload_finished",
+                        ok=bool(ok),
+                        detail=str(detail or ""),
+                    )
+                except Exception:
+                    pass
+
+        worker.finished.connect(relay.forward_done, QtCore.Qt.QueuedConnection)
+        relay.done.connect(_finalize_preload)
+        worker.finished.connect(thread.quit)
+        thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        try:
+            thread.start(QtCore.QThread.LowPriority)
+        except Exception:
+            thread.start()
 
     def _ensure_ocr_cache_release_timer(self) -> QtCore.QTimer:
         timer = getattr(self, "_ocr_cache_release_timer", None)

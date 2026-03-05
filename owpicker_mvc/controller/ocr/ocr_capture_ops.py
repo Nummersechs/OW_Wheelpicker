@@ -923,7 +923,7 @@ def _estimate_expected_rows_from_paths(paths: list[Path], cfg: dict) -> int | No
         if value not in probe_expected_values:
             probe_expected_values.append(value)
 
-    counts: list[int] = []
+    gray_images: list[QtGui.QImage] = []
     for image_path in selected_paths:
         image = QtGui.QImage(str(image_path))
         if image.isNull():
@@ -931,32 +931,37 @@ def _estimate_expected_rows_from_paths(paths: list[Path], cfg: dict) -> int | No
         gray = image.convertToFormat(QtGui.QImage.Format_Grayscale8)
         if gray.isNull():
             continue
-        for probe_expected in probe_expected_values:
-            probe_cfg = dict(cfg)
-            probe_cfg["expected_candidates"] = probe_expected
-            ranges = _detect_text_row_ranges(gray, probe_cfg)
-            count = len(list(ranges or []))
-            if count > 0:
-                counts.append(count)
+        gray_images.append(gray)
+    if not gray_images:
+        return None
+
+    def _range_count(value) -> int:
+        if value is None:
+            return 0
+        try:
+            return len(value)
+        except Exception:
+            return len(list(value or ()))
+
+    def _collect_counts(expected_values: list[int]) -> list[int]:
+        found_counts: list[int] = []
+        for gray in gray_images:
+            for probe_expected in expected_values:
+                probe_cfg = dict(cfg)
+                probe_cfg["expected_candidates"] = probe_expected
+                ranges = _detect_text_row_ranges(gray, probe_cfg)
+                count = _range_count(ranges)
+                if count > 0:
+                    found_counts.append(count)
+        return found_counts
+
+    counts = _collect_counts(probe_expected_values)
     if not counts:
         if fast_probe_enabled and single_expected_probe:
             # Fallback: if the lightweight probe found nothing, run one legacy
             # pass to avoid false negatives from a single expected-row guess.
             legacy_values = [base_expected, max(1, base_expected - 2), base_expected + 2]
-            for image_path in selected_paths:
-                image = QtGui.QImage(str(image_path))
-                if image.isNull():
-                    continue
-                gray = image.convertToFormat(QtGui.QImage.Format_Grayscale8)
-                if gray.isNull():
-                    continue
-                for probe_expected in legacy_values:
-                    probe_cfg = dict(cfg)
-                    probe_cfg["expected_candidates"] = probe_expected
-                    ranges = _detect_text_row_ranges(gray, probe_cfg)
-                    count = len(list(ranges or []))
-                    if count > 0:
-                        counts.append(count)
+            counts = _collect_counts(legacy_values)
             if not counts:
                 return None
         else:

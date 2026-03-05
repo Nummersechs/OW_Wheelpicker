@@ -104,6 +104,21 @@ class MainWindowShutdownMixin:
             except Exception:
                 pass
             self._ocr_async_job = None
+        preload_job = getattr(self, "_ocr_preload_job", None)
+        if isinstance(preload_job, dict):
+            preload_thread = preload_job.get("thread")
+            try:
+                if preload_thread is not None and preload_thread.isRunning():
+                    preload_thread.quit()
+                    preload_thread.wait(300)
+            except Exception:
+                pass
+            self._ocr_preload_job = None
+        if hasattr(self, "_cancel_ocr_background_preload"):
+            try:
+                self._cancel_ocr_background_preload()
+            except Exception:
+                pass
         if hasattr(self, "_cancel_ocr_runtime_cache_release"):
             try:
                 self._cancel_ocr_runtime_cache_release()

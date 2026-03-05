@@ -63,6 +63,16 @@ class MainWindowBackgroundMixin:
                 self._cancel_ocr_runtime_cache_release()
             except Exception:
                 pass
+        if hasattr(self, "_cancel_ocr_background_preload"):
+            try:
+                self._cancel_ocr_background_preload()
+            except Exception:
+                pass
+        if hasattr(self, "_stop_ocr_background_preload_job"):
+            try:
+                self._stop_ocr_background_preload_job(reason="background_pause")
+            except Exception:
+                pass
         self._pause_sound_background_warmup()
 
     def _resume_background_ui_services(self) -> None:
@@ -113,6 +123,12 @@ class MainWindowBackgroundMixin:
             try:
                 if not getattr(self, "_ocr_async_job", None):
                     self._schedule_ocr_runtime_cache_release()
+            except Exception:
+                pass
+        if hasattr(self, "_schedule_ocr_background_preload"):
+            try:
+                if not getattr(self, "_ocr_async_job", None):
+                    self._schedule_ocr_background_preload(reason="background_resume")
             except Exception:
                 pass
         if bool(getattr(self, "_startup_visual_finalize_pending", False)):

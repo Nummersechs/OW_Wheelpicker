@@ -530,7 +530,7 @@ class NamesList(QtWidgets.QListWidget):
         act_del = menu.addAction(i18n.t("names.context_delete"))
         if not self.selectedItems():
             act_del.setEnabled(False)
-        action = menu.exec_(self.mapToGlobal(pos))
+        action = menu.exec(self.mapToGlobal(pos))
         if action == act_new:
             self.add_name("")
         elif action == act_del:
