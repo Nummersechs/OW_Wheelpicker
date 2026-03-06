@@ -636,9 +636,24 @@ class MainWindowOCRMixin:
                 except Exception:
                     pass
 
-        worker.finished.connect(relay.forward_done, QtCore.Qt.QueuedConnection)
-        relay.done.connect(_finalize_preload)
-        worker.finished.connect(thread.quit)
+        try:
+            job["worker_done_connection"] = worker.finished.connect(
+                relay.forward_done,
+                QtCore.Qt.QueuedConnection,
+            )
+        except Exception:
+            worker.finished.connect(relay.forward_done, QtCore.Qt.QueuedConnection)
+            job["worker_done_connection"] = None
+        try:
+            job["done_connection"] = relay.done.connect(_finalize_preload)
+        except Exception:
+            relay.done.connect(_finalize_preload)
+            job["done_connection"] = None
+        try:
+            job["worker_quit_connection"] = worker.finished.connect(thread.quit)
+        except Exception:
+            worker.finished.connect(thread.quit)
+            job["worker_quit_connection"] = None
         def _cleanup_cancelled_preload() -> None:
             current = getattr(self, "_ocr_preload_job", None)
             if current is job:
@@ -648,14 +663,26 @@ class MainWindowOCRMixin:
                         self._trace_event("ocr_preload_thread_finished")
                     except Exception:
                         pass
-        thread.finished.connect(_cleanup_cancelled_preload)
+        try:
+            job["cleanup_connection"] = thread.finished.connect(_cleanup_cancelled_preload)
+        except Exception:
+            thread.finished.connect(_cleanup_cancelled_preload)
+            job["cleanup_connection"] = None
         try:
             job["started_connection"] = thread.started.connect(worker.run)
         except Exception:
             thread.started.connect(worker.run)
             job["started_connection"] = None
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
+        try:
+            job["worker_delete_connection"] = thread.finished.connect(worker.deleteLater)
+        except Exception:
+            thread.finished.connect(worker.deleteLater)
+            job["worker_delete_connection"] = None
+        try:
+            job["thread_delete_connection"] = thread.finished.connect(thread.deleteLater)
+        except Exception:
+            thread.finished.connect(thread.deleteLater)
+            job["thread_delete_connection"] = None
         startup_warmup = bool(getattr(self, "_startup_warmup_running", False))
         desired_priority = QtCore.QThread.NormalPriority if startup_warmup else QtCore.QThread.LowPriority
         try:

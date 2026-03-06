@@ -22,6 +22,16 @@ def item_subroles(list_widget, item: QtWidgets.QListWidgetItem) -> set[str]:
     return set()
 
 
+def item_state(list_widget, item: QtWidgets.QListWidgetItem) -> QtCore.Qt.CheckState:
+    getter = getattr(list_widget, "item_state", None)
+    if callable(getter):
+        try:
+            return getter(item)
+        except Exception:
+            pass
+    return item.checkState()
+
+
 def rebuild_entries_cache(list_widget) -> dict[str, list]:
     entries: list[dict] = []
     active_entries: list[dict] = []
@@ -35,7 +45,7 @@ def rebuild_entries_cache(list_widget) -> dict[str, list]:
         if not name:
             continue
         subroles = list(item_subroles(list_widget, item))
-        active = item.checkState() == QtCore.Qt.Checked
+        active = item_state(list_widget, item) == QtCore.Qt.Checked
         entries.append({"name": name, "subroles": subroles, "active": active})
         base_names.append(name)
         if active:

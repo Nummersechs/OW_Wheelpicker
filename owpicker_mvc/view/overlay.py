@@ -493,7 +493,7 @@ class ResultOverlay(QtWidgets.QWidget):
         names_list = self.ocr_names_panel.names
         for i in range(names_list.count()):
             item = names_list.item(i)
-            if item is None or item.checkState() != QtCore.Qt.Checked:
+            if item is None or names_list.item_state(item) != QtCore.Qt.Checked:
                 continue
             widget = names_list.itemWidget(item)
             edit = getattr(widget, "edit", None)

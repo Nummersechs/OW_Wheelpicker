@@ -2134,19 +2134,57 @@ def _start_ocr_async_import(
             )
 
         # Always deliver worker results back to the GUI thread.
-        worker.finished.connect(relay.forward_result, QtCore.Qt.QueuedConnection)
-        worker.failed.connect(relay.forward_error, QtCore.Qt.QueuedConnection)
-        relay.result.connect(_handle_result)
-        relay.error.connect(_handle_worker_error)
-        worker.finished.connect(thread.quit)
-        worker.failed.connect(thread.quit)
+        try:
+            job["worker_finished_connection"] = worker.finished.connect(
+                relay.forward_result,
+                QtCore.Qt.QueuedConnection,
+            )
+        except Exception:
+            worker.finished.connect(relay.forward_result, QtCore.Qt.QueuedConnection)
+            job["worker_finished_connection"] = None
+        try:
+            job["worker_failed_connection"] = worker.failed.connect(
+                relay.forward_error,
+                QtCore.Qt.QueuedConnection,
+            )
+        except Exception:
+            worker.failed.connect(relay.forward_error, QtCore.Qt.QueuedConnection)
+            job["worker_failed_connection"] = None
+        try:
+            job["relay_result_connection"] = relay.result.connect(_handle_result)
+        except Exception:
+            relay.result.connect(_handle_result)
+            job["relay_result_connection"] = None
+        try:
+            job["relay_error_connection"] = relay.error.connect(_handle_worker_error)
+        except Exception:
+            relay.error.connect(_handle_worker_error)
+            job["relay_error_connection"] = None
+        try:
+            job["worker_finished_quit_connection"] = worker.finished.connect(thread.quit)
+        except Exception:
+            worker.finished.connect(thread.quit)
+            job["worker_finished_quit_connection"] = None
+        try:
+            job["worker_failed_quit_connection"] = worker.failed.connect(thread.quit)
+        except Exception:
+            worker.failed.connect(thread.quit)
+            job["worker_failed_quit_connection"] = None
         try:
             job["started_connection"] = thread.started.connect(worker.run)
         except Exception:
             thread.started.connect(worker.run)
             job["started_connection"] = None
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
+        try:
+            job["worker_delete_connection"] = thread.finished.connect(worker.deleteLater)
+        except Exception:
+            thread.finished.connect(worker.deleteLater)
+            job["worker_delete_connection"] = None
+        try:
+            job["thread_delete_connection"] = thread.finished.connect(thread.deleteLater)
+        except Exception:
+            thread.finished.connect(thread.deleteLater)
+            job["thread_delete_connection"] = None
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         try:
             thread.start(QtCore.QThread.LowPriority)

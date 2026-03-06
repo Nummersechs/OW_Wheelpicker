@@ -89,6 +89,8 @@ class BasePanel(QtWidgets.QWidget):
         self._inner_layout.addWidget(self.names_hint)
 
         self.names_panel = NamesListPanel(subrole_labels=self.subrole_labels)
+        self.names_panel.set_fixed_visible_rows(4)
+        self.names_panel.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
         self.names = self.names_panel.names
         self.btn_sort_names = self.names_panel.btn_sort_names
         self.btn_toggle_all_names = self.names_panel.btn_toggle_all_names
@@ -120,12 +122,12 @@ class BasePanel(QtWidgets.QWidget):
         ui_helpers.set_fixed_width_from_translations(
             self.btn_local_spin,
             ["wheel.spin_role", "wheel.spin_map", "wheel.spin_single_map"],
-            padding=44,
+            padding=22,
         )
         ui_helpers.set_fixed_width_from_translations(
             self.btn_include_in_all,
             ["wheel.include_prefix"],
-            padding=42,
+            padding=48,
             prefixes=["☑ ", "☐ "],
         )
         if hasattr(self, "names_panel"):

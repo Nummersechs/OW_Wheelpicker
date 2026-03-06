@@ -124,9 +124,9 @@ def _names_list_style(theme: theme_util.Theme) -> str:
     cached = (
         "QListWidget {"
         f" background:{theme.base}; color:{theme.text};"
-        f" border:1px solid {theme.border}; border-radius:6px; "
+        f" border:1px solid {theme.border}; border-radius:6px; padding:0px; "
         "}"
-        f"QListWidget::item {{ color:{theme.text}; }}"
+        f"QListWidget::item {{ color:{theme.text}; margin:0px; padding:0px; border:0px; }}"
         f"QListWidget::item:selected {{ background:{theme.alt_base}; color:{theme.text}; }}"
         "QListWidget QLineEdit {"
         f" background:{theme.base}; color:{theme.text};"

@@ -46,7 +46,7 @@ class ListPanel(BasePanel):
             text = self.names.itemWidget(item).edit.text().strip() if item else ""
             if not text:
                 continue
-            active = item.checkState() == QtCore.Qt.Checked
+            active = self.names.item_state(item) == QtCore.Qt.Checked
             entries.append({"name": text, "subroles": [], "active": active})
         return entries
 

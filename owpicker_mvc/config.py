@@ -84,8 +84,14 @@ SHUTDOWN_OCR_PRELOAD_TERMINATE_WAIT_MS = 350
 # Retry waits after close was already deferred once (keeps UI responsive).
 SHUTDOWN_OCR_PRELOAD_RETRY_GRACEFUL_WAIT_MS = 0
 SHUTDOWN_OCR_PRELOAD_RETRY_TERMINATE_WAIT_MS = 120
+# Safety fallback: if OCR preload thread still blocks close after this total
+# wait window, detach it from MainWindow shutdown ownership and continue close.
+SHUTDOWN_OCR_PRELOAD_FORCE_ORPHAN_AFTER_MS = 2400
 # Retry cadence while waiting for still-running threads during close.
 SHUTDOWN_THREAD_RETRY_MS = 180
+# Keep OCR runtime cache release out of shutdown by default.
+# Cache release can be expensive (gc/torch) and app exit already frees memory.
+SHUTDOWN_RELEASE_OCR_CACHE = False
 # Delay used when deferred post-choice initialization must be retried because
 # the wheel is currently spinning.
 POST_CHOICE_INIT_BUSY_RETRY_MS = 220

@@ -243,13 +243,15 @@ class PlayerListPanelController(QtCore.QObject):
                 item = names.item(names.count() - 1)
                 if item is None:
                     continue
-                if state == QtCore.Qt.PartiallyChecked:
-                    item.setFlags(item.flags() | QtCore.Qt.ItemIsTristate)
-                    item.setCheckState(state)
-                    widget = names.itemWidget(item)
-                    if widget and hasattr(widget, "chk_active"):
-                        widget.chk_active.setTristate(True)
-                        widget.chk_active.setCheckState(state)
+                names.set_item_state(item, state)
+                widget = names.itemWidget(item)
+                if isinstance(widget, NameRowWidget):
+                    is_partial = state == QtCore.Qt.PartiallyChecked
+                    widget.chk_active.setTristate(is_partial)
+                    if is_partial:
+                        widget.chk_active.setCheckState(QtCore.Qt.PartiallyChecked)
+                    else:
+                        widget.chk_active.setChecked(state == QtCore.Qt.Checked)
                 item.setData(self._ROLE_MEMBERSHIP_ROLE, set(self._roles_from_labels(role_labels)))
                 item.setData(self._ORIGINAL_NAME_ROLE, name)
         finally:
@@ -283,6 +285,7 @@ class PlayerListPanelController(QtCore.QObject):
         names = self._names
         if names is None:
             return
+        subrole_spacing = 14
         width = int(panel_width or 540)
         # Approximate usable list row width inside the popup panel after frame/layout paddings.
         row_budget = max(220, width - 86)
@@ -295,7 +298,7 @@ class PlayerListPanelController(QtCore.QObject):
             # text + checkbox indicator/padding overhead
             subrole_block_w += int(fm.horizontalAdvance(label)) + 27
             if idx > 0:
-                subrole_block_w += 8
+                subrole_block_w += subrole_spacing
 
         fixed_w = 18 + 3 + 3 + 18  # active checkbox + spacings + delete marker column
         name_with_subroles = max(96, min(220, row_budget - fixed_w - subrole_block_w))
@@ -314,6 +317,7 @@ class PlayerListPanelController(QtCore.QObject):
             name_min_width_with_subroles=name_with_subroles,
             name_min_width_without_subroles=name_without_subroles,
             name_max_width=name_max_width,
+            subrole_check_spacing=subrole_spacing,
         )
 
     def _ensure_panel(self) -> None:
@@ -456,7 +460,7 @@ class PlayerListPanelController(QtCore.QObject):
                 item.setData(names.SUBROLE_ROLE, list(selected_labels))
                 item.setData(self._ROLE_MEMBERSHIP_ROLE, set(roles))
                 item.setData(self._ORIGINAL_NAME_ROLE, name)
-                current[name] = {"roles": set(roles), "state": item.checkState()}
+                current[name] = {"roles": set(roles), "state": names.item_state(item)}
 
             prev_names = set(prev_snapshot.keys())
             current_names = set(current.keys())

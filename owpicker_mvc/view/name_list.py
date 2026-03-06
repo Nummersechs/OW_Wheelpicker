@@ -11,11 +11,16 @@ DELETE_MARK_BUTTON_WIDTH = 28
 DELETE_MARK_ROW_RIGHT_MARGIN = 0
 NAME_LIST_ROW_HEIGHT = 20
 NAME_EDIT_HEIGHT = 18
-SUBROLE_CHECK_SPACING = 8
-SUBROLE_GROUP_LEFT_MARGIN = 6
-SUBROLE_GROUP_RIGHT_MARGIN = 0
+NAME_EDIT_MIN_WIDTH_WITH_SUBROLES = 72
+NAME_EDIT_MIN_WIDTH_WITHOUT_SUBROLES = 96
+SUBROLE_CHECK_SPACING = 16
+SUBROLE_GROUP_LEFT_MARGIN = 2
+SUBROLE_GROUP_RIGHT_MARGIN = 4
 SUBROLE_CHECKBOX_HORIZONTAL_PADDING = 0
-NAME_EDIT_MAX_WIDTH_WITH_SUBROLES = 188
+NAME_EDIT_MAX_WIDTH_WITH_SUBROLES = 0
+NAMES_PANEL_MAX_WIDTH_WITH_SUBROLES = 420
+NAMES_PANEL_MAX_WIDTH_DEFAULT = 560
+NAMES_PANEL_MIN_WIDTH_BASE = 260
 _DELETE_MARKED_STYLE_CACHE: dict[str, str] = {}
 _NAMES_ACTION_ROW_STYLE_CACHE: dict[str, str] = {}
 
@@ -102,6 +107,7 @@ class NamesList(QtWidgets.QListWidget):
     metaChanged = QtCore.Signal()
     SUBROLE_ROLE = QtCore.Qt.UserRole + 1
     MARK_FOR_DELETE_ROLE = QtCore.Qt.UserRole + 2
+    ACTIVE_STATE_ROLE = QtCore.Qt.UserRole + 3
 
     def __init__(
         self,
@@ -120,8 +126,8 @@ class NamesList(QtWidgets.QListWidget):
         self._syncing_viewport_margin = False
         self._row_height = NAME_LIST_ROW_HEIGHT
         self._name_edit_height = NAME_EDIT_HEIGHT
-        self._name_min_width_with_subroles = 188
-        self._name_min_width_without_subroles = 196
+        self._name_min_width_with_subroles = NAME_EDIT_MIN_WIDTH_WITH_SUBROLES
+        self._name_min_width_without_subroles = NAME_EDIT_MIN_WIDTH_WITHOUT_SUBROLES
         self._subrole_controls_layout_visible = bool(self.has_subroles)
         self._subrole_group_left_margin = SUBROLE_GROUP_LEFT_MARGIN
         self._subrole_group_right_margin = SUBROLE_GROUP_RIGHT_MARGIN
@@ -129,13 +135,15 @@ class NamesList(QtWidgets.QListWidget):
         self._subrole_checkbox_horizontal_padding = SUBROLE_CHECKBOX_HORIZONTAL_PADDING
         # Keep subrole rows compact and stable even after list rebuild/sort.
         self._name_max_width: int | None = (
-            NAME_EDIT_MAX_WIDTH_WITH_SUBROLES if self.has_subroles else None
+            NAME_EDIT_MAX_WIDTH_WITH_SUBROLES if (self.has_subroles and NAME_EDIT_MAX_WIDTH_WITH_SUBROLES > 0) else None
         )
         self._name_rows_read_only = False
         self.setFocusPolicy(QtCore.Qt.NoFocus)
         self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.setResizeMode(QtWidgets.QListView.Adjust)
+        self.setViewMode(QtWidgets.QListView.ListMode)
         self.setSpacing(0)
         self.setUniformItemSizes(True)
         self.setItemDelegate(_NoPaintDelegate(self))
@@ -166,20 +174,11 @@ class NamesList(QtWidgets.QListWidget):
     def _sync_viewport_right_padding(self, *_args) -> None:
         if self._syncing_viewport_margin:
             return
-        sb = self.verticalScrollBar()
-        # Reserve right space only for subrole rows with delete marker column.
-        # For simple rows this can make the list unnecessarily wide and trigger
-        # a horizontal scrollbar.
-        reserve_right = (
-            self.has_subroles
-            and self.enable_mark_for_delete
-            and bool(self._subrole_controls_layout_visible)
-        )
-        # Use range instead of current visibility: during startup/show the
-        # scrollbar can still report invisible although a range is already set.
-        has_vertical_scroll = bool(sb is not None and sb.maximum() > sb.minimum())
-        margin_right = self._scrollbar_extent(sb) if (reserve_right and has_vertical_scroll) else 0
+        # Keep viewport margins at 0 so row widgets are always laid out to the
+        # actually visible width and right-side controls cannot be clipped.
+        margin_right = 0
         if margin_right == self._viewport_right_margin:
+            self._refresh_row_widget_geometry()
             return
         self._viewport_right_margin = margin_right
         self._syncing_viewport_margin = True
@@ -187,10 +186,28 @@ class NamesList(QtWidgets.QListWidget):
             self.setViewportMargins(0, 0, margin_right, 0)
         finally:
             self._syncing_viewport_margin = False
+        # Viewport margin changes can make previously laid-out row widgets too wide.
+        # Re-layout immediately so right-side controls do not get clipped.
+        self._refresh_row_widget_geometry()
+
+    def _refresh_row_widget_geometry(self) -> None:
+        try:
+            self.doItemsLayout()
+        except Exception:
+            pass
+        for i in range(self.count()):
+            item = self.item(i)
+            if item is None:
+                continue
+            row_widget = self.itemWidget(item)
+            if isinstance(row_widget, NameRowWidget):
+                row_widget._apply_name_edit_width_constraints()
 
     def resizeEvent(self, ev: QtGui.QResizeEvent) -> None:
         super().resizeEvent(ev)
+        self._refresh_row_widget_geometry()
         QtCore.QTimer.singleShot(0, self._sync_viewport_right_padding)
+        QtCore.QTimer.singleShot(0, self._refresh_row_widget_geometry)
 
     def showEvent(self, ev: QtGui.QShowEvent) -> None:
         super().showEvent(ev)
@@ -226,17 +243,71 @@ class NamesList(QtWidgets.QListWidget):
 
     def _new_item(self, text: str = "", subroles: Optional[List[str]] = None, active: Optional[bool] = None) -> QtWidgets.QListWidgetItem:
         item = QtWidgets.QListWidgetItem(text)
-        item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsEditable)
+        item.setFlags(item.flags() | QtCore.Qt.ItemIsEditable)
         item.setSizeHint(QtCore.QSize(0, max(1, int(self._row_height))))
+        state: QtCore.Qt.CheckState
         if active is not None:
-            item.setCheckState(QtCore.Qt.Checked if active else QtCore.Qt.Unchecked)
+            state = QtCore.Qt.Checked if active else QtCore.Qt.Unchecked
         elif text.strip():
-            item.setCheckState(QtCore.Qt.Checked)
+            state = QtCore.Qt.Checked
         else:
-            item.setCheckState(QtCore.Qt.Unchecked)
+            state = QtCore.Qt.Unchecked
+        self.set_item_state(item, state)
         item.setData(self.SUBROLE_ROLE, list(subroles or []))
         item.setData(self.MARK_FOR_DELETE_ROLE, False)
         return item
+
+    @staticmethod
+    def _normalize_check_state(state) -> QtCore.Qt.CheckState:
+        if state == QtCore.Qt.PartiallyChecked:
+            return QtCore.Qt.PartiallyChecked
+        if state == QtCore.Qt.Checked:
+            return QtCore.Qt.Checked
+        return QtCore.Qt.Unchecked
+
+    @staticmethod
+    def _state_to_int(state: QtCore.Qt.CheckState) -> int:
+        normalized = NamesList._normalize_check_state(state)
+        if normalized == QtCore.Qt.PartiallyChecked:
+            return 1
+        if normalized == QtCore.Qt.Checked:
+            return 2
+        return 0
+
+    @staticmethod
+    def _int_to_state(value) -> QtCore.Qt.CheckState:
+        try:
+            raw = int(value)
+        except Exception:
+            return QtCore.Qt.Unchecked
+        if raw == 1:
+            return QtCore.Qt.PartiallyChecked
+        if raw == 2:
+            return QtCore.Qt.Checked
+        return QtCore.Qt.Unchecked
+
+    def item_state(self, item: QtWidgets.QListWidgetItem) -> QtCore.Qt.CheckState:
+        if item is None:
+            return QtCore.Qt.Unchecked
+        raw = item.data(self.ACTIVE_STATE_ROLE)
+        if isinstance(raw, int):
+            return self._int_to_state(raw)
+        if raw in (QtCore.Qt.Unchecked, QtCore.Qt.PartiallyChecked, QtCore.Qt.Checked):
+            return self._normalize_check_state(raw)
+        if isinstance(raw, bool):
+            return QtCore.Qt.Checked if raw else QtCore.Qt.Unchecked
+        return QtCore.Qt.Unchecked
+
+    def set_item_state(self, item: QtWidgets.QListWidgetItem, state) -> bool:
+        if item is None:
+            return False
+        target = self._normalize_check_state(state)
+        previous = self.item_state(item)
+        item.setData(self.ACTIVE_STATE_ROLE, self._state_to_int(target))
+        # Keep Qt's native check indicator data empty so rows do not reserve
+        # an additional left indicator column.
+        item.setData(QtCore.Qt.CheckStateRole, None)
+        return previous != target
 
     def _attach_row_widget(self, item: QtWidgets.QListWidgetItem):
         widget = NameRowWidget(self, item, self.subrole_labels)
@@ -261,11 +332,12 @@ class NamesList(QtWidgets.QListWidget):
             if use_subrole_profile
             else int(self._name_min_width_without_subroles)
         )
-        row_widget.edit.setMinimumWidth(max(1, min_width))
+        max_width: int | None
         if use_subrole_profile and isinstance(self._name_max_width, int) and self._name_max_width > 0:
-            row_widget.edit.setMaximumWidth(self._name_max_width)
+            max_width = int(self._name_max_width)
         else:
-            row_widget.edit.setMaximumWidth(16777215)
+            max_width = None
+        row_widget.set_name_edit_width_profile(min_width=min_width, max_width=max_width)
         row_widget.apply_subrole_visual_profile(
             left_margin=max(0, int(self._subrole_group_left_margin)),
             right_margin=max(0, int(self._subrole_group_right_margin)),
@@ -458,7 +530,7 @@ class NamesList(QtWidgets.QListWidget):
             entries.append(
                 (
                     str(text),
-                    item.checkState() == QtCore.Qt.Checked,
+                    self.item_state(item) == QtCore.Qt.Checked,
                     list(item.data(self.SUBROLE_ROLE) or []),
                     bool(item.data(self.MARK_FOR_DELETE_ROLE)),
                 )
@@ -548,11 +620,17 @@ class NameRowWidget(QtWidgets.QWidget):
         # Keep the active checkbox visually clear from the name edit field.
         layout.setContentsMargins(0, 0, right_margin, 0)
         layout.setSpacing(ui_tokens.NAME_ROW_HORIZONTAL_SPACING)
+        self._configured_name_min_width = 1
+        self._configured_name_max_width: int | None = None
+        self.subrole_checks: list[QtWidgets.QCheckBox] = []
+        self._subrole_group: QtWidgets.QWidget | None = None
+        self._subrole_layout: QtWidgets.QHBoxLayout | None = None
+        self._delete_cell: QtWidgets.QWidget | None = None
 
         self.chk_active = QtWidgets.QCheckBox()
         self.chk_active.setFixedWidth(18)
         self.chk_active.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-        state = item.checkState()
+        state = self.list_widget.item_state(item)
         if state == QtCore.Qt.PartiallyChecked:
             self.chk_active.setTristate(True)
             self.chk_active.setCheckState(state)
@@ -567,14 +645,28 @@ class NameRowWidget(QtWidgets.QWidget):
         self.edit.setToolTip(str(item.text() or ""))
         # Keep field flexible, but avoid forcing row overflow with subrole checkboxes.
         if subrole_labels:
-            min_name_width = int(getattr(list_widget, "_name_min_width_with_subroles", 188))
+            min_name_width = int(
+                getattr(
+                    list_widget,
+                    "_name_min_width_with_subroles",
+                    NAME_EDIT_MIN_WIDTH_WITH_SUBROLES,
+                )
+            )
         else:
-            min_name_width = int(getattr(list_widget, "_name_min_width_without_subroles", 196))
+            min_name_width = int(
+                getattr(
+                    list_widget,
+                    "_name_min_width_without_subroles",
+                    NAME_EDIT_MIN_WIDTH_WITHOUT_SUBROLES,
+                )
+            )
         self.edit.setMinimumWidth(min_name_width)
         max_name_width = getattr(list_widget, "_name_max_width", None)
+        configured_max_width: int | None = None
         if isinstance(max_name_width, int) and max_name_width > 0:
-            self.edit.setMaximumWidth(max_name_width)
+            configured_max_width = int(max_name_width)
         self.edit.setFixedHeight(max(1, int(getattr(list_widget, "_name_edit_height", NAME_EDIT_HEIGHT))))
+        # Let the name field absorb most width changes, keep role/delete controls fixed.
         self.edit.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
         self.edit.setFocusPolicy(QtCore.Qt.ClickFocus)
         self.edit.textChanged.connect(self._on_text_changed)
@@ -582,14 +674,14 @@ class NameRowWidget(QtWidgets.QWidget):
         self.edit.moveUpRequested.connect(self._focus_prev)
         self.edit.moveDownRequested.connect(self._focus_next)
         self.edit.newRowRequested.connect(self._insert_new_row)
-        layout.addWidget(self.edit, 1)
+        layout.addWidget(self.edit, 1, QtCore.Qt.AlignVCenter)
+        self.set_name_edit_width_profile(min_width=min_name_width, max_width=configured_max_width)
 
-        self.subrole_checks: list[QtWidgets.QCheckBox] = []
-        self._subrole_group: QtWidgets.QWidget | None = None
-        self._subrole_layout: QtWidgets.QHBoxLayout | None = None
         if subrole_labels:
             self._subrole_group = QtWidgets.QWidget(self)
             group_policy = self._subrole_group.sizePolicy()
+            group_policy.setHorizontalPolicy(QtWidgets.QSizePolicy.Fixed)
+            group_policy.setVerticalPolicy(QtWidgets.QSizePolicy.Fixed)
             group_policy.setRetainSizeWhenHidden(True)
             self._subrole_group.setSizePolicy(group_policy)
             subrole_layout = QtWidgets.QHBoxLayout(self._subrole_group)
@@ -610,6 +702,10 @@ class NameRowWidget(QtWidgets.QWidget):
                 cb.setMinimumWidth(cb.sizeHint().width())
                 self.subrole_checks.append(cb)
                 subrole_layout.addWidget(cb, 0, QtCore.Qt.AlignVCenter)
+            # Keep subrole block content-tight so it does not eat horizontal slack.
+            subrole_width = max(1, int(self._subrole_group.sizeHint().width()))
+            self._subrole_group.setMinimumWidth(subrole_width)
+            self._subrole_group.setMaximumWidth(subrole_width)
             layout.addWidget(self._subrole_group, 0, QtCore.Qt.AlignVCenter)
 
         self.chk_mark_for_delete: QtWidgets.QCheckBox | None = None
@@ -619,6 +715,7 @@ class NameRowWidget(QtWidgets.QWidget):
             self.chk_mark_for_delete.setToolTip(i18n.t("names.mark_for_delete_tooltip"))
             self.chk_mark_for_delete.toggled.connect(self._on_mark_for_delete_toggled)
             delete_cell = QtWidgets.QWidget(self)
+            self._delete_cell = delete_cell
             delete_cell_width = max(
                 int(DELETE_MARK_COLUMN_WIDTH),
                 int(self.chk_mark_for_delete.sizeHint().width()),
@@ -634,6 +731,79 @@ class NameRowWidget(QtWidgets.QWidget):
             )
             layout.addWidget(delete_cell, 0, QtCore.Qt.AlignVCenter)
         # Kein automatischer Fokus auf neue/leer Zeilen
+
+    def _fixed_non_edit_width(self) -> int:
+        fixed = 0
+        widgets: list[QtWidgets.QWidget] = [self.chk_active]
+        if self._subrole_group is not None and self._subrole_group.isVisible():
+            widgets.append(self._subrole_group)
+        if self._delete_cell is not None and self._delete_cell.isVisible():
+            widgets.append(self._delete_cell)
+        for widget in widgets:
+            fixed += max(
+                int(widget.width()),
+                int(widget.minimumSizeHint().width()),
+                int(widget.sizeHint().width()),
+            )
+        return fixed
+
+    def _available_name_edit_width(self) -> int:
+        row_width = max(1, int(self.width()))
+        layout = self.layout()
+        margins_left = margins_right = spacing = 0
+        if isinstance(layout, QtWidgets.QHBoxLayout):
+            margins = layout.contentsMargins()
+            margins_left = int(margins.left())
+            margins_right = int(margins.right())
+            spacing = max(0, int(layout.spacing()))
+        fixed = self._fixed_non_edit_width()
+        # Visible sequence includes the edit itself, so gaps = non-edit widgets count.
+        non_edit_count = 1
+        if self._subrole_group is not None and self._subrole_group.isVisible():
+            non_edit_count += 1
+        if self._delete_cell is not None and self._delete_cell.isVisible():
+            non_edit_count += 1
+        gaps = non_edit_count
+        usable = row_width - margins_left - margins_right - fixed - (spacing * gaps)
+        return max(1, int(usable))
+
+    def minimum_safe_width_hint(self) -> int:
+        layout = self.layout()
+        margins_left = margins_right = spacing = 0
+        if isinstance(layout, QtWidgets.QHBoxLayout):
+            margins = layout.contentsMargins()
+            margins_left = int(margins.left())
+            margins_right = int(margins.right())
+            spacing = max(0, int(layout.spacing()))
+        non_edit_count = 1
+        if self._subrole_group is not None and self._subrole_group.isVisible():
+            non_edit_count += 1
+        if self._delete_cell is not None and self._delete_cell.isVisible():
+            non_edit_count += 1
+        gaps = non_edit_count
+        # Keep at least 1 px for the edit so all checkboxes stay visible.
+        return max(1, margins_left + margins_right + self._fixed_non_edit_width() + (spacing * gaps) + 1)
+
+    def _apply_name_edit_width_constraints(self) -> None:
+        available = self._available_name_edit_width()
+        configured_min = max(1, int(self._configured_name_min_width))
+        configured_max = self._configured_name_max_width
+        dynamic_max = available
+        if isinstance(configured_max, int) and configured_max > 0:
+            dynamic_max = min(dynamic_max, int(configured_max))
+        dynamic_max = max(1, int(dynamic_max))
+        dynamic_min = max(1, min(configured_min, dynamic_max))
+        self.edit.setMinimumWidth(dynamic_min)
+        self.edit.setMaximumWidth(dynamic_max)
+
+    def set_name_edit_width_profile(self, *, min_width: int, max_width: int | None) -> None:
+        self._configured_name_min_width = max(1, int(min_width))
+        self._configured_name_max_width = None if max_width is None else max(1, int(max_width))
+        self._apply_name_edit_width_constraints()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._apply_name_edit_width_constraints()
 
     def apply_subrole_visual_profile(
         self,
@@ -651,6 +821,12 @@ class NameRowWidget(QtWidgets.QWidget):
                 0,
             )
             self._subrole_layout.setSpacing(max(0, int(spacing)))
+        if self._subrole_group is not None:
+            # Re-lock width after spacing/margins changed.
+            self._subrole_group.adjustSize()
+            width = max(1, int(self._subrole_group.sizeHint().width()))
+            self._subrole_group.setMinimumWidth(width)
+            self._subrole_group.setMaximumWidth(width)
         if checkbox_hpadding > 0:
             style = (
                 "QCheckBox { "
@@ -662,6 +838,7 @@ class NameRowWidget(QtWidgets.QWidget):
             style = ""
         for cb in self.subrole_checks:
             cb.setStyleSheet(style)
+        self._apply_name_edit_width_constraints()
 
     def focus_name(self, force: bool = False):
         if force:
@@ -689,17 +866,21 @@ class NameRowWidget(QtWidgets.QWidget):
         return bool(self.item.data(self.list_widget.MARK_FOR_DELETE_ROLE))
 
     def _on_active_toggled(self, checked: bool):
-        self.item.setCheckState(QtCore.Qt.Checked if checked else QtCore.Qt.Unchecked)
+        self.list_widget.set_item_state(
+            self.item,
+            QtCore.Qt.Checked if checked else QtCore.Qt.Unchecked,
+        )
+        self.list_widget.metaChanged.emit()
 
     def _on_text_changed(self, text: str):
         old_text = self.item.text().strip()
         new_text = text.strip()
         self.edit.setToolTip(new_text)
         if not old_text and new_text:
-            self.item.setCheckState(QtCore.Qt.Checked)
+            self.list_widget.set_item_state(self.item, QtCore.Qt.Checked)
             self.chk_active.setChecked(True)
         elif old_text and not new_text:
-            self.item.setCheckState(QtCore.Qt.Unchecked)
+            self.list_widget.set_item_state(self.item, QtCore.Qt.Unchecked)
             self.chk_active.setChecked(False)
         self.item.setText(text)
 
@@ -790,10 +971,17 @@ class NamesListPanel(QtWidgets.QWidget):
             subrole_labels=subrole_labels,
             enable_mark_for_delete=enable_mark_for_delete,
         )
+        self._fixed_visible_rows: int | None = None
         self._enable_mark_for_delete = bool(enable_mark_for_delete)
         self._interaction_enabled = True
         self._delete_confirm_handler: Callable[[int], bool] | None = None
         self._applied_theme_key: str | None = None
+        self._panel_width_update_pending = False
+        self._applied_panel_min_width = -1
+        self._applied_panel_max_width = -1
+        self._parent_filter_installed = False
+        self._window_filter_installed = False
+        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
 
         self.btn_delete_marked = QtWidgets.QToolButton()
         self.btn_delete_marked.setText("🗑")
@@ -838,9 +1026,151 @@ class NamesListPanel(QtWidgets.QWidget):
         self.names.model().rowsInserted.connect(self._update_delete_marked_button_state)
         self.names.model().rowsRemoved.connect(self._update_delete_marked_button_state)
         self.names.metaChanged.connect(self._update_delete_marked_button_state)
+        self.names.itemChanged.connect(self._schedule_panel_width_update)
+        self.names.model().rowsInserted.connect(self._schedule_panel_width_update)
+        self.names.model().rowsRemoved.connect(self._schedule_panel_width_update)
+        self.names.metaChanged.connect(self._schedule_panel_width_update)
         self._update_toggle_all_button_label()
         self._update_delete_marked_button_state()
         self.apply_fixed_widths()
+        self._apply_panel_width_constraints()
+        self._ensure_parent_event_filter()
+
+    def _schedule_panel_width_update(self, *_args) -> None:
+        if self._panel_width_update_pending:
+            return
+        self._panel_width_update_pending = True
+        QtCore.QTimer.singleShot(0, self._apply_panel_width_constraints)
+
+    def _ensure_parent_event_filter(self) -> None:
+        if self._parent_filter_installed:
+            return
+        parent = self.parentWidget()
+        if parent is None:
+            return
+        try:
+            parent.installEventFilter(self)
+            self._parent_filter_installed = True
+        except Exception:
+            self._parent_filter_installed = False
+
+    def _ensure_window_event_filter(self) -> None:
+        if self._window_filter_installed:
+            return
+        win = self.window()
+        if win is None:
+            return
+        try:
+            win.installEventFilter(self)
+            self._window_filter_installed = True
+        except Exception:
+            self._window_filter_installed = False
+
+    def _available_parent_width(self) -> int | None:
+        parent = self.parentWidget()
+        if parent is None:
+            return None
+        try:
+            width = int(parent.contentsRect().width())
+        except Exception:
+            width = int(parent.width())
+        if width <= 0:
+            return None
+        # Leave a tiny safety gap so centered layouts do not push to edge.
+        return max(0, width - 2)
+
+    def _list_row_content_width_hint(self) -> int:
+        width = 0
+        for i in range(self.names.count()):
+            item = self.names.item(i)
+            if item is None:
+                continue
+            row_widget = self.names.itemWidget(item)
+            if row_widget is not None:
+                try:
+                    width = max(width, int(row_widget.sizeHint().width()))
+                    continue
+                except Exception:
+                    pass
+            try:
+                width = max(width, int(self.names.visualItemRect(item).width()))
+            except Exception:
+                continue
+        if width <= 0:
+            try:
+                width = int(self.names.minimumSizeHint().width())
+            except Exception:
+                width = int(NAMES_PANEL_MIN_WIDTH_BASE)
+        frame = max(0, int(self.names.frameWidth())) * 2
+        viewport_margin = max(0, int(getattr(self.names, "_viewport_right_margin", 0)))
+        return max(0, width + frame + viewport_margin + 8)
+
+    def _minimum_row_safe_width_hint(self) -> int:
+        width = 0
+        for i in range(self.names.count()):
+            item = self.names.item(i)
+            if item is None:
+                continue
+            row_widget = self.names.itemWidget(item)
+            if isinstance(row_widget, NameRowWidget):
+                try:
+                    width = max(width, int(row_widget.minimum_safe_width_hint()))
+                except Exception:
+                    continue
+        if width <= 0:
+            width = 120
+        frame = max(0, int(self.names.frameWidth())) * 2
+        viewport_margin = max(0, int(getattr(self.names, "_viewport_right_margin", 0)))
+        return max(1, width + frame + viewport_margin + 6)
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        parent = self.parentWidget()
+        win = self.window()
+        if obj in (parent, win) and event.type() in (
+            QtCore.QEvent.Resize,
+            QtCore.QEvent.Show,
+            QtCore.QEvent.LayoutRequest,
+        ):
+            self._schedule_panel_width_update()
+        return super().eventFilter(obj, event)
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
+        super().showEvent(event)
+        self._ensure_parent_event_filter()
+        self._ensure_window_event_filter()
+        self._schedule_panel_width_update()
+
+    def _row_height_hint(self) -> int:
+        row_h = -1
+        try:
+            row_h = int(self.names.sizeHintForRow(0))
+        except Exception:
+            row_h = -1
+        if row_h <= 0:
+            try:
+                row_h = int(getattr(self.names, "_row_height", NAME_LIST_ROW_HEIGHT))
+            except Exception:
+                row_h = NAME_LIST_ROW_HEIGHT
+        return max(1, int(row_h))
+
+    def _apply_fixed_visible_rows_height(self) -> None:
+        rows = self._fixed_visible_rows
+        if rows is None or int(rows) <= 0:
+            self.names.setMinimumHeight(0)
+            self.names.setMaximumHeight(16777215)
+            return
+        frame = max(0, int(self.names.frameWidth())) * 2
+        target_h = frame + self._row_height_hint() * int(rows)
+        self.names.setMinimumHeight(target_h)
+        self.names.setMaximumHeight(target_h)
+
+    def set_fixed_visible_rows(self, rows: int | None) -> None:
+        if rows is None:
+            self._fixed_visible_rows = None
+        else:
+            self._fixed_visible_rows = max(1, int(rows))
+        self._apply_fixed_visible_rows_height()
+        self.updateGeometry()
 
     def set_compact_vertical(self, compact: bool = True) -> None:
         compact_mode = bool(compact)
@@ -868,6 +1198,8 @@ class NamesListPanel(QtWidgets.QWidget):
         self._update_toggle_all_button_label()
         self._update_delete_marked_button_state()
         self.apply_fixed_widths()
+        self._apply_panel_width_constraints()
+        self._apply_fixed_visible_rows_height()
 
     def apply_theme(self, theme):
         theme_key = str(getattr(theme, "key", "light"))
@@ -888,14 +1220,56 @@ class NamesListPanel(QtWidgets.QWidget):
         ui_helpers.set_fixed_width_from_translations(
             self.btn_toggle_all_names,
             ["wheel.select_all", "wheel.deselect_all"],
-            padding=44,
+            padding=26,
             prefixes=["☑ ", "☐ "],
         )
         ui_helpers.set_fixed_width_from_translations(
             self.btn_sort_names,
             ["wheel.sort_names"],
-            padding=44,
+            padding=24,
         )
+        self._apply_panel_width_constraints()
+        self._apply_fixed_visible_rows_height()
+
+    def _apply_panel_width_constraints(self) -> None:
+        self._panel_width_update_pending = False
+        panel_pref_max = (
+            int(NAMES_PANEL_MAX_WIDTH_WITH_SUBROLES)
+            if self.names.has_subroles
+            else int(NAMES_PANEL_MAX_WIDTH_DEFAULT)
+        )
+        panel_hard_max = panel_pref_max + (220 if self.names.has_subroles else 260)
+        spacing = max(0, int(ui_tokens.SECTION_SPACING))
+        actions_width = (
+            int(self.btn_toggle_all_names.minimumSizeHint().width())
+            + int(self.btn_sort_names.minimumSizeHint().width())
+            + spacing
+            + 20
+        )
+        if self.btn_delete_marked.isVisible():
+            actions_width += int(self.btn_delete_marked.minimumSizeHint().width()) + spacing
+        content_target = max(self._list_row_content_width_hint(), actions_width)
+        row_safe_floor = max(1, int(self._minimum_row_safe_width_hint()))
+        parent_available = self._available_parent_width()
+        panel_floor = max(80, min(panel_hard_max, row_safe_floor))
+        if parent_available is not None:
+            parent_width = max(1, int(parent_available))
+            panel_cap = max(1, min(panel_hard_max, parent_width))
+            panel_floor = min(panel_floor, panel_cap)
+            width_from_parent = min(panel_cap, max(1, int(round(parent_width * 0.90))))
+            content_cap = min(panel_cap, max(1, int(content_target)))
+            panel_target = max(panel_floor, width_from_parent, content_cap)
+        else:
+            panel_target = max(panel_floor, min(panel_hard_max, int(content_target)))
+        panel_min = max(80, min(panel_floor, panel_target))
+        panel_max = max(panel_min, panel_target)
+        if panel_min != self._applied_panel_min_width:
+            self._applied_panel_min_width = panel_min
+            self.setMinimumWidth(panel_min)
+        if panel_max != self._applied_panel_max_width:
+            self._applied_panel_max_width = panel_max
+            self.setMaximumWidth(panel_max)
+        self.updateGeometry()
 
     def set_auto_focus_enabled(self, enabled: bool, require_active_focus: bool | None = None) -> None:
         if hasattr(self, "names"):
@@ -939,7 +1313,7 @@ class NamesListPanel(QtWidgets.QWidget):
         items = self._named_items()
         if not items:
             return False
-        return all(item.checkState() == QtCore.Qt.Checked for item in items)
+        return all(self.names.item_state(item) == QtCore.Qt.Checked for item in items)
 
     def _marked_named_rows(self) -> list[int]:
         rows: list[int] = []
@@ -1005,7 +1379,10 @@ class NamesListPanel(QtWidgets.QWidget):
                 if isinstance(widget, NameRowWidget):
                     widget.chk_active.setChecked(target_checked)
                 else:
-                    item.setCheckState(QtCore.Qt.Checked if target_checked else QtCore.Qt.Unchecked)
+                    self.names.set_item_state(
+                        item,
+                        QtCore.Qt.Checked if target_checked else QtCore.Qt.Unchecked,
+                    )
         finally:
             del blockers
         self.names.metaChanged.emit()

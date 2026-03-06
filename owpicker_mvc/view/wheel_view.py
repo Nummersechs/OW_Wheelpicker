@@ -1,14 +1,14 @@
 from contextlib import contextmanager
 from typing import List, Optional
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 import config
 from view.base_panel import BasePanel
 from view.wheel_widget import WheelWidget
-from view import wheel_spin_ops
+from view import ui_tokens, wheel_spin_ops
 from view.wheel_view_entries_mixin import WheelViewEntriesMixin
 from model.wheel_state import WheelState
 import i18n
-from utils import qt_runtime, theme as theme_util, ui_helpers
+from utils import qt_runtime, theme as theme_util
 
 _WHEEL_INDICATOR_STYLE_CACHE: dict[str, str] = {}
 _WHEEL_RESULT_STYLE_CACHE: dict[str, str] = {}
@@ -73,7 +73,7 @@ def _wheel_result_style(theme: theme_util.Theme) -> str:
     cached = _WHEEL_RESULT_STYLE_CACHE.get(theme.key)
     if cached is not None:
         return cached
-    cached = f"font-size:14px; color:{theme.muted_text}; margin-top:6px;"
+    cached = f"font-size:14px; color:{theme.muted_text}; margin-top:0px;"
     _WHEEL_RESULT_STYLE_CACHE[theme.key] = cached
     return cached
 
@@ -129,6 +129,8 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
             title_key=title_key,
             header_mode="custom",
         )
+        # Reduce vertical whitespace around the wheel area in this panel only.
+        self._inner_layout.setSpacing(6)
         self._default_spin_label = default_spin_label
         self._custom_spin_label: Optional[str] = None
         self._suppress_wheel_render = False
@@ -147,10 +149,11 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
         self._subrole_visibility_applied: tuple[bool, int] | None = None
         self._tooltip_rev = 0
         self._wheel_overlay_widget: QtWidgets.QWidget | None = None
-        self._wheel_overlay_margin_top = 8
+        self._wheel_overlay_margin_top = 4
         self._wheel_overlay_margin_right = 8
         self._last_entries_signature: tuple | None = None
         self._applied_theme_key_local: str | None = None
+        self._using_short_header_labels = False
         self.view = WheelWidget(self._effective_names_from(defaults))
         self.view.viewport().installEventFilter(self)
         self.view.segmentToggled.connect(self._on_segment_toggled)
@@ -179,6 +182,7 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
         self.toggle = None
         if allow_pair_toggle:
             self.toggle = QtWidgets.QCheckBox(i18n.t("wheel.pairs_toggle"))
+            self.toggle.setToolTip(i18n.t("wheel.pairs_toggle_tooltip"))
             self.toggle.setChecked(self.pair_mode)
             self.toggle.stateChanged.connect(self._on_toggle_pair_mode)
             header.setSpacing(12)
@@ -211,7 +215,7 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
         # Text links, vertikal mittig
         self.result.setAlignment(QtCore.Qt.AlignCenter)
         self.result.setStyleSheet(
-            "font-size:14px; color:#666; margin-top:6px;"
+            "font-size:14px; color:#666; margin-top:0px;"
         )
 
         self.btn_clear_result = QtWidgets.QToolButton()
@@ -270,12 +274,13 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
         # reapply persisted state after startup restore.
         self.apply_theme(theme_util.app_theme("light"))
         QtCore.QTimer.singleShot(0, self._refit_view)
+        QtCore.QTimer.singleShot(0, self._apply_adaptive_header_labels)
 
     def set_wheel_overlay_widget(
         self,
         widget: QtWidgets.QWidget,
         *,
-        margin_top: int = 8,
+        margin_top: int = 4,
         margin_right: int = 8,
     ) -> None:
         if widget is None:
@@ -287,6 +292,15 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
         widget.show()
         qt_runtime.safe_raise(widget)
         widget.installEventFilter(self)
+        if hasattr(self.view, "set_overlay_reserve_widget"):
+            try:
+                self.view.set_overlay_reserve_widget(
+                    widget,
+                    margin_top=self._wheel_overlay_margin_top,
+                    margin_right=self._wheel_overlay_margin_right,
+                )
+            except Exception:
+                pass
         QtCore.QTimer.singleShot(0, self._position_wheel_overlay_widget)
 
     def _position_wheel_overlay_widget(self) -> None:
@@ -295,7 +309,19 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
             return
         viewport = self.view.viewport()
         x = max(0, viewport.width() - widget.width() - self._wheel_overlay_margin_right)
-        y = max(0, self._wheel_overlay_margin_top)
+        y_anchor = 0
+        try:
+            scene = getattr(self.view, "scene", None)
+            if callable(scene):
+                scene_obj = scene()
+            else:
+                scene_obj = scene
+            if scene_obj is not None:
+                top = float(scene_obj.sceneRect().top())
+                y_anchor = int(round(self.view.mapFromScene(QtCore.QPointF(0.0, top)).y()))
+        except Exception:
+            y_anchor = 0
+        y = max(0, y_anchor + self._wheel_overlay_margin_top)
         widget.move(x, y)
         qt_runtime.safe_raise(widget)
 
@@ -332,9 +358,8 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
         super().set_language(lang)
         self._default_spin_label = i18n.t("wheel.spin_role")
         if self.toggle:
-            self.toggle.setText(i18n.t("wheel.pairs_toggle"))
+            self.toggle.setToolTip(i18n.t("wheel.pairs_toggle_tooltip"))
         if self.chk_subroles:
-            self.chk_subroles.setText(i18n.t("wheel.subroles_toggle"))
             hint = i18n.t("wheel.subroles_hint_generic")
             if len(self.subrole_labels) >= 2:
                 hint = i18n.t(
@@ -344,7 +369,6 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
                 )
             self.chk_subroles.setToolTip(hint)
         if self.chk_show_names:
-            self.chk_show_names.setText(i18n.t("wheel.show_names"))
             self.chk_show_names.setToolTip(i18n.t("wheel.show_names_tooltip"))
         if hasattr(self, "btn_reset_segments"):
             self.btn_reset_segments.setToolTip(i18n.t("wheel.reset_disabled_tooltip"))
@@ -355,6 +379,72 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
         self._apply_placeholder()
         self._apply_result_state()
         self._apply_fixed_widths()
+
+    @staticmethod
+    def _checkbox_width_for_text(cb: QtWidgets.QCheckBox, text: str) -> int:
+        old = cb.text()
+        if old == text:
+            return int(cb.sizeHint().width())
+        try:
+            cb.setText(text)
+            return int(cb.sizeHint().width())
+        finally:
+            cb.setText(old)
+
+    def _available_header_toggle_width(self) -> int:
+        total_width = max(0, int(self.card.width()) - (2 * int(ui_tokens.PANEL_CONTENT_MARGIN_H)))
+        spacing = int(self.header_layout.spacing())
+        if spacing < 0:
+            spacing = 8
+        reset_w = int(self.btn_reset_segments.sizeHint().width()) if getattr(self, "btn_reset_segments", None) else 0
+        title_w = int(self.label.sizeHint().width()) if getattr(self, "label", None) else 0
+        reserve = reset_w + title_w + (4 * spacing) + 32
+        return max(0, total_width - reserve)
+
+    def _header_toggle_specs(self) -> list[tuple[QtWidgets.QCheckBox, str, str]]:
+        specs: list[tuple[QtWidgets.QCheckBox, str, str]] = []
+        if self.toggle and self.toggle.isVisible():
+            specs.append((self.toggle, i18n.t("wheel.pairs_toggle"), i18n.t("wheel.pairs_toggle_short")))
+        if self.chk_subroles and self.chk_subroles.isVisible():
+            specs.append((self.chk_subroles, i18n.t("wheel.subroles_toggle"), i18n.t("wheel.subroles_toggle_short")))
+        if self.chk_show_names and self.chk_show_names.isVisible():
+            specs.append((self.chk_show_names, i18n.t("wheel.show_names"), i18n.t("wheel.show_names_short")))
+        return specs
+
+    def _apply_adaptive_header_labels(self) -> None:
+        specs = self._header_toggle_specs()
+        if not specs:
+            self._using_short_header_labels = False
+            return
+
+        spacing = int(self.header_layout.spacing())
+        if spacing < 0:
+            spacing = 8
+        gaps = spacing * max(0, len(specs) - 1)
+        # Keep visible breathing room between the three header checkboxes.
+        extra_w = 10 if len(specs) > 1 else 0
+
+        required_full = gaps
+        required_short = gaps
+        for cb, full_text, short_text in specs:
+            required_full += self._checkbox_width_for_text(cb, full_text) + extra_w
+            required_short += self._checkbox_width_for_text(cb, short_text) + extra_w
+
+        available = self._available_header_toggle_width()
+        use_short = required_full > available
+        self._using_short_header_labels = bool(use_short)
+
+        for cb, full_text, short_text in specs:
+            target = short_text if use_short else full_text
+            if cb.text() != target:
+                cb.setText(target)
+            cb.setMinimumWidth(0)
+            cb.setMaximumWidth(16777215)
+            cb.setFixedWidth(int(cb.sizeHint().width()) + extra_w)
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._apply_adaptive_header_labels()
 
     def _refit_view(self):
         """Reicht Größenanpassung an das WheelWidget weiter."""
@@ -374,24 +464,7 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
     def _apply_fixed_widths(self):
         """Set fixed widths based on max translation to avoid layout jumps."""
         super()._apply_fixed_widths()
-        if self.toggle:
-            ui_helpers.set_fixed_width_from_translations(
-                self.toggle,
-                ["wheel.pairs_toggle"],
-                padding=30,
-            )
-        if self.chk_subroles:
-            ui_helpers.set_fixed_width_from_translations(
-                self.chk_subroles,
-                ["wheel.subroles_toggle"],
-                padding=30,
-            )
-        if self.chk_show_names:
-            ui_helpers.set_fixed_width_from_translations(
-                self.chk_show_names,
-                ["wheel.show_names"],
-                padding=30,
-            )
+        self._apply_adaptive_header_labels()
 
     def apply_theme(self, theme: theme_util.Theme) -> None:
         """Apply color palette for the active theme to this wheel."""

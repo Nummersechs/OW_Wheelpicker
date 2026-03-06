@@ -84,29 +84,26 @@ class TestMainWindowShutdownMixin(unittest.TestCase):
         mw.close = lambda: None
         return mw
 
-    def test_close_event_defers_when_ocr_preload_thread_is_still_running(self):
+    def test_close_event_orphans_when_ocr_preload_thread_is_still_running(self):
         mw = self._make_window()
         thread = _AlwaysRunningThread()
         mw._ocr_preload_job = {"thread": thread}
         event = _FakeCloseEvent()
-        scheduled: list[tuple[int, object]] = []
 
         with patch(
             "controller.main_window_parts.main_window_shutdown.QtCore.QTimer.singleShot",
-            side_effect=lambda delay_ms, callback: scheduled.append((int(delay_ms), callback)),
-        ), patch(
+        ) as single_shot, patch(
             "controller.main_window_parts.main_window_shutdown.shutdown_manager.handle_close_event"
         ) as handle_close:
             MainWindow.closeEvent(mw, event)
 
-        self.assertTrue(event.ignored)
-        self.assertEqual(len(scheduled), 1)
-        self.assertEqual(scheduled[0][0], 50)
-        self.assertEqual(thread.interrupt_calls, 1)
-        self.assertEqual(thread.quit_calls, 1)
-        self.assertEqual(thread.terminate_calls, 1)
-        self.assertIsNotNone(mw._ocr_preload_job)
-        handle_close.assert_not_called()
+        self.assertFalse(event.ignored)
+        single_shot.assert_not_called()
+        self.assertGreaterEqual(thread.interrupt_calls, 1)
+        self.assertGreaterEqual(thread.quit_calls, 1)
+        self.assertGreaterEqual(thread.terminate_calls, 1)
+        self.assertIsNone(mw._ocr_preload_job)
+        handle_close.assert_called_once()
 
     def test_close_event_continues_shutdown_after_ocr_preload_thread_stops(self):
         mw = self._make_window()
@@ -116,7 +113,7 @@ class TestMainWindowShutdownMixin(unittest.TestCase):
 
         with patch(
             "controller.main_window_parts.main_window_shutdown.QtCore.QTimer.singleShot"
-        ) as single_shot, patch(
+        ), patch(
             "controller.main_window_parts.main_window_shutdown.shutdown_manager.handle_close_event"
         ) as handle_close:
             MainWindow.closeEvent(mw, event)
@@ -124,13 +121,12 @@ class TestMainWindowShutdownMixin(unittest.TestCase):
         self.assertFalse(event.ignored)
         self.assertIsNone(mw._ocr_preload_job)
         self.assertIsNone(mw._close_thread_wait_started_at)
-        self.assertEqual(thread.interrupt_calls, 1)
-        self.assertEqual(thread.quit_calls, 1)
-        self.assertEqual(thread.terminate_calls, 1)
-        single_shot.assert_not_called()
+        self.assertGreaterEqual(thread.interrupt_calls, 1)
+        self.assertGreaterEqual(thread.quit_calls, 1)
+        self.assertGreaterEqual(thread.terminate_calls, 1)
         handle_close.assert_called_once()
 
-    def test_close_event_uses_retry_wait_profile_after_deferred_close(self):
+    def test_close_event_uses_retry_wait_profile_without_deferring(self):
         mw = self._make_window()
         thread = _AlwaysRunningThread()
         mw._ocr_preload_job = {"thread": thread}
@@ -154,15 +150,15 @@ class TestMainWindowShutdownMixin(unittest.TestCase):
         ) as handle_close:
             MainWindow.closeEvent(mw, event)
 
-        self.assertTrue(event.ignored)
-        self.assertEqual(len(scheduled), 1)
-        self.assertEqual(scheduled[0][0], 50)
-        self.assertEqual(thread.interrupt_calls, 1)
-        self.assertEqual(thread.quit_calls, 1)
-        self.assertEqual(thread.terminate_calls, 1)
+        self.assertFalse(event.ignored)
+        self.assertEqual(len(scheduled), 0)
+        self.assertGreaterEqual(thread.interrupt_calls, 1)
+        self.assertGreaterEqual(thread.quit_calls, 1)
+        self.assertGreaterEqual(thread.terminate_calls, 1)
         # Retry profile skips graceful wait and only does the short terminate wait.
         self.assertEqual(thread.wait_timeouts, [42])
-        handle_close.assert_not_called()
+        self.assertIsNone(mw._ocr_preload_job)
+        handle_close.assert_called_once()
 
 
 if __name__ == "__main__":

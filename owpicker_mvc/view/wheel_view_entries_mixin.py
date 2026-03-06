@@ -55,8 +55,16 @@ class WheelViewEntriesMixin:
                     widget.chk_active.setChecked(False)
                     changed = True
             else:
-                if item.checkState() == QtCore.Qt.Checked:
-                    item.setCheckState(QtCore.Qt.Unchecked)
+                state_getter = getattr(self.names, "item_state", None)
+                state_setter = getattr(self.names, "set_item_state", None)
+                current_state = (
+                    state_getter(item) if callable(state_getter) else item.checkState()
+                )
+                if current_state == QtCore.Qt.Checked:
+                    if callable(state_setter):
+                        state_setter(item, QtCore.Qt.Unchecked)
+                    else:
+                        item.setCheckState(QtCore.Qt.Unchecked)
                     changed = True
         return changed
 
@@ -123,8 +131,16 @@ class WheelViewEntriesMixin:
                         widget.chk_active.setChecked(active)
                         changed = True
                 else:
-                    if item.checkState() != target_state:
-                        item.setCheckState(target_state)
+                    state_getter = getattr(self.names, "item_state", None)
+                    state_setter = getattr(self.names, "set_item_state", None)
+                    current_state = (
+                        state_getter(item) if callable(state_getter) else item.checkState()
+                    )
+                    if current_state != target_state:
+                        if callable(state_setter):
+                            state_setter(item, target_state)
+                        else:
+                            item.setCheckState(target_state)
                         changed = True
             if changed:
                 self._apply_names_list_changes()
@@ -564,6 +580,8 @@ class WheelViewEntriesMixin:
         self._show_names_visible = bool(visible)
         if self.chk_show_names:
             self.chk_show_names.setVisible(visible)
+        if hasattr(self, "_apply_adaptive_header_labels"):
+            QtCore.QTimer.singleShot(0, self._apply_adaptive_header_labels)
 
     def set_header_controls_visible(self, visible: bool):
         """Blendet Pair-/Subrollen-Toggles im Header ein/aus."""
@@ -572,6 +590,8 @@ class WheelViewEntriesMixin:
             self.toggle.setVisible(visible)
         if self.chk_subroles:
             self.chk_subroles.setVisible(visible)
+        if hasattr(self, "_apply_adaptive_header_labels"):
+            QtCore.QTimer.singleShot(0, self._apply_adaptive_header_labels)
 
     def set_subrole_controls_visible(self, visible: bool):
         """Blendet Subrollen-Kästchen in den Zeilen ein/aus."""

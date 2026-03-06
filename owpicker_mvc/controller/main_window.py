@@ -41,6 +41,30 @@ from .focus_policy import FocusPolicyManager
 from .timer_registry import TimerRegistry
 from view import style_helpers, ui_tokens
 
+
+class _AdaptiveSummaryLabel(QtWidgets.QLabel):
+    """Compact summary label: reserve less space when text is empty."""
+
+    def __init__(self, text: str = "", *, empty_height: int = 10, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self._empty_height = max(0, int(empty_height))
+        self._apply_compact_state(text)
+
+    def setText(self, text: str) -> None:  # type: ignore[override]
+        super().setText(text)
+        self._apply_compact_state(text)
+
+    def _apply_compact_state(self, text: str) -> None:
+        has_text = bool(str(text or "").strip())
+        self.setVisible(has_text)
+        if has_text:
+            self.setMinimumHeight(0)
+            self.setMaximumHeight(16777215)
+            return
+        self.setMinimumHeight(0)
+        self.setMaximumHeight(0)
+
+
 class MainWindow(
     MainWindowStateMixin,
     MainWindowShutdownMixin,
@@ -396,7 +420,7 @@ class MainWindow(
                 self.btn_mode_maps,
             ],
             ["mode.players", "mode.heroes", "mode.hero_ban", "mode.maps", "mode.maps_loading"],
-            padding=56,
+            padding=34,
         )
         self._mode_buttons = [
             self.btn_mode_players,
@@ -423,7 +447,7 @@ class MainWindow(
         mode_row.setSpacing(ui_tokens.SECTION_SPACING)
         self.lbl_player_profile = QtWidgets.QLabel(i18n.t("players.profile_label"))
         self.player_profile_dropdown = PlayerProfileDropdown()
-        self.player_profile_dropdown.setMinimumWidth(220)
+        self.player_profile_dropdown.setMinimumWidth(158)
         self.player_profile_dropdown.setFixedHeight(ui_tokens.INPUT_HEIGHT_MD)
         self.player_profile_dropdown.profileActivated.connect(self._on_player_profile_changed)
         self.player_profile_dropdown.profileRenamed.connect(self._on_player_profile_name_edited)
@@ -541,7 +565,7 @@ class MainWindow(
         )
         self.tank.set_wheel_overlay_widget(
             self.btn_tank_ocr_import,
-            margin_top=8,
+            margin_top=0,
             margin_right=8,
         )
         self._register_role_ocr_button("tank", self.btn_tank_ocr_import)
@@ -559,7 +583,7 @@ class MainWindow(
         )
         self.dps.set_wheel_overlay_widget(
             self.btn_dps_ocr_import,
-            margin_top=8,
+            margin_top=0,
             margin_right=8,
         )
         self._register_role_ocr_button("dps", self.btn_dps_ocr_import)
@@ -577,7 +601,7 @@ class MainWindow(
         )
         self.support.set_wheel_overlay_widget(
             self.btn_support_ocr_import,
-            margin_top=8,
+            margin_top=0,
             margin_right=8,
         )
         self._register_role_ocr_button("support", self.btn_support_ocr_import)
@@ -758,7 +782,10 @@ class MainWindow(
 
     def _build_summary(self, root: QtWidgets.QVBoxLayout) -> None:
         current_theme = theme_util.get_theme(getattr(self, "theme", "light"))
-        self.summary = QtWidgets.QLabel("")
+        self.summary = _AdaptiveSummaryLabel(
+            "",
+            empty_height=max(1, int(ui_tokens.ROOT_SPACING)),
+        )
         self.summary.setAlignment(QtCore.Qt.AlignCenter)
         style_helpers.apply_theme_roles(current_theme, ((self.summary, "label.summary"),))
         root.addWidget(self.summary)

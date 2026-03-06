@@ -11,6 +11,7 @@ from view.list_panel import ListPanel
 
 _MAP_TYPE_LIST_STYLE_CACHE: dict[str, str] = {}
 _MAP_NAMES_HINT_STYLE_CACHE: dict[str, str] = {}
+QWIDGETSIZE_MAX = getattr(QtWidgets, "QWIDGETSIZE_MAX", getattr(QtCore, "QWIDGETSIZE_MAX", 16777215))
 
 
 def _map_type_list_style(theme: theme_util.Theme) -> str:
@@ -172,9 +173,8 @@ class MapUI(QtCore.QObject):
         self.map_main.result_widget.setVisible(False)
         self.map_main.btn_local_spin.setVisible(False)
 
-        base_canvas = max(200, int(2 * config.WHEEL_RADIUS + 80))
-        self.map_main.view.setMinimumSize(base_canvas, base_canvas)
-        self.map_main.view.setMaximumSize(QtCore.QSize(16777215, 16777215))
+        self.map_main.view.setMinimumSize(0, 0)
+        self.map_main.view.setMaximumSize(QtCore.QSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX))
         self.map_main.view.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         self.map_main.btn_local_spin.setFocusPolicy(QtCore.Qt.ClickFocus)
 
@@ -822,31 +822,29 @@ class MapUI(QtCore.QObject):
             dps.height() or dps.sizeHint().height(),
             support.height() or support.sizeHint().height(),
         )
-        ref_w = max(
-            self.map_main.view.minimumWidth(),
-            self.map_main.view.sizeHint().width() or 0,
-            int(2 * config.WHEEL_RADIUS + 80),
-        )
-        self.map_main.view.setMinimumHeight(ref_h)
-        self.map_main.view.setMinimumWidth(ref_w)
-        self.map_main.view.setMaximumWidth(ref_w + 200)
-        self.map_main.view.setMaximumHeight(ref_h + 80)
-        self.map_main.setMinimumHeight(ref_h)
-        self.map_main.setMinimumWidth(ref_w)
-        self.map_main.setMaximumHeight(ref_h + 80)
-        self.map_main.setMaximumWidth(ref_w + 200)
+        # Keep the map wheel responsive: only apply soft minima, avoid hard caps.
+        soft_canvas = max(180, min(320, int(ref_h * 0.45)))
+        self.map_main.view.setMinimumHeight(soft_canvas)
+        self.map_main.view.setMinimumWidth(soft_canvas)
+        self.map_main.view.setMaximumHeight(QWIDGETSIZE_MAX)
+        self.map_main.view.setMaximumWidth(QWIDGETSIZE_MAX)
+        panel_min = max(260, soft_canvas + 80)
+        self.map_main.setMinimumHeight(panel_min)
+        self.map_main.setMinimumWidth(soft_canvas)
+        self.map_main.setMaximumHeight(QWIDGETSIZE_MAX)
+        self.map_main.setMaximumWidth(QWIDGETSIZE_MAX)
         if hasattr(self, "map_lists_frame"):
-            adj = max(100, ref_h - 20)
+            adj = max(180, min(420, ref_h - 40))
             self.map_lists_frame.setMinimumHeight(adj)
-            self.map_lists_frame.setMaximumHeight(ref_h + 80)
+            self.map_lists_frame.setMaximumHeight(QWIDGETSIZE_MAX)
         if hasattr(self, "map_lists_wrapper"):
-            adj = max(100, ref_h - 20)
+            adj = max(180, min(420, ref_h - 40))
             self.map_lists_wrapper.setMinimumHeight(adj)
-            self.map_lists_wrapper.setMaximumHeight(ref_h + 80)
+            self.map_lists_wrapper.setMaximumHeight(QWIDGETSIZE_MAX)
         if hasattr(self, "map_sidebar"):
-            adj = max(100, ref_h - 20)
+            adj = max(180, min(420, ref_h - 40))
             self.map_sidebar.setMinimumHeight(adj)
-            self.map_sidebar.setMaximumHeight(ref_h + 80)
+            self.map_sidebar.setMaximumHeight(QWIDGETSIZE_MAX)
 
     def set_interactive_enabled(self, en: bool):
         for wheel in self.map_lists.values():

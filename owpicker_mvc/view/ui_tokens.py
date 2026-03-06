@@ -3,9 +3,9 @@ from __future__ import annotations
 """Central UI sizing and spacing tokens for consistent layouts."""
 
 # Root window layout
-ROOT_MARGIN_H = 12
-ROOT_MARGIN_TOP = 10
-ROOT_MARGIN_BOTTOM = 10
+ROOT_MARGIN_H = 18
+ROOT_MARGIN_TOP = 12
+ROOT_MARGIN_BOTTOM = 12
 ROOT_SPACING = 10
 SECTION_SPACING = 8
 GRID_SPACING = 14
