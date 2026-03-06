@@ -8,7 +8,6 @@ from difflib import SequenceMatcher
 import gc
 import re
 import sys
-import warnings
 from typing import Any, Iterable
 from logic.name_normalization import normalize_name_alnum_key, normalize_name_tokens
 
@@ -58,7 +57,6 @@ _EASYOCR_LANG_ALIAS: dict[str, str] = {
     "ch_tra": "ch_tra",
 }
 _EASYOCR_RESTRICTED_LANGS: set[str] = {"ch_sim", "ch_tra", "ja", "ko"}
-_TORCH_WARN_FILTERS_APPLIED = False
 
 
 def _parse_ocr_lang_tokens(value: str | None) -> list[str]:
@@ -198,20 +196,6 @@ def _resolve_easyocr_device(mode: str) -> str:
     if has_mps:
         return "mps"
     return "cpu"
-
-
-def _apply_torch_warning_filters(quiet: bool) -> None:
-    global _TORCH_WARN_FILTERS_APPLIED
-    if not bool(quiet):
-        return
-    if _TORCH_WARN_FILTERS_APPLIED:
-        return
-    warnings.filterwarnings(
-        "ignore",
-        message=r".*'pin_memory' argument is set as true but not supported on MPS now.*",
-        category=UserWarning,
-    )
-    _TORCH_WARN_FILTERS_APPLIED = True
 
 
 @contextmanager
@@ -354,7 +338,6 @@ def _cached_easyocr_reader(
     download_enabled: bool,
     quiet: bool,
 ):
-    _apply_torch_warning_filters(bool(quiet))
     easyocr, import_error = _import_easyocr_module()
     if easyocr is None:
         raise RuntimeError(import_error or "easyocr-import-error")
@@ -1048,7 +1031,6 @@ def run_easyocr(
     all_detections: list[tuple[int, Any]] = []
     for group_index, (group, reader) in enumerate(readers):
         try:
-            _apply_torch_warning_filters(bool(quiet))
             device = str(getattr(reader, "device", "") or "").strip().lower()
             disable_pin_memory = device != "cuda"
             with _patch_dataloader_pin_memory(disable_pin_memory):

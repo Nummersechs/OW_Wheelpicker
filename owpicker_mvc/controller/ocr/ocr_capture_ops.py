@@ -1972,6 +1972,15 @@ def _start_ocr_async_import(
     temp_paths: list[Path] = []
     async_started = False
     try:
+        if bool(getattr(mw, "_closing", False)):
+            _hide_ocr_busy_overlay(mw, active=busy_overlay_shown)
+            _restore_override_cursor()
+            try:
+                setattr(mw, "_ocr_async_job", None)
+            except Exception:
+                pass
+            return
+
         runtime_cfg = _ocr_runtime_cfg_snapshot(mw)
         ocr_import = _ocr_import_module()
         easyocr_kwargs = _easyocr_resolution_kwargs(runtime_cfg)
@@ -2025,9 +2034,13 @@ def _start_ocr_async_import(
 
         def _finalize_job() -> None:
             current = getattr(mw, "_ocr_async_job", None)
-            if current is not job:
+            # Accept late finalize delivery when thread.finished already
+            # cleared the job reference; ignore only when a different job is active.
+            if current is not None and current is not job:
                 return
-            setattr(mw, "_ocr_async_job", None)
+            if bool(job.get("_finalized", False)):
+                return
+            job["_finalized"] = True
             _cleanup_temp_paths(list(job.get("paths") or []))
             _hide_ocr_busy_overlay(mw, active=busy_overlay_shown)
             _restore_override_cursor()
@@ -2038,6 +2051,19 @@ def _start_ocr_async_import(
                 pass
             mw._update_role_ocr_buttons_enabled()
             _schedule_ocr_cache_release(mw)
+            if current is job:
+                running = False
+                try:
+                    running = bool(thread.isRunning())
+                except Exception:
+                    running = False
+                if not running:
+                    setattr(mw, "_ocr_async_job", None)
+
+        def _cleanup_finished_job() -> None:
+            current = getattr(mw, "_ocr_async_job", None)
+            if current is job:
+                setattr(mw, "_ocr_async_job", None)
 
         def _handle_result(names: list[str], raw_text: str, ocr_error: str | None) -> None:
             _finalize_job()
@@ -2185,6 +2211,11 @@ def _start_ocr_async_import(
         except Exception:
             thread.finished.connect(thread.deleteLater)
             job["thread_delete_connection"] = None
+        try:
+            job["cleanup_connection"] = thread.finished.connect(_cleanup_finished_job)
+        except Exception:
+            thread.finished.connect(_cleanup_finished_job)
+            job["cleanup_connection"] = None
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         try:
             thread.start(QtCore.QThread.LowPriority)

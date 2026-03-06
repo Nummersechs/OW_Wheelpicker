@@ -11,6 +11,10 @@ from view.list_panel import ListPanel
 
 _MAP_TYPE_LIST_STYLE_CACHE: dict[str, str] = {}
 _MAP_NAMES_HINT_STYLE_CACHE: dict[str, str] = {}
+_MAP_SIDEBAR_STYLE_CACHE: dict[str, str] = {}
+_MAP_RIGHT_CANVAS_STYLE_CACHE: dict[str, str] = {}
+_MAP_LIST_SCROLL_STYLE_CACHE: dict[str, str] = {}
+_MAP_GRID_CONTAINER_STYLE_CACHE: dict[str, str] = {}
 QWIDGETSIZE_MAX = getattr(QtWidgets, "QWIDGETSIZE_MAX", getattr(QtCore, "QWIDGETSIZE_MAX", 16777215))
 
 
@@ -45,6 +49,63 @@ def _map_names_hint_style(theme: theme_util.Theme) -> str:
         f" background:{theme.card_bg}; border:none;"
     )
     _MAP_NAMES_HINT_STYLE_CACHE[theme.key] = cached
+    return cached
+
+
+def _map_sidebar_style(theme: theme_util.Theme) -> str:
+    cached = _MAP_SIDEBAR_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    cached = (
+        "QFrame#mapSidebar {"
+        f" background:{theme.alt_base}; color:{theme.text};"
+        f" border:1px solid {theme.border}; border-radius:8px;"
+        "}"
+    )
+    _MAP_SIDEBAR_STYLE_CACHE[theme.key] = cached
+    return cached
+
+
+def _map_right_canvas_style(theme: theme_util.Theme) -> str:
+    cached = _MAP_RIGHT_CANVAS_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    cached = (
+        "QFrame#mapListsWrapper {"
+        f" background:{theme.alt_base}; color:{theme.text};"
+        f" border:1px solid {theme.border}; border-radius:8px;"
+        "}"
+    )
+    _MAP_RIGHT_CANVAS_STYLE_CACHE[theme.key] = cached
+    return cached
+
+
+def _map_list_scroll_style(theme: theme_util.Theme) -> str:
+    cached = _MAP_LIST_SCROLL_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    cached = (
+        "QScrollArea#mapListScroll {"
+        " background:transparent; border:none;"
+        "}"
+        "QScrollArea#mapListScroll > QWidget#qt_scrollarea_viewport {"
+        " background:transparent; border:none;"
+        "}"
+    )
+    _MAP_LIST_SCROLL_STYLE_CACHE[theme.key] = cached
+    return cached
+
+
+def _map_grid_container_style(theme: theme_util.Theme) -> str:
+    cached = _MAP_GRID_CONTAINER_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    cached = (
+        "QWidget#mapGridContainer {"
+        " background:transparent; border:none;"
+        "}"
+    )
+    _MAP_GRID_CONTAINER_STYLE_CACHE[theme.key] = cached
     return cached
 
 
@@ -88,6 +149,10 @@ class MapUI(QtCore.QObject):
         self._update_timer = QtCore.QTimer(self)
         self._update_timer.setSingleShot(True)
         self._update_timer.timeout.connect(self._flush_updates)
+        self._cap_heights_timer = QtCore.QTimer(self)
+        self._cap_heights_timer.setSingleShot(True)
+        self._cap_heights_timer.timeout.connect(self._cap_heights)
+        self._resize_watch_targets: tuple[QtWidgets.QWidget, ...] = tuple()
         self.container = self._build_ui()
 
     # ----- Build UI -----
@@ -127,6 +192,7 @@ class MapUI(QtCore.QObject):
         self._apply_map_control_widths()
         sb_layout.addWidget(self.btn_edit_map_types, 0, QtCore.Qt.AlignLeft)
         sb_layout.addStretch(1)
+        sidebar.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Expanding)
         self.map_sidebar = sidebar
 
         # --- Listen-Gitter rechts ---
@@ -143,11 +209,12 @@ class MapUI(QtCore.QObject):
         scroll.setObjectName("mapListScroll")
         scroll.setFocusPolicy(QtCore.Qt.ClickFocus)
         self.map_lists_frame = scroll
-        right_wrap = QtWidgets.QWidget()
+        right_wrap = QtWidgets.QFrame()
         right_wrap.setObjectName("mapListsWrapper")
         right_wrap_layout = QtWidgets.QVBoxLayout(right_wrap)
         right_wrap_layout.setSpacing(0)
         right_wrap_layout.addWidget(scroll)
+        right_wrap.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         self.map_lists_wrapper = right_wrap
 
         # Listen initial erstellen
@@ -176,6 +243,7 @@ class MapUI(QtCore.QObject):
         self.map_main.view.setMinimumSize(0, 0)
         self.map_main.view.setMaximumSize(QtCore.QSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX))
         self.map_main.view.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        self.map_main.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         self.map_main.btn_local_spin.setFocusPolicy(QtCore.Qt.ClickFocus)
 
         # Gesamt-Layout
@@ -183,14 +251,22 @@ class MapUI(QtCore.QObject):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(10)
         row.addWidget(sidebar, 0)
-        row.addWidget(self.map_main, 0, QtCore.Qt.AlignCenter)
+        row.addWidget(self.map_main, 1)
         row.addWidget(right_wrap, 1)
         row.setStretch(0, 1)
         row.setStretch(1, 9)
         row.setStretch(2, 9)
         layout.addLayout(row, 1)
         layout.setStretchFactor(row, 1)
-        QtCore.QTimer.singleShot(0, self._cap_heights)
+        self._resize_watch_targets = tuple(
+            w for w in (container, self.map_main, right_wrap, sidebar) if isinstance(w, QtWidgets.QWidget)
+        )
+        for w in self._resize_watch_targets:
+            try:
+                w.installEventFilter(self)
+            except Exception:
+                pass
+        QtCore.QTimer.singleShot(0, self._schedule_cap_heights)
         if not self._defer_list_build:
             QtCore.QTimer.singleShot(0, lambda: self.rebuild_combined(emit_state=False, force_wheel=True))
         return container
@@ -605,6 +681,26 @@ class MapUI(QtCore.QObject):
                 (getattr(self, "btn_edit_map_types", None), "button.primary"),
             ),
         )
+        style_helpers.set_stylesheet_if_needed(
+            getattr(self, "map_sidebar", None),
+            f"map_sidebar:{theme.key}",
+            _map_sidebar_style(theme),
+        )
+        style_helpers.set_stylesheet_if_needed(
+            getattr(self, "map_lists_wrapper", None),
+            f"map_lists_wrapper:{theme.key}",
+            _map_right_canvas_style(theme),
+        )
+        style_helpers.set_stylesheet_if_needed(
+            getattr(self, "map_lists_frame", None),
+            f"map_list_scroll:{theme.key}",
+            _map_list_scroll_style(theme),
+        )
+        style_helpers.set_stylesheet_if_needed(
+            getattr(self, "map_grid_container", None),
+            f"map_grid_container:{theme.key}",
+            _map_grid_container_style(theme),
+        )
         if hasattr(self, "_map_type_editor"):
             style_helpers.apply_theme_roles(
                 theme,
@@ -711,11 +807,19 @@ class MapUI(QtCore.QObject):
         self.set_active(False)
         if self._update_timer.isActive():
             self._update_timer.stop()
+        if self._cap_heights_timer.isActive():
+            self._cap_heights_timer.stop()
         if self._list_build_timer is not None and self._list_build_timer.isActive():
             self._list_build_timer.stop()
         self._pending_list_categories = []
         self._pending_rebuild = False
         self._pending_state_emit = False
+        for w in self._resize_watch_targets:
+            try:
+                w.removeEventFilter(self)
+            except Exception:
+                pass
+        self._resize_watch_targets = tuple()
 
     def resource_snapshot(self) -> dict:
         update_timer_active = False
@@ -814,37 +918,65 @@ class MapUI(QtCore.QObject):
     # ----- Sizing -----
     def _cap_heights(self):
         if not self._role_widgets or not isinstance(self._role_widgets, tuple):
-            return
-        tank, dps, support = self._role_widgets
-        ref_h = max(
-            200,
-            tank.height() or tank.sizeHint().height(),
-            dps.height() or dps.sizeHint().height(),
-            support.height() or support.sizeHint().height(),
-        )
+            role_ref_h = 0
+        else:
+            tank, dps, support = self._role_widgets
+            role_ref_h = max(
+                0,
+                tank.height() or tank.sizeHint().height(),
+                dps.height() or dps.sizeHint().height(),
+                support.height() or support.sizeHint().height(),
+            )
+        container_h = 0
+        if isinstance(getattr(self, "container", None), QtWidgets.QWidget):
+            try:
+                container_h = int(self.container.height())
+            except Exception:
+                container_h = 0
+            if container_h <= 0:
+                try:
+                    container_h = int(self.container.sizeHint().height())
+                except Exception:
+                    container_h = 0
+        ref_h = max(200, role_ref_h, container_h)
         # Keep the map wheel responsive: only apply soft minima, avoid hard caps.
-        soft_canvas = max(180, min(320, int(ref_h * 0.45)))
+        soft_canvas = max(160, min(320, int(ref_h * 0.40)))
+        panel_min_w = max(210, min(360, int(soft_canvas * 1.15)))
         self.map_main.view.setMinimumHeight(soft_canvas)
         self.map_main.view.setMinimumWidth(soft_canvas)
         self.map_main.view.setMaximumHeight(QWIDGETSIZE_MAX)
         self.map_main.view.setMaximumWidth(QWIDGETSIZE_MAX)
-        panel_min = max(260, soft_canvas + 80)
+        panel_min = max(220, soft_canvas + 70)
         self.map_main.setMinimumHeight(panel_min)
-        self.map_main.setMinimumWidth(soft_canvas)
+        self.map_main.setMinimumWidth(panel_min_w)
         self.map_main.setMaximumHeight(QWIDGETSIZE_MAX)
         self.map_main.setMaximumWidth(QWIDGETSIZE_MAX)
         if hasattr(self, "map_lists_frame"):
-            adj = max(180, min(420, ref_h - 40))
+            adj = max(150, min(420, ref_h - 30))
             self.map_lists_frame.setMinimumHeight(adj)
             self.map_lists_frame.setMaximumHeight(QWIDGETSIZE_MAX)
         if hasattr(self, "map_lists_wrapper"):
-            adj = max(180, min(420, ref_h - 40))
+            adj = max(150, min(420, ref_h - 30))
             self.map_lists_wrapper.setMinimumHeight(adj)
             self.map_lists_wrapper.setMaximumHeight(QWIDGETSIZE_MAX)
         if hasattr(self, "map_sidebar"):
-            adj = max(180, min(420, ref_h - 40))
+            adj = max(150, min(420, ref_h - 30))
             self.map_sidebar.setMinimumHeight(adj)
             self.map_sidebar.setMaximumHeight(QWIDGETSIZE_MAX)
+
+    def _schedule_cap_heights(self) -> None:
+        if self._cap_heights_timer.isActive():
+            return
+        self._cap_heights_timer.start(25)
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if obj in self._resize_watch_targets and event.type() in (
+            QtCore.QEvent.Resize,
+            QtCore.QEvent.Show,
+            QtCore.QEvent.LayoutRequest,
+        ):
+            self._schedule_cap_heights()
+        return super().eventFilter(obj, event)
 
     def set_interactive_enabled(self, en: bool):
         for wheel in self.map_lists.values():

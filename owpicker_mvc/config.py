@@ -10,6 +10,7 @@ DEBUG = False
 LOG_OUTPUT_DIR = "logs"
 # Master-Schalter für Release/EXE:
 # - unterdrückt Konsole/Qt-Logs (siehe main.py)
+# - unterdrückt zusätzlich Python-Warnings und Logging-Ausgaben
 # - deaktiviert zusätzlich alle internen Debug-/Trace-Logs
 # - Save-State bleibt davon unberührt
 QUIET = False
@@ -75,20 +76,12 @@ SHUTDOWN_OVERLAY_DELAY_MS = 320
 # Async OCR import thread (normal OCR action):
 SHUTDOWN_OCR_ASYNC_GRACEFUL_WAIT_MS = 1200
 SHUTDOWN_OCR_ASYNC_TERMINATE_WAIT_MS = 700
-# Retry waits after close was already deferred once (keeps UI responsive).
-SHUTDOWN_OCR_ASYNC_RETRY_GRACEFUL_WAIT_MS = 0
-SHUTDOWN_OCR_ASYNC_RETRY_TERMINATE_WAIT_MS = 120
 # Background OCR preload thread:
 SHUTDOWN_OCR_PRELOAD_GRACEFUL_WAIT_MS = 1400
 SHUTDOWN_OCR_PRELOAD_TERMINATE_WAIT_MS = 350
-# Retry waits after close was already deferred once (keeps UI responsive).
-SHUTDOWN_OCR_PRELOAD_RETRY_GRACEFUL_WAIT_MS = 0
-SHUTDOWN_OCR_PRELOAD_RETRY_TERMINATE_WAIT_MS = 120
-# Safety fallback: if OCR preload thread still blocks close after this total
-# wait window, detach it from MainWindow shutdown ownership and continue close.
-SHUTDOWN_OCR_PRELOAD_FORCE_ORPHAN_AFTER_MS = 2400
-# Retry cadence while waiting for still-running threads during close.
-SHUTDOWN_THREAD_RETRY_MS = 180
+# Maximum cumulative defer time while waiting for OCR/background threads during
+# close. After this timeout, shutdown falls back to orphaned-thread cleanup.
+SHUTDOWN_THREAD_MAX_DEFER_MS = 2500
 # Keep OCR runtime cache release out of shutdown by default.
 # Cache release can be expensive (gc/torch) and app exit already frees memory.
 SHUTDOWN_RELEASE_OCR_CACHE = False
@@ -178,6 +171,9 @@ OCR_BACKGROUND_PRELOAD_MIN_UPTIME_MS = 8000
 OCR_BACKGROUND_PRELOAD_ALLOW_DURING_STARTUP = True
 # If startup/spin is still busy when preload is due, retry later.
 OCR_BACKGROUND_PRELOAD_BUSY_RETRY_MS = 1800
+# Timeout for the OCR background-preload subprocess. If exceeded, preload is
+# aborted so shutdown can stay responsive.
+OCR_PRELOAD_SUBPROCESS_TIMEOUT_S = 60.0
 # Keep an already running preload thread alive during spin/background pause by
 # default. This improves preload reliability and avoids repeated cold starts.
 # Enable only if spin smoothness on very weak systems is more important.

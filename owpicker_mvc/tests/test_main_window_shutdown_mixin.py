@@ -64,6 +64,33 @@ class _StopsAfterTerminateThread:
         self._running = False
 
 
+class _NotRunningNotFinishedThread:
+    def __init__(self) -> None:
+        self.interrupt_calls = 0
+        self.quit_calls = 0
+        self.wait_calls = 0
+        self.terminate_calls = 0
+
+    def isRunning(self) -> bool:
+        return False
+
+    def isFinished(self) -> bool:
+        return False
+
+    def requestInterruption(self) -> None:
+        self.interrupt_calls += 1
+
+    def quit(self) -> None:
+        self.quit_calls += 1
+
+    def wait(self, _timeout_ms: int) -> bool:
+        self.wait_calls += 1
+        return False
+
+    def terminate(self) -> None:
+        self.terminate_calls += 1
+
+
 class TestMainWindowShutdownMixin(unittest.TestCase):
     def _make_window(self) -> MainWindow:
         mw = MainWindow.__new__(MainWindow)
@@ -74,8 +101,7 @@ class TestMainWindowShutdownMixin(unittest.TestCase):
         mw.overlay = None
         mw._ocr_async_job = None
         mw._ocr_preload_job = None
-        mw._close_thread_wait_started_at = None
-        mw._cfg = lambda key, default=None: 25 if key == "SHUTDOWN_THREAD_RETRY_MS" else default
+        mw._cfg = lambda key, default=None: default
         mw._trace_event = lambda *_args, **_kwargs: None
         mw._cancel_ocr_background_preload = lambda: None
         mw._cancel_ocr_runtime_cache_release = lambda: None
@@ -84,7 +110,7 @@ class TestMainWindowShutdownMixin(unittest.TestCase):
         mw.close = lambda: None
         return mw
 
-    def test_close_event_orphans_when_ocr_preload_thread_is_still_running(self):
+    def test_close_event_defers_when_ocr_preload_thread_is_still_running(self):
         mw = self._make_window()
         thread = _AlwaysRunningThread()
         mw._ocr_preload_job = {"thread": thread}
@@ -97,13 +123,13 @@ class TestMainWindowShutdownMixin(unittest.TestCase):
         ) as handle_close:
             MainWindow.closeEvent(mw, event)
 
-        self.assertFalse(event.ignored)
-        single_shot.assert_not_called()
+        self.assertTrue(event.ignored)
+        single_shot.assert_called_once()
         self.assertGreaterEqual(thread.interrupt_calls, 1)
         self.assertGreaterEqual(thread.quit_calls, 1)
         self.assertGreaterEqual(thread.terminate_calls, 1)
-        self.assertIsNone(mw._ocr_preload_job)
-        handle_close.assert_called_once()
+        self.assertIsNotNone(mw._ocr_preload_job)
+        handle_close.assert_not_called()
 
     def test_close_event_continues_shutdown_after_ocr_preload_thread_stops(self):
         mw = self._make_window()
@@ -120,45 +146,82 @@ class TestMainWindowShutdownMixin(unittest.TestCase):
 
         self.assertFalse(event.ignored)
         self.assertIsNone(mw._ocr_preload_job)
-        self.assertIsNone(mw._close_thread_wait_started_at)
         self.assertGreaterEqual(thread.interrupt_calls, 1)
         self.assertGreaterEqual(thread.quit_calls, 1)
         self.assertGreaterEqual(thread.terminate_calls, 1)
         handle_close.assert_called_once()
 
-    def test_close_event_uses_retry_wait_profile_without_deferring(self):
+    def test_close_event_uses_configured_wait_profile(self):
         mw = self._make_window()
         thread = _AlwaysRunningThread()
         mw._ocr_preload_job = {"thread": thread}
-        mw._close_thread_wait_started_at = 1.0
         cfg_values = {
-            "SHUTDOWN_THREAD_RETRY_MS": 50,
-            "SHUTDOWN_OCR_PRELOAD_GRACEFUL_WAIT_MS": 9999,
-            "SHUTDOWN_OCR_PRELOAD_TERMINATE_WAIT_MS": 888,
-            "SHUTDOWN_OCR_PRELOAD_RETRY_GRACEFUL_WAIT_MS": 0,
-            "SHUTDOWN_OCR_PRELOAD_RETRY_TERMINATE_WAIT_MS": 42,
+            "SHUTDOWN_OCR_PRELOAD_GRACEFUL_WAIT_MS": 123,
+            "SHUTDOWN_OCR_PRELOAD_TERMINATE_WAIT_MS": 42,
         }
         mw._cfg = lambda key, default=None: cfg_values.get(key, default)
         event = _FakeCloseEvent()
-        scheduled: list[tuple[int, object]] = []
 
         with patch(
-            "controller.main_window_parts.main_window_shutdown.QtCore.QTimer.singleShot",
-            side_effect=lambda delay_ms, callback: scheduled.append((int(delay_ms), callback)),
-        ), patch(
+            "controller.main_window_parts.main_window_shutdown.QtCore.QTimer.singleShot"
+        ) as single_shot, patch(
             "controller.main_window_parts.main_window_shutdown.shutdown_manager.handle_close_event"
         ) as handle_close:
             MainWindow.closeEvent(mw, event)
 
-        self.assertFalse(event.ignored)
-        self.assertEqual(len(scheduled), 0)
+        self.assertTrue(event.ignored)
+        single_shot.assert_called_once()
         self.assertGreaterEqual(thread.interrupt_calls, 1)
         self.assertGreaterEqual(thread.quit_calls, 1)
         self.assertGreaterEqual(thread.terminate_calls, 1)
-        # Retry profile skips graceful wait and only does the short terminate wait.
-        self.assertEqual(thread.wait_timeouts, [42])
+        # Uses configured values, but applies shutdown safety cap.
+        self.assertEqual(thread.wait_timeouts, [100, 42])
+        self.assertIsNotNone(mw._ocr_preload_job)
+        handle_close.assert_not_called()
+
+    def test_close_event_defers_while_orphaned_preload_thread_still_running(self):
+        mw = self._make_window()
+        thread = _AlwaysRunningThread()
+        mw._ocr_preload_job = {"thread": thread}
+        # Simulate an already running close-retry window.
+        mw._close_thread_wait_started_at = 1.0
+        cfg_values = {
+            "SHUTDOWN_THREAD_MAX_DEFER_MS": 1,
+        }
+        mw._cfg = lambda key, default=None: cfg_values.get(key, default)
+        event = _FakeCloseEvent()
+
+        with patch(
+            "controller.main_window_parts.main_window_shutdown.QtCore.QTimer.singleShot"
+        ) as single_shot, patch(
+            "controller.main_window_parts.main_window_shutdown.shutdown_manager.handle_close_event"
+        ) as handle_close:
+            MainWindow.closeEvent(mw, event)
+
+        self.assertTrue(event.ignored)
+        single_shot.assert_called_once()
         self.assertIsNone(mw._ocr_preload_job)
-        handle_close.assert_called_once()
+        handle_close.assert_not_called()
+
+    def test_close_event_defers_for_not_running_but_not_finished_thread(self):
+        mw = self._make_window()
+        thread = _NotRunningNotFinishedThread()
+        mw._ocr_preload_job = {"thread": thread}
+        event = _FakeCloseEvent()
+
+        with patch(
+            "controller.main_window_parts.main_window_shutdown.QtCore.QTimer.singleShot"
+        ) as single_shot, patch(
+            "controller.main_window_parts.main_window_shutdown.shutdown_manager.handle_close_event"
+        ) as handle_close:
+            MainWindow.closeEvent(mw, event)
+
+        self.assertTrue(event.ignored)
+        single_shot.assert_called_once()
+        self.assertIsNotNone(mw._ocr_preload_job)
+        self.assertGreaterEqual(thread.interrupt_calls, 1)
+        self.assertGreaterEqual(thread.quit_calls, 1)
+        handle_close.assert_not_called()
 
 
 if __name__ == "__main__":

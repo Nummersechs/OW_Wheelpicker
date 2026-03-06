@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from collections import deque
 from difflib import SequenceMatcher
+import json
+from pathlib import Path
+import subprocess
+import sys
 import time
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -18,48 +22,138 @@ from utils import ui_helpers
 class _OCRPreloadWorker(QtCore.QObject):
     finished = QtCore.Signal(bool, str)
 
-    def __init__(self, *, easyocr_kwargs: dict[str, object]) -> None:
+    def __init__(
+        self,
+        *,
+        easyocr_kwargs: dict[str, object],
+        project_root: str,
+        subprocess_timeout_s: float,
+    ) -> None:
         super().__init__()
         self._easyocr_kwargs = dict(easyocr_kwargs)
+        self._project_root = str(project_root or "").strip()
+        try:
+            self._subprocess_timeout_s = max(1.0, float(subprocess_timeout_s))
+        except Exception:
+            self._subprocess_timeout_s = 60.0
 
     @QtCore.Slot()
     def run(self) -> None:
+        def _interrupted() -> bool:
+            try:
+                thread = QtCore.QThread.currentThread()
+            except Exception:
+                thread = None
+            if thread is None:
+                return False
+            try:
+                return bool(thread.isInterruptionRequested())
+            except Exception:
+                return False
+
         # Allow forceful termination during app shutdown if OCR preload
         # is still running; without this, Qt may keep waiting for seconds.
         try:
             QtCore.QThread.setTerminationEnabled(True)
         except Exception:
             pass
+        if _interrupted():
+            self.finished.emit(False, "interrupted")
+            return
+        script = (
+            "import json, pathlib, sys\n"
+            "payload = json.loads(sys.argv[1])\n"
+            "root = pathlib.Path(sys.argv[2]).resolve()\n"
+            "if str(root) not in sys.path:\n"
+            "    sys.path.insert(0, str(root))\n"
+            "from controller.ocr import ocr_import\n"
+            "ok = bool(ocr_import.easyocr_available(**payload))\n"
+            "if ok:\n"
+            "    detail = 'ready'\n"
+            "else:\n"
+            "    diag_fn = getattr(ocr_import, 'easyocr_resolution_diagnostics', None)\n"
+            "    detail = str(diag_fn(**payload)).strip() if callable(diag_fn) else 'not-ready'\n"
+            "print(json.dumps({'ok': ok, 'detail': detail}))\n"
+        )
+        python_exe = str(sys.executable or "").strip() or "python3"
+        payload = json.dumps(self._easyocr_kwargs)
+        proc: subprocess.Popen[str] | None = None
         try:
-            from ..ocr import ocr_import
+            proc = subprocess.Popen(
+                [python_exe, "-c", script, payload, self._project_root],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
         except Exception as exc:
-            self.finished.emit(False, f"import-error:{exc!r}")
+            self.finished.emit(False, f"preload-subprocess-start-error:{exc!r}")
             return
 
-        availability_fn = getattr(ocr_import, "easyocr_available", None)
-        if not callable(availability_fn):
-            self.finished.emit(False, "easyocr-availability-missing")
-            return
-        try:
-            ready = bool(availability_fn(**self._easyocr_kwargs))
-        except Exception as exc:
-            self.finished.emit(False, f"availability-error:{exc!r}")
-            return
-
-        if ready:
-            self.finished.emit(True, "ready")
-            return
-
-        diag_fn = getattr(ocr_import, "easyocr_resolution_diagnostics", None)
-        if callable(diag_fn):
-            try:
-                diag = str(diag_fn(**self._easyocr_kwargs)).strip()
-            except Exception as exc:
-                self.finished.emit(False, f"diagnostics-error:{exc!r}")
+        started_at = time.monotonic()
+        while True:
+            if _interrupted():
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                try:
+                    proc.wait(timeout=0.25)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                self.finished.emit(False, "interrupted")
                 return
-            self.finished.emit(False, diag or "not-ready")
+            rc = proc.poll()
+            if rc is not None:
+                break
+            if (time.monotonic() - started_at) >= self._subprocess_timeout_s:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                try:
+                    proc.wait(timeout=0.25)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                self.finished.emit(False, "preload-timeout")
+                return
+            time.sleep(0.05)
+
+        try:
+            stdout, stderr = proc.communicate(timeout=0.2)
+        except Exception:
+            stdout, stderr = "", ""
+
+        if int(proc.returncode or 1) != 0:
+            message = (stderr or stdout or "").strip()
+            if message:
+                self.finished.emit(False, f"preload-subprocess-error:{message}")
+            else:
+                self.finished.emit(False, "preload-subprocess-error")
             return
-        self.finished.emit(False, "not-ready")
+
+        line = ""
+        for raw_line in reversed((stdout or "").splitlines()):
+            text = str(raw_line or "").strip()
+            if text:
+                line = text
+                break
+        if not line:
+            self.finished.emit(False, "preload-no-output")
+            return
+        try:
+            data = json.loads(line)
+            ok = bool(data.get("ok", False))
+            detail = str(data.get("detail", "") or "").strip()
+        except Exception as exc:
+            self.finished.emit(False, f"preload-parse-error:{exc!r}")
+            return
+        self.finished.emit(ok, detail or ("ready" if ok else "not-ready"))
 
 
 class _OCRPreloadRelay(QtCore.QObject):
@@ -600,8 +694,14 @@ class MainWindowOCRMixin:
             return
 
         kwargs = self._easyocr_resolution_kwargs()
+        preload_project_root = str(Path(__file__).resolve().parents[2])
+        preload_timeout_s = float(self._cfg("OCR_PRELOAD_SUBPROCESS_TIMEOUT_S", 60.0))
         thread = QtCore.QThread(self)
-        worker = _OCRPreloadWorker(easyocr_kwargs=kwargs)
+        worker = _OCRPreloadWorker(
+            easyocr_kwargs=kwargs,
+            project_root=preload_project_root,
+            subprocess_timeout_s=preload_timeout_s,
+        )
         worker.moveToThread(thread)
         relay = _OCRPreloadRelay(self)
         job = {
@@ -613,9 +713,14 @@ class MainWindowOCRMixin:
 
         def _finalize_preload(ok: bool, detail: str) -> None:
             current = getattr(self, "_ocr_preload_job", None)
-            if current is not job:
+            # Allow finalize delivery even if thread.finished already cleared
+            # the job reference in a race window; only ignore if a *different*
+            # preload job is active.
+            if current is not None and current is not job:
                 return
-            self._ocr_preload_job = None
+            if bool(job.get("_finalized", False)):
+                return
+            job["_finalized"] = True
             self._ocr_preload_attempted = True
             if bool(ok):
                 self._ocr_preload_done = True
@@ -635,6 +740,17 @@ class MainWindowOCRMixin:
                     )
                 except Exception:
                     pass
+            # If the worker thread already stopped, clear the job reference now.
+            if current is job:
+                thread_ref = job.get("thread")
+                running = False
+                if thread_ref is not None and hasattr(thread_ref, "isRunning"):
+                    try:
+                        running = bool(thread_ref.isRunning())
+                    except Exception:
+                        running = False
+                if not running:
+                    self._ocr_preload_job = None
 
         try:
             job["worker_done_connection"] = worker.finished.connect(
@@ -683,6 +799,22 @@ class MainWindowOCRMixin:
         except Exception:
             thread.finished.connect(thread.deleteLater)
             job["thread_delete_connection"] = None
+        if getattr(self, "_closing", False):
+            # Close was requested while we prepared the preload job.
+            self._ocr_preload_job = None
+            try:
+                worker.deleteLater()
+            except Exception:
+                pass
+            try:
+                relay.deleteLater()
+            except Exception:
+                pass
+            try:
+                thread.deleteLater()
+            except Exception:
+                pass
+            return
         startup_warmup = bool(getattr(self, "_startup_warmup_running", False))
         desired_priority = QtCore.QThread.NormalPriority if startup_warmup else QtCore.QThread.LowPriority
         try:

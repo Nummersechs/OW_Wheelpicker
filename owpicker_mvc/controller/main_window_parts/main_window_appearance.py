@@ -153,16 +153,44 @@ class MainWindowAppearanceMixin:
 
     def _apply_role_width_lock(self, lock: bool):
         """
-        Begrenze/entgrenze die Rollenbreiten – in Hero-Ban sperren wir auf die
-        gemerkte Basisbreite, damit z.B. Tank nicht breiter wird.
+        Begrenze/entgrenze die Rollenbreiten.
+        In Hero-Ban werden alle drei Rollen auf eine gemeinsame, dynamische
+        Maximalbreite gesetzt (aus der aktuellen Containerbreite berechnet).
+        Wichtig: Die Mindestbreite bleibt 0, damit das Fenster weiterhin
+        kleiner gezogen werden kann.
         """
         if not self._role_base_widths:
             self._capture_role_base_widths()
-        for name, widget in self._role_wheels():
+        wheels = list(self._role_wheels())
+        if not wheels:
+            return
+        fixed_dynamic: int | None = None
+        if lock:
+            role_container = getattr(self, "role_container", None)
+            if isinstance(role_container, QtWidgets.QWidget):
+                try:
+                    rect_w = int(role_container.contentsRect().width())
+                except Exception:
+                    rect_w = int(role_container.width())
+                if rect_w > 0:
+                    grid_layout = role_container.layout()
+                    spacing = 0
+                    if isinstance(grid_layout, QtWidgets.QGridLayout):
+                        spacing = max(0, int(grid_layout.horizontalSpacing()))
+                        if spacing <= 0:
+                            spacing = max(0, int(grid_layout.spacing()))
+                    count = len(wheels)
+                    total_spacing = max(0, spacing * max(0, count - 1))
+                    usable = max(0, rect_w - total_spacing)
+                    if usable > 0 and count > 0:
+                        fixed_dynamic = max(1, int(usable // count))
+        for name, widget in wheels:
             base = self._role_base_widths.get(name, widget.sizeHint().width() or widget.width())
             if lock:
-                fixed = max(1, int(base))
-                widget.setMinimumWidth(fixed)
+                fixed = max(1, int(fixed_dynamic if fixed_dynamic is not None else base))
+                # Do not lock minimum width here; otherwise hero-ban can freeze
+                # the current window width and block further shrinking.
+                widget.setMinimumWidth(0)
                 widget.setMaximumWidth(fixed)
             else:
                 widget.setMinimumWidth(0)
@@ -172,6 +200,9 @@ class MainWindowAppearanceMixin:
         super().resizeEvent(e)
         if self.overlay and self.centralWidget():
             self.overlay.setGeometry(self.centralWidget().rect())
+        if getattr(self, "hero_ban_active", False):
+            # Keep hero-ban width lock synchronized with window size changes.
+            self._apply_role_width_lock(True)
         if hasattr(self, "player_list_panel"):
             self.player_list_panel.on_resize()
 

@@ -2,6 +2,8 @@ import os
 import sys
 import config
 
+_QUIET_QT_MESSAGE_HANDLER = None
+
 
 def _apply_quiet_mode():
     """Leitet Ausgabe um, bevor Qt geladen wird."""
@@ -9,6 +11,15 @@ def _apply_quiet_mode():
         return
     os.environ.setdefault("QT_LOGGING_RULES", "*=false")
     os.environ.setdefault("QT_LOGGING_TO_CONSOLE", "0")
+    os.environ.setdefault("PYTHONWARNINGS", "ignore")
+    try:
+        import logging
+        import warnings
+
+        warnings.simplefilter("ignore")
+        logging.disable(logging.CRITICAL)
+    except Exception:
+        pass
     devnull = open(os.devnull, "w")
     sys.stdout = devnull
     sys.stderr = devnull
@@ -20,12 +31,29 @@ def _apply_quiet_mode():
         pass
 
 
+def _install_quiet_qt_handler(QtCore):
+    """Unterdrückt Qt Runtime-Messages zusätzlich zum Env-Filter."""
+    if not getattr(config, "QUIET", False):
+        return
+    global _QUIET_QT_MESSAGE_HANDLER
+
+    def _quiet_handler(_msg_type, _context, _message):
+        return
+
+    _QUIET_QT_MESSAGE_HANDLER = _quiet_handler
+    try:
+        QtCore.qInstallMessageHandler(_QUIET_QT_MESSAGE_HANDLER)
+    except Exception:
+        pass
+
+
 def main():
     # Quiet-Modus so früh wie möglich aktivieren (vor Qt-Imports)
     _apply_quiet_mode()
 
     from PySide6 import QtCore, QtGui, QtWidgets  # nach Quiet-Setup laden
     from utils.qt_runtime import apply_preferred_app_font
+    _install_quiet_qt_handler(QtCore)
 
     app = QtWidgets.QApplication([])
     apply_preferred_app_font(app)

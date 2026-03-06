@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 import time
-import warnings
 
 from PySide6 import QtCore, QtGui
 
@@ -12,6 +11,7 @@ from .. import shutdown_manager
 
 _ORPHANED_OCR_PRELOAD_JOBS: list[dict[str, object]] = []
 _ORPHANED_OCR_ASYNC_JOBS: list[dict[str, object]] = []
+_ORPHANED_CHILD_QTHREADS: list[object] = []
 
 
 class MainWindowShutdownMixin:
@@ -20,21 +20,43 @@ class MainWindowShutdownMixin:
         if connection is None:
             return
         try:
+            is_valid = getattr(connection, "isValid", None)
+            if callable(is_valid) and not bool(is_valid()):
+                return
+        except Exception:
+            pass
+        try:
+            if not bool(connection):
+                return
+        except Exception:
+            pass
+        try:
             QtCore.QObject.disconnect(connection)
         except Exception:
             pass
 
     @staticmethod
-    def _disconnect_signal_slots(source: object | None, signal_name: str) -> None:
+    def _disconnect_signal_slots(
+        source: object | None,
+        signal_name: str,
+        *slots: object | None,
+    ) -> None:
         if source is None:
             return
         signal = getattr(source, signal_name, None)
         if signal is None:
             return
-        try:
-            signal.disconnect()
-        except Exception:
-            pass
+        # Never call bare `signal.disconnect()` here: when no slot is connected,
+        # PySide may emit noisy RuntimeWarnings during shutdown.
+        if not slots:
+            return
+        for slot in slots:
+            if slot is None:
+                continue
+            try:
+                signal.disconnect(slot)
+            except Exception:
+                pass
 
     @staticmethod
     def _disconnect_thread_worker_start(
@@ -59,12 +81,10 @@ class MainWindowShutdownMixin:
         run_slot = getattr(worker, "run", None)
         if started_signal is None or run_slot is None:
             return
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            try:
-                started_signal.disconnect(run_slot)
-            except Exception:
-                pass
+        try:
+            started_signal.disconnect(run_slot)
+        except Exception:
+            pass
 
     def _orphan_running_ocr_preload_job(
         self,
@@ -167,6 +187,7 @@ class MainWindowShutdownMixin:
             "relay_error_connection",
             "worker_finished_quit_connection",
             "worker_failed_quit_connection",
+            "cleanup_connection",
             "worker_delete_connection",
             "thread_delete_connection",
             "orphan_cleanup_connection",
@@ -225,38 +246,6 @@ class MainWindowShutdownMixin:
             except Exception:
                 pass
 
-    def _defer_close_for_running_thread(self, event: QtGui.QCloseEvent, *, reason: str) -> None:
-        base_retry_ms = max(50, int(self._cfg("SHUTDOWN_THREAD_RETRY_MS", 180)))
-        if str(reason or "") == "ocr_preload_thread":
-            # OCR preload is non-critical during app close. Use a faster retry
-            # cadence by default so shutdown does not feel stuck.
-            ocr_default_retry_ms = max(30, min(base_retry_ms, 60))
-            retry_ms = max(
-                30,
-                int(self._cfg("SHUTDOWN_OCR_PRELOAD_RETRY_MS", ocr_default_retry_ms)),
-            )
-        else:
-            retry_ms = base_retry_ms
-        now = time.monotonic()
-        wait_started = getattr(self, "_close_thread_wait_started_at", None)
-        if wait_started is None:
-            self._close_thread_wait_started_at = now
-            elapsed_ms = 0
-        else:
-            elapsed_ms = max(0, int((now - float(wait_started)) * 1000.0))
-        if hasattr(self, "_trace_event"):
-            try:
-                self._trace_event(
-                    "shutdown_deferred_for_thread",
-                    reason=str(reason or "thread_running"),
-                    retry_ms=retry_ms,
-                    elapsed_ms=elapsed_ms,
-                )
-            except Exception:
-                pass
-        event.ignore()
-        QtCore.QTimer.singleShot(retry_ms, self.close)
-
     def _stop_qthread_for_close(
         self,
         thread: object | None,
@@ -279,8 +268,9 @@ class MainWindowShutdownMixin:
             except Exception:
                 return not _is_running()
 
-        # Thread is already fully done.
-        if _is_finished() and not _is_running():
+        # Treat only a truly finished thread as stopped. A thread can be
+        # temporarily "not running" while startup/teardown is still in flight.
+        if _is_finished():
             return True
 
         try:
@@ -309,14 +299,189 @@ class MainWindowShutdownMixin:
                     stopped = bool(thread.wait(wait_terminate_ms))
                 except Exception:
                     stopped = False
-        if not stopped and _is_running():
-            return False
         if stopped:
             return True
+        # If the thread is not yet `finished`, keep deferring close instead of
+        # proceeding and risking QThread destruction while still alive.
+        if _is_finished():
+            return True
+        return False
+
+    def _close_thread_wait_elapsed_ms(self) -> int:
+        started = getattr(self, "_close_thread_wait_started_at", None)
+        if started is None:
+            return 0
         try:
-            return not bool(thread.isRunning())
+            return max(0, int((time.monotonic() - float(started)) * 1000.0))
+        except Exception:
+            return 0
+
+    def _close_thread_wait_timed_out(self) -> bool:
+        timeout_ms = max(0, int(self._cfg("SHUTDOWN_THREAD_MAX_DEFER_MS", 2500)))
+        if timeout_ms <= 0:
+            return False
+        return self._close_thread_wait_elapsed_ms() >= timeout_ms
+
+    def _orphan_running_child_qthread(self, thread: object | None, *, reason: str) -> None:
+        if thread is None:
+            return
+        try:
+            if hasattr(thread, "setParent"):
+                thread.setParent(None)
+        except Exception:
+            pass
+        try:
+            thread.requestInterruption()
+        except Exception:
+            pass
+        try:
+            thread.quit()
+        except Exception:
+            pass
+        try:
+            thread.terminate()
+        except Exception:
+            pass
+
+        def _cleanup() -> None:
+            try:
+                _ORPHANED_CHILD_QTHREADS.remove(thread)
+            except Exception:
+                pass
+
+        try:
+            if hasattr(thread, "finished"):
+                thread.finished.connect(_cleanup)
+        except Exception:
+            pass
+        _ORPHANED_CHILD_QTHREADS.append(thread)
+        if hasattr(self, "_trace_event"):
+            try:
+                self._trace_event(
+                    "shutdown_orphaned_thread",
+                    reason=str(reason or "child_qthread_shutdown"),
+                )
+            except Exception:
+                pass
+
+    def _running_child_qthreads(self, *, exclude: tuple[object | None, ...] = ()) -> list[QtCore.QThread]:
+        try:
+            threads = list(self.findChildren(QtCore.QThread))
+        except Exception:
+            return []
+        if not threads:
+            return []
+        exclude_ids = {id(thread) for thread in exclude if thread is not None}
+        current_thread = None
+        try:
+            current_thread = QtCore.QThread.currentThread()
+        except Exception:
+            current_thread = None
+        running: list[QtCore.QThread] = []
+        seen: set[int] = set()
+        for thread in threads:
+            if thread is None:
+                continue
+            tid = id(thread)
+            if tid in seen or tid in exclude_ids:
+                continue
+            seen.add(tid)
+            if current_thread is not None and thread is current_thread:
+                continue
+            try:
+                if not bool(thread.isRunning()):
+                    continue
+            except Exception:
+                continue
+            running.append(thread)
+        return running
+
+    @staticmethod
+    def _thread_is_running(thread: object | None) -> bool:
+        if thread is None:
+            return False
+        try:
+            return bool(thread.isRunning())
         except Exception:
             return False
+
+    def _running_orphaned_qthreads(self) -> list[object]:
+        running: list[object] = []
+        seen: set[int] = set()
+        stale_preload: list[dict[str, object]] = []
+        stale_async: list[dict[str, object]] = []
+        stale_child: list[object] = []
+
+        for job in list(_ORPHANED_OCR_PRELOAD_JOBS):
+            thread = job.get("thread") if isinstance(job, dict) else None
+            if not self._thread_is_running(thread):
+                stale_preload.append(job)
+                continue
+            tid = id(thread)
+            if tid in seen:
+                continue
+            seen.add(tid)
+            running.append(thread)
+
+        for job in list(_ORPHANED_OCR_ASYNC_JOBS):
+            thread = job.get("thread") if isinstance(job, dict) else None
+            if not self._thread_is_running(thread):
+                stale_async.append(job)
+                continue
+            tid = id(thread)
+            if tid in seen:
+                continue
+            seen.add(tid)
+            running.append(thread)
+
+        for thread in list(_ORPHANED_CHILD_QTHREADS):
+            if not self._thread_is_running(thread):
+                stale_child.append(thread)
+                continue
+            tid = id(thread)
+            if tid in seen:
+                continue
+            seen.add(tid)
+            running.append(thread)
+
+        for job in stale_preload:
+            try:
+                _ORPHANED_OCR_PRELOAD_JOBS.remove(job)
+            except Exception:
+                pass
+        for job in stale_async:
+            try:
+                _ORPHANED_OCR_ASYNC_JOBS.remove(job)
+            except Exception:
+                pass
+        for thread in stale_child:
+            try:
+                _ORPHANED_CHILD_QTHREADS.remove(thread)
+            except Exception:
+                pass
+        return running
+
+    def _defer_close_for_running_thread(self, event: QtGui.QCloseEvent, *, reason: str) -> None:
+        retry_ms = 80 if str(reason or "") == "ocr_preload_thread" else 120
+        now = time.monotonic()
+        wait_started = getattr(self, "_close_thread_wait_started_at", None)
+        if wait_started is None:
+            self._close_thread_wait_started_at = now
+            elapsed_ms = 0
+        else:
+            elapsed_ms = max(0, int((now - float(wait_started)) * 1000.0))
+        if hasattr(self, "_trace_event"):
+            try:
+                self._trace_event(
+                    "shutdown_deferred_for_thread",
+                    reason=str(reason or "thread_running"),
+                    retry_ms=int(retry_ms),
+                    elapsed_ms=int(elapsed_ms),
+                )
+            except Exception:
+                pass
+        event.ignore()
+        QtCore.QTimer.singleShot(int(retry_ms), self.close)
 
     def _ensure_close_overlay_timer(self) -> QtCore.QTimer:
         timer = getattr(self, "_close_overlay_timer", None)
@@ -395,17 +560,12 @@ class MainWindowShutdownMixin:
         # OCR preload scheduling paths during shutdown retries.
         self._closing = True
         close_retry_active = getattr(self, "_close_thread_wait_started_at", None) is not None
-
         def _thread_wait_profile(
             *,
             graceful_key: str,
             terminate_key: str,
-            retry_graceful_key: str,
-            retry_terminate_key: str,
             graceful_default: int,
             terminate_default: int,
-            retry_graceful_default: int = 0,
-            retry_terminate_default: int = 120,
             min_terminate_wait_ms: int = 30,
             max_graceful_wait_ms: int | None = None,
             max_terminate_wait_ms: int | None = None,
@@ -415,26 +575,16 @@ class MainWindowShutdownMixin:
                     return value
                 return min(value, max(0, int(cap)))
 
-            if close_retry_active:
-                graceful_ms = max(
-                    0,
-                    int(self._cfg(retry_graceful_key, retry_graceful_default)),
-                )
-                terminate_ms = max(
-                    min_terminate_wait_ms,
-                    int(self._cfg(retry_terminate_key, retry_terminate_default)),
-                )
-                graceful_ms = _cap(graceful_ms, max_graceful_wait_ms)
-                terminate_ms = max(
-                    min_terminate_wait_ms,
-                    _cap(terminate_ms, max_terminate_wait_ms),
-                )
-                return graceful_ms, terminate_ms
             graceful_ms = max(0, int(self._cfg(graceful_key, graceful_default)))
             terminate_ms = max(
                 min_terminate_wait_ms,
                 int(self._cfg(terminate_key, terminate_default)),
             )
+            if close_retry_active:
+                # Keep close retries responsive: skip graceful wait and clamp
+                # terminate wait to a short window on repeated attempts.
+                graceful_ms = 0
+                terminate_ms = min(terminate_ms, 120)
             graceful_ms = _cap(graceful_ms, max_graceful_wait_ms)
             terminate_ms = max(
                 min_terminate_wait_ms,
@@ -454,8 +604,10 @@ class MainWindowShutdownMixin:
                 pass
 
         job = getattr(self, "_ocr_async_job", None)
+        async_thread = None
         if isinstance(job, dict):
             thread = job.get("thread")
+            async_thread = thread
             worker = job.get("worker")
             self._disconnect_thread_worker_start(
                 thread,
@@ -470,27 +622,25 @@ class MainWindowShutdownMixin:
             async_wait_ms, async_term_wait_ms = _thread_wait_profile(
                 graceful_key="SHUTDOWN_OCR_ASYNC_GRACEFUL_WAIT_MS",
                 terminate_key="SHUTDOWN_OCR_ASYNC_TERMINATE_WAIT_MS",
-                retry_graceful_key="SHUTDOWN_OCR_ASYNC_RETRY_GRACEFUL_WAIT_MS",
-                retry_terminate_key="SHUTDOWN_OCR_ASYNC_RETRY_TERMINATE_WAIT_MS",
-                graceful_default=150,
-                terminate_default=180,
-                retry_graceful_default=0,
-                retry_terminate_default=80,
+                graceful_default=80,
+                terminate_default=120,
                 min_terminate_wait_ms=50,
-                max_graceful_wait_ms=260,
-                max_terminate_wait_ms=220,
+                max_graceful_wait_ms=120,
+                max_terminate_wait_ms=140,
             )
             if not self._stop_qthread_for_close(
                 thread,
                 graceful_wait_ms=async_wait_ms,
                 terminate_wait_ms=async_term_wait_ms,
             ):
-                # OCR import is optional while app closes. Avoid close-retry
-                # loops and continue shutdown with detached cleanup.
-                self._orphan_running_ocr_async_job(
-                    job,
-                    reason="ocr_async_thread_shutdown",
-                )
+                if self._close_thread_wait_timed_out():
+                    self._orphan_running_ocr_async_job(
+                        job,
+                        reason="ocr_async_thread_timeout",
+                    )
+                else:
+                    self._defer_close_for_running_thread(event, reason="ocr_async_thread")
+                    return
             current_async_job = getattr(self, "_ocr_async_job", None)
             if isinstance(current_async_job, dict):
                 current_thread = current_async_job.get("thread")
@@ -501,14 +651,19 @@ class MainWindowShutdownMixin:
                     except Exception:
                         current_running = False
                 if current_running:
-                    self._orphan_running_ocr_async_job(
-                        current_async_job,
-                        reason="ocr_async_thread_still_running",
-                    )
+                    if self._close_thread_wait_timed_out():
+                        self._orphan_running_ocr_async_job(
+                            current_async_job,
+                            reason="ocr_async_thread_still_running_timeout",
+                        )
+                    else:
+                        self._defer_close_for_running_thread(event, reason="ocr_async_thread")
+                        return
                 else:
                     self._ocr_async_job = None
             self._ocr_async_job = None
         preload_job = getattr(self, "_ocr_preload_job", None)
+        preload_thread = None
         if isinstance(preload_job, dict):
             preload_thread = preload_job.get("thread")
             preload_worker = preload_job.get("worker")
@@ -520,27 +675,25 @@ class MainWindowShutdownMixin:
             preload_wait_ms, preload_term_wait_ms = _thread_wait_profile(
                 graceful_key="SHUTDOWN_OCR_PRELOAD_GRACEFUL_WAIT_MS",
                 terminate_key="SHUTDOWN_OCR_PRELOAD_TERMINATE_WAIT_MS",
-                retry_graceful_key="SHUTDOWN_OCR_PRELOAD_RETRY_GRACEFUL_WAIT_MS",
-                retry_terminate_key="SHUTDOWN_OCR_PRELOAD_RETRY_TERMINATE_WAIT_MS",
-                graceful_default=120,
-                terminate_default=220,
-                retry_graceful_default=0,
-                retry_terminate_default=90,
+                graceful_default=60,
+                terminate_default=120,
                 min_terminate_wait_ms=20,
-                max_graceful_wait_ms=300,
-                max_terminate_wait_ms=260,
+                max_graceful_wait_ms=100,
+                max_terminate_wait_ms=140,
             )
             if not self._stop_qthread_for_close(
                 preload_thread,
                 graceful_wait_ms=preload_wait_ms,
                 terminate_wait_ms=preload_term_wait_ms,
             ):
-                # OCR preload is optional during shutdown. Do not keep the UI
-                # open in a retry loop; detach this job and continue closing.
-                self._orphan_running_ocr_preload_job(
-                    preload_job,
-                    reason="ocr_preload_thread_shutdown",
-                )
+                if self._close_thread_wait_timed_out():
+                    self._orphan_running_ocr_preload_job(
+                        preload_job,
+                        reason="ocr_preload_thread_timeout",
+                    )
+                else:
+                    self._defer_close_for_running_thread(event, reason="ocr_preload_thread")
+                    return
             current_preload_job = getattr(self, "_ocr_preload_job", None)
             if isinstance(current_preload_job, dict):
                 current_thread = current_preload_job.get("thread")
@@ -551,13 +704,49 @@ class MainWindowShutdownMixin:
                     except Exception:
                         current_running = False
                 if current_running:
-                    self._orphan_running_ocr_preload_job(
-                        current_preload_job,
-                        reason="ocr_preload_thread_still_running",
-                    )
+                    if self._close_thread_wait_timed_out():
+                        self._orphan_running_ocr_preload_job(
+                            current_preload_job,
+                            reason="ocr_preload_thread_still_running_timeout",
+                        )
+                    else:
+                        self._defer_close_for_running_thread(event, reason="ocr_preload_thread")
+                        return
                 else:
                     self._ocr_preload_job = None
             self._ocr_preload_job = None
+
+        # Guard against race windows where OCR job dicts are already cleared but
+        # child QThreads are still alive and would crash on parent destruction.
+        extra_threads = self._running_child_qthreads(exclude=(async_thread, preload_thread))
+        if extra_threads:
+            extra_wait_ms = 0 if close_retry_active else 80
+            extra_terminate_wait_ms = 120
+            for thread in extra_threads:
+                if not self._stop_qthread_for_close(
+                    thread,
+                    graceful_wait_ms=extra_wait_ms,
+                    terminate_wait_ms=extra_terminate_wait_ms,
+                ):
+                    if self._close_thread_wait_timed_out():
+                        self._orphan_running_child_qthread(
+                            thread,
+                            reason="child_qthread_timeout",
+                        )
+                        continue
+                    self._defer_close_for_running_thread(event, reason="child_qthread")
+                    return
+        orphan_threads = self._running_orphaned_qthreads()
+        if orphan_threads:
+            for thread in list(orphan_threads):
+                self._stop_qthread_for_close(
+                    thread,
+                    graceful_wait_ms=0,
+                    terminate_wait_ms=120,
+                )
+            if self._running_orphaned_qthreads():
+                self._defer_close_for_running_thread(event, reason="orphaned_qthread")
+                return
         self._close_thread_wait_started_at = None
         if bool(self._cfg("SHUTDOWN_RELEASE_OCR_CACHE", False)) and hasattr(
             self, "_release_ocr_runtime_cache"
