@@ -156,8 +156,6 @@ class MainWindow(
         self._hover_seen = False
         self._hover_activity_last: float | None = None
         self._hover_user_move_last: float | None = None
-        self._hover_watchdog_last: float | None = None
-        self._hover_watchdog_started = False
         self._hover_prime_pending = False
         self._hover_prime_reason: str | None = None
         self._hover_prime_deferred_count = 0
@@ -165,7 +163,6 @@ class MainWindow(
         self._hover_prime_last_reason: str | None = None
         self._hover_pump_until: float | None = None
         self._hover_pump_timer: QtCore.QTimer | None = None
-        self._hover_watchdog_timer: QtCore.QTimer | None = None
         self._deferred_hover_rearm_reason: str | None = None
         self._deferred_hover_rearm_force = False
         self._deferred_hover_rearm_timer: QtCore.QTimer | None = None
@@ -232,10 +229,6 @@ class MainWindow(
         self._hover_pump_timer = self._timers.register(self._hover_pump_timer) or self._hover_pump_timer
         self._map_button_loading = False
         self._pending_map_mode_switch = False
-        self._hover_watchdog_timer = QtCore.QTimer(self)
-        self._hover_watchdog_timer.setInterval(max(100, int(self._cfg("HOVER_WATCHDOG_INTERVAL_MS", 250))))
-        self._hover_watchdog_timer.timeout.connect(self._hover_watchdog_tick)
-        self._hover_watchdog_timer = self._timers.register(self._hover_watchdog_timer) or self._hover_watchdog_timer
         self._tooltip_manager = TooltipManager(self)
         self._focus_policy = FocusPolicyManager(self)
         self._pending_delete_names_panel = None

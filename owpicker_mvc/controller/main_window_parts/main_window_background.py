@@ -27,7 +27,6 @@ class MainWindowBackgroundMixin:
 
         for name in (
             "_hover_pump_timer",
-            "_hover_watchdog_timer",
             "_deferred_hover_rearm_timer",
             "_deferred_tooltip_refresh_timer",
             "_focus_trace_snapshot_timer",
@@ -109,14 +108,6 @@ class MainWindowBackgroundMixin:
         force = bool(getattr(self, "_deferred_hover_rearm_force", False))
         if reason:
             self._schedule_hover_rearm(reason, force=force)
-        if getattr(self, "_hover_watchdog_started", False):
-            timer = getattr(self, "_hover_watchdog_timer", None)
-            if timer is not None:
-                try:
-                    if not timer.isActive():
-                        timer.start()
-                except Exception:
-                    pass
         refresh_reason = getattr(self, "_deferred_tooltip_refresh_reason", None)
         if refresh_reason:
             self._schedule_tooltip_refresh(refresh_reason)

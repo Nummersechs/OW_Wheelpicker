@@ -95,11 +95,6 @@ HOVER_PUMP_ON_START = False
 # 0 = kein Timeout (läuft bis echte Hover-Events erkannt werden)
 HOVER_PUMP_DURATION_MS = 0
 HOVER_PUMP_INTERVAL_MS = 90
-HOVER_WATCHDOG_ON = False
-HOVER_WATCHDOG_INTERVAL_MS = 350
-HOVER_WATCHDOG_STALE_MS = 900
-HOVER_WATCHDOG_COOLDOWN_MS = 700
-HOVER_WATCHDOG_REQUIRE_MOVE_MS = 0
 
 # QUIET erzwingt "silent runtime" für alle Debug-/Trace-Kanäle.
 _disable_flags_if_quiet(

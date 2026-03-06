@@ -303,9 +303,6 @@ class MainWindowInputMixin:
     def _mark_hover_user_move(self) -> None:
         hover_tooltip_ops.mark_hover_user_move(self)
 
-    def _ensure_hover_watchdog_started(self) -> None:
-        hover_tooltip_ops.ensure_hover_watchdog_started(self)
-
     def _mark_hover_seen(self, source: str | None = None) -> None:
         hover_tooltip_ops.mark_hover_seen(self, source=source)
 
@@ -339,9 +336,6 @@ class MainWindowInputMixin:
 
     def _iter_hover_views(self, include_maps: bool | None = None) -> list:
         return hover_tooltip_ops.iter_hover_views(self, include_maps=include_maps)
-
-    def _hover_watchdog_tick(self) -> None:
-        hover_tooltip_ops.hover_watchdog_tick(self)
 
     def _hover_poke_at_global(self, pos: QtCore.QPoint, reason: str | None = None) -> bool:
         return hover_tooltip_ops.hover_poke_at_global(self, pos, reason=reason)

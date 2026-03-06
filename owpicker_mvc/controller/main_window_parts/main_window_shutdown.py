@@ -203,7 +203,10 @@ class MainWindowShutdownMixin:
 
         def _thread_wait_profile(
             *,
-            prefix: str,
+            graceful_key: str,
+            terminate_key: str,
+            retry_graceful_key: str,
+            retry_terminate_key: str,
             graceful_default: int,
             terminate_default: int,
             retry_graceful_default: int = 0,
@@ -213,17 +216,17 @@ class MainWindowShutdownMixin:
             if close_retry_active:
                 graceful_ms = max(
                     0,
-                    int(self._cfg(f"SHUTDOWN_{prefix}_RETRY_GRACEFUL_WAIT_MS", retry_graceful_default)),
+                    int(self._cfg(retry_graceful_key, retry_graceful_default)),
                 )
                 terminate_ms = max(
                     min_terminate_wait_ms,
-                    int(self._cfg(f"SHUTDOWN_{prefix}_RETRY_TERMINATE_WAIT_MS", retry_terminate_default)),
+                    int(self._cfg(retry_terminate_key, retry_terminate_default)),
                 )
                 return graceful_ms, terminate_ms
-            graceful_ms = max(0, int(self._cfg(f"SHUTDOWN_{prefix}_GRACEFUL_WAIT_MS", graceful_default)))
+            graceful_ms = max(0, int(self._cfg(graceful_key, graceful_default)))
             terminate_ms = max(
                 min_terminate_wait_ms,
-                int(self._cfg(f"SHUTDOWN_{prefix}_TERMINATE_WAIT_MS", terminate_default)),
+                int(self._cfg(terminate_key, terminate_default)),
             )
             return graceful_ms, terminate_ms
 
@@ -253,7 +256,10 @@ class MainWindowShutdownMixin:
                 except Exception:
                     pass
             async_wait_ms, async_term_wait_ms = _thread_wait_profile(
-                prefix="OCR_ASYNC",
+                graceful_key="SHUTDOWN_OCR_ASYNC_GRACEFUL_WAIT_MS",
+                terminate_key="SHUTDOWN_OCR_ASYNC_TERMINATE_WAIT_MS",
+                retry_graceful_key="SHUTDOWN_OCR_ASYNC_RETRY_GRACEFUL_WAIT_MS",
+                retry_terminate_key="SHUTDOWN_OCR_ASYNC_RETRY_TERMINATE_WAIT_MS",
                 graceful_default=1200,
                 terminate_default=700,
                 retry_graceful_default=0,
@@ -278,7 +284,10 @@ class MainWindowShutdownMixin:
                 preload_job.get("started_connection"),
             )
             preload_wait_ms, preload_term_wait_ms = _thread_wait_profile(
-                prefix="OCR_PRELOAD",
+                graceful_key="SHUTDOWN_OCR_PRELOAD_GRACEFUL_WAIT_MS",
+                terminate_key="SHUTDOWN_OCR_PRELOAD_TERMINATE_WAIT_MS",
+                retry_graceful_key="SHUTDOWN_OCR_PRELOAD_RETRY_GRACEFUL_WAIT_MS",
+                retry_terminate_key="SHUTDOWN_OCR_PRELOAD_RETRY_TERMINATE_WAIT_MS",
                 graceful_default=1400,
                 terminate_default=350,
                 retry_graceful_default=0,

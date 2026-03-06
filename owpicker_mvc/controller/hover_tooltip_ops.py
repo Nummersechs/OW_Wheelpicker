@@ -30,27 +30,6 @@ def mark_hover_user_move(mw) -> None:
     now = time.monotonic()
     mw._hover_user_move_last = now
     mw._hover_activity_last = now
-    if not getattr(mw, "_hover_watchdog_started", False):
-        ensure_hover_watchdog_started(mw)
-
-
-def ensure_hover_watchdog_started(mw) -> None:
-    if _background_services_paused(mw):
-        return
-    if _cfg(mw, "DISABLE_TOOLTIPS", False):
-        return
-    if not _cfg(mw, "HOVER_WATCHDOG_ON", False):
-        return
-    if not hasattr(mw, "_hover_watchdog_timer") or not mw._hover_watchdog_timer:
-        return
-    if mw._hover_watchdog_started:
-        if not mw._hover_watchdog_timer.isActive():
-            mw._hover_watchdog_timer.start()
-        return
-    # Start only after first real user input to avoid early re-entrant events.
-    mw._hover_watchdog_started = True
-    if not mw._hover_watchdog_timer.isActive():
-        mw._hover_watchdog_timer.start()
 
 
 def mark_hover_seen(mw, source: str | None = None) -> None:
@@ -235,57 +214,6 @@ def iter_hover_views(mw, include_maps: bool | None = None) -> list:
                 if view is not None:
                     views.append(view)
     return views
-
-
-def hover_watchdog_tick(mw) -> None:
-    if _background_services_paused(mw):
-        return
-    if _cfg(mw, "DISABLE_TOOLTIPS", False):
-        return
-    if not _cfg(mw, "HOVER_WATCHDOG_ON", False):
-        return
-    if getattr(mw, "_closing", False):
-        return
-    if mw._overlay_choice_active():
-        return
-    if getattr(mw, "_stack_switching", False):
-        return
-    if getattr(mw, "_map_prebuild_in_progress", False):
-        return
-    if not mw.isActiveWindow():
-        return
-    if not mw.isVisible():
-        return
-    req_move_ms = int(_cfg(mw, "HOVER_WATCHDOG_REQUIRE_MOVE_MS", 0))
-    if req_move_ms > 0:
-        last_move = getattr(mw, "_hover_user_move_last", None)
-        if last_move is None:
-            return
-        if (time.monotonic() - last_move) > (req_move_ms / 1000.0):
-            return
-    last = getattr(mw, "_hover_activity_last", None)
-    if last is None:
-        return
-    now = time.monotonic()
-    stale_ms = int(_cfg(mw, "HOVER_WATCHDOG_STALE_MS", 650))
-    if (now - last) < (stale_ms / 1000.0):
-        return
-    cooldown_ms = int(_cfg(mw, "HOVER_WATCHDOG_COOLDOWN_MS", 700))
-    last_watch = getattr(mw, "_hover_watchdog_last", None)
-    if last_watch is not None and (now - last_watch) < (cooldown_ms / 1000.0):
-        return
-    try:
-        pos = QtGui.QCursor.pos()
-    except Exception:
-        return
-    if not hover_cursor_hits_view(mw, pos):
-        return
-    mw._hover_watchdog_last = now
-    mw._hover_seen = False
-    mw._hover_forward_last = None
-    mw._trace_hover_event("hover_watchdog", age_ms=int((now - last) * 1000))
-    rearm_hover_tracking(mw, reason="hover_watchdog")
-    start_hover_pump(mw, reason="hover_watchdog", duration_ms=800, force=True)
 
 
 def hover_poke_at_global(mw, pos: QtCore.QPoint, reason: str | None = None) -> bool:
