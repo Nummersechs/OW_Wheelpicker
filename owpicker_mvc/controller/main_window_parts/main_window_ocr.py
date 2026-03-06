@@ -135,11 +135,6 @@ class MainWindowOCRMixin:
             score += 0.05
         return min(1.0, score)
 
-    def _ocr_name_similarity_score(self, ocr_name: str, hint_name: str) -> float:
-        left = normalize_name_alnum_key(ocr_name)
-        right = normalize_name_alnum_key(hint_name)
-        return self._ocr_name_similarity_score_keys(left, right)
-
     def _apply_ocr_name_hints(self, role_key: str, names: list[str]) -> list[str]:
         if not bool(self._cfg("OCR_USE_NAME_HINTS", False)):
             return list(names or [])

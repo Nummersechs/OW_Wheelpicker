@@ -290,10 +290,6 @@ class MainWindowInputMixin:
         # Hover-Refocus deaktiviert
         return
 
-    def _refresh_hover_state(self):
-        """Normalize hover/tooltips after enable/disable transitions."""
-        return
-
     def _trace_hover_event(self, name: str, **extra) -> None:
         runtime_tracing.trace_hover_event(self, name, **extra)
 
@@ -331,14 +327,8 @@ class MainWindowInputMixin:
     def _hover_poke_under_cursor(self, reason: str | None = None) -> None:
         hover_tooltip_ops.hover_poke_under_cursor(self, reason=reason)
 
-    def _hover_cursor_hits_view(self, pos: QtCore.QPoint) -> bool:
-        return hover_tooltip_ops.hover_cursor_hits_view(self, pos)
-
     def _iter_hover_views(self, include_maps: bool | None = None) -> list:
         return hover_tooltip_ops.iter_hover_views(self, include_maps=include_maps)
-
-    def _hover_poke_at_global(self, pos: QtCore.QPoint, reason: str | None = None) -> bool:
-        return hover_tooltip_ops.hover_poke_at_global(self, pos, reason=reason)
 
     def _forward_hover_from_app_mousemove(self, event: QtGui.QMouseEvent) -> None:
         hover_tooltip_ops.forward_hover_from_app_mousemove(self, event)

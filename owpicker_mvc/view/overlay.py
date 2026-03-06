@@ -423,12 +423,6 @@ class ResultOverlay(QtWidgets.QWidget):
         self.btn_offline.setEnabled(enabled)
         self._apply_choice_button_tooltips()
 
-    def _choice_buttons_loading(self) -> bool:
-        try:
-            return (not self.btn_online.isEnabled()) and (not self.btn_offline.isEnabled())
-        except Exception:
-            return False
-
     def _refresh_live_tooltip_for_widget(self, widget: QtWidgets.QWidget, text: str) -> None:
         if widget is None:
             return

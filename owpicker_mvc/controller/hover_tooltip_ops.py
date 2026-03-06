@@ -176,22 +176,6 @@ def hover_poke_under_cursor(mw, reason: str | None = None) -> None:
     hover_poke_at_global(mw, pos, reason=reason)
 
 
-def hover_cursor_hits_view(mw, pos: QtCore.QPoint) -> bool:
-    for view in iter_hover_views(mw):
-        try:
-            if hasattr(view, "isVisible") and not view.isVisible():
-                continue
-            vp = view.viewport()
-            if hasattr(vp, "isVisible") and not vp.isVisible():
-                continue
-            local = vp.mapFromGlobal(pos)
-            if vp.rect().contains(local):
-                return True
-        except Exception:
-            continue
-    return False
-
-
 def iter_hover_views(mw, include_maps: bool | None = None) -> list:
     views: list = []
     for _role, w in mw._role_wheels():

@@ -226,18 +226,6 @@ class MainWindowStartupMixin:
         if not self._cfg("DISABLE_TOOLTIPS", False) and not self._cfg("TOOLTIP_CACHE_ON_START", False):
             self._refresh_tooltip_caches_async(reason="startup_warmup_done")
 
-    def _startup_task_tooltips(self) -> None:
-        if self._cfg("DISABLE_TOOLTIPS", False):
-            self._startup_task_done("tooltip_cache")
-            return
-        if not self._cfg("TOOLTIP_CACHE_ON_START", False):
-            self._startup_task_done("tooltip_cache")
-            return
-        self._refresh_tooltip_caches_async(
-            delay_step_ms=int(self._post_choice_step_ms),
-            on_done=lambda: self._startup_task_done("tooltip_cache"),
-        )
-
     def _startup_task_wheel_cache(self) -> None:
         if not self._cfg("STARTUP_WHEEL_CACHE_WARMUP", True):
             self._startup_task_done("wheel_cache")

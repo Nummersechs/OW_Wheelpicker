@@ -911,9 +911,6 @@ class MainWindow(
             force=force,
         )
 
-    def _reset_hover_cache_under_cursor(self):
-        hover_tooltip_ops.reset_hover_cache_under_cursor(self)
-
     def _set_tooltips_ready(self, ready: bool = True):
         hover_tooltip_ops.set_tooltips_ready(self, ready=ready)
 

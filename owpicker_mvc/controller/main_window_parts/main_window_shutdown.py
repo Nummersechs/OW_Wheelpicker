@@ -114,15 +114,6 @@ class MainWindowShutdownMixin:
         except Exception:
             return False
 
-    def _merge_shutdown_snapshot(self, prefix: str, payload: dict | None, target: dict) -> None:
-        shutdown_manager.merge_shutdown_snapshot(prefix, payload, target)
-
-    def _shutdown_resource_snapshot(self) -> dict:
-        return shutdown_manager.shutdown_resource_snapshot(self)
-
-    def _run_shutdown_step(self, step: str, callback) -> None:
-        shutdown_manager.run_shutdown_step(self, step, callback)
-
     def _ensure_close_overlay_timer(self) -> QtCore.QTimer:
         timer = getattr(self, "_close_overlay_timer", None)
         if timer is not None:
