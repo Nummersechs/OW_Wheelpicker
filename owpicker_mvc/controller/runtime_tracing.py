@@ -17,6 +17,24 @@ def _cfg(mw, key: str, default=None):
     return getattr(config, key, default)
 
 
+def _trace_event_enabled(mw, name: str) -> bool:
+    event = str(name or "").strip().casefold()
+    if not event:
+        return True
+    debug = bool(_cfg(mw, "DEBUG", False))
+    if event == "startup_visual_finalize:defer":
+        return debug or bool(_cfg(mw, "TRACE_STARTUP_VISUAL_FINALIZE_DEFER", False))
+    if event in {
+        "ocr_preload_scheduled",
+        "ocr_preload_deferred",
+        "ocr_preload_thread_finished",
+    }:
+        return debug or bool(_cfg(mw, "TRACE_OCR_PRELOAD_VERBOSE", False))
+    if event in {"shutdown_step:start", "shutdown_step:ok"}:
+        return debug or bool(_cfg(mw, "TRACE_SHUTDOWN", False)) or bool(_cfg(mw, "TRACE_SHUTDOWN_STEP_VERBOSE", False))
+    return True
+
+
 def _event_type_name(etype: int) -> str:
     try:
         return QtCore.QEvent.Type(etype).name  # type: ignore[attr-defined]
@@ -349,6 +367,8 @@ def trace_hover_event(mw, name: str, **extra) -> None:
 
 def trace_event(mw, name: str, **extra) -> None:
     if not getattr(mw, "_trace_enabled", False):
+        return
+    if not _trace_event_enabled(mw, name):
         return
     try:
         now = time.monotonic()

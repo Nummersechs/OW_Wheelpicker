@@ -24,6 +24,12 @@ class _OCRPreloadWorker(QtCore.QObject):
 
     @QtCore.Slot()
     def run(self) -> None:
+        # Allow forceful termination during app shutdown if OCR preload
+        # is still running; without this, Qt may keep waiting for seconds.
+        try:
+            QtCore.QThread.setTerminationEnabled(True)
+        except Exception:
+            pass
         try:
             from ..ocr import ocr_import
         except Exception as exc:
@@ -648,7 +654,11 @@ class MainWindowOCRMixin:
                     except Exception:
                         pass
         thread.finished.connect(_cleanup_cancelled_preload)
-        thread.started.connect(worker.run)
+        try:
+            job["started_connection"] = thread.started.connect(worker.run)
+        except Exception:
+            thread.started.connect(worker.run)
+            job["started_connection"] = None
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         startup_warmup = bool(getattr(self, "_startup_warmup_running", False))

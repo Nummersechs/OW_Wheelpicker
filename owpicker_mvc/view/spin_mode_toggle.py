@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PySide6 import QtCore, QtGui, QtWidgets
 from utils import theme as theme_util
+from view import ui_tokens
 
 _TOGGLE_FRAME_STYLE_CACHE: dict[str, str] = {}
 _THUMB_STYLE_CACHE: dict[tuple[str, bool], str] = {}
@@ -73,7 +74,7 @@ class SpinModeToggle(QtWidgets.QFrame):
 
         self.setCursor(QtCore.Qt.PointingHandCursor)
         self.setFocusPolicy(QtCore.Qt.NoFocus)
-        self.setFixedHeight(44)
+        self.setFixedHeight(ui_tokens.BUTTON_HEIGHT_XL)
         self.setAttribute(QtCore.Qt.WA_StyledBackground, True)
 
         self._thumb = QtWidgets.QFrame(self)

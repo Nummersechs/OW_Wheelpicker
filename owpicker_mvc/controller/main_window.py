@@ -39,8 +39,7 @@ from .state_sync import StateSyncController
 from .tooltip_manager import TooltipManager
 from .focus_policy import FocusPolicyManager
 from .timer_registry import TimerRegistry
-from view import style_helpers
-
+from view import style_helpers, ui_tokens
 
 class MainWindow(
     MainWindowStateMixin,
@@ -307,6 +306,13 @@ class MainWindow(
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
         root = QtWidgets.QVBoxLayout(central)
+        root.setContentsMargins(
+            ui_tokens.ROOT_MARGIN_H,
+            ui_tokens.ROOT_MARGIN_TOP,
+            ui_tokens.ROOT_MARGIN_H,
+            ui_tokens.ROOT_MARGIN_BOTTOM,
+        )
+        root.setSpacing(ui_tokens.ROOT_SPACING)
         return central, root
 
     def _build_header(self, root: QtWidgets.QVBoxLayout, saved: dict) -> None:
@@ -317,7 +323,8 @@ class MainWindow(
 
         # Lautstärke-Regler oben rechts
         vol_row = QtWidgets.QHBoxLayout()
-        vol_row.setContentsMargins(4, 10, 20, 6)  # extra Right-Margin für Volume-Block
+        vol_row.setContentsMargins(0, 0, 0, 2)
+        vol_row.setSpacing(ui_tokens.SECTION_SPACING)
         vol_row.addStretch(1)
         spacer_for_balance = QtWidgets.QSpacerItem(160, 0, QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Minimum)
         vol_row.addItem(spacer_for_balance)
@@ -333,7 +340,7 @@ class MainWindow(
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(100)
         self.volume_slider.setFixedWidth(120)
-        self.volume_slider.setFixedHeight(28)
+        self.volume_slider.setFixedHeight(ui_tokens.BUTTON_HEIGHT_SM)
         self.volume_slider.setToolTip(i18n.t("volume.slider_tooltip"))
         self.volume_slider.valueChanged.connect(self._on_volume_changed)
         self.volume_slider.sliderReleased.connect(self._play_volume_preview)
@@ -406,7 +413,7 @@ class MainWindow(
         ]
         for btn in self._mode_buttons:
             btn.setProperty("modeButton", True)
-            btn.setFixedHeight(38)
+            btn.setFixedHeight(ui_tokens.BUTTON_HEIGHT_MODE)
             btn.toggled.connect(self._update_mode_button_styles)
         self.btn_mode_players.clicked.connect(lambda: self._on_mode_button_clicked("players"))
         self.btn_mode_heroes.clicked.connect(lambda: self._on_mode_button_clicked("heroes"))
@@ -419,11 +426,12 @@ class MainWindow(
         mode_group.addButton(self.btn_mode_heroban)
         mode_group.addButton(self.btn_mode_maps)
         mode_row = QtWidgets.QHBoxLayout()
-        mode_row.setContentsMargins(8, 0, 8, 4)
+        mode_row.setContentsMargins(0, 2, 0, 4)
+        mode_row.setSpacing(ui_tokens.SECTION_SPACING)
         self.lbl_player_profile = QtWidgets.QLabel(i18n.t("players.profile_label"))
         self.player_profile_dropdown = PlayerProfileDropdown()
         self.player_profile_dropdown.setMinimumWidth(220)
-        self.player_profile_dropdown.setFixedHeight(34)
+        self.player_profile_dropdown.setFixedHeight(ui_tokens.INPUT_HEIGHT_MD)
         self.player_profile_dropdown.profileActivated.connect(self._on_player_profile_changed)
         self.player_profile_dropdown.profileRenamed.connect(self._on_player_profile_name_edited)
         self.player_profile_dropdown.orderChanged.connect(self._on_player_profile_reordered)
@@ -515,7 +523,7 @@ class MainWindow(
         self.role_container = role_container
         grid = QtWidgets.QGridLayout(role_container)
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setSpacing(12)
+        grid.setSpacing(ui_tokens.GRID_SPACING)
         # Alle drei Spalten gleichmäßig strecken, damit die Breiten beim Moduswechsel stabil bleiben
         for col in range(3):
             grid.setColumnStretch(col, 1)
@@ -534,7 +542,7 @@ class MainWindow(
             subrole_labels=["MT", "OT"],
         )
         self.btn_tank_ocr_import = QtWidgets.QPushButton(i18n.t("ocr.tank_button"))
-        self.btn_tank_ocr_import.setFixedHeight(36)
+        self.btn_tank_ocr_import.setFixedHeight(ui_tokens.BUTTON_HEIGHT_MD)
         self.btn_tank_ocr_import.clicked.connect(
             lambda _checked=False: self._on_role_ocr_import_clicked("tank")
         )
@@ -552,7 +560,7 @@ class MainWindow(
             subrole_labels=["HS", "FDPS"],
         )
         self.btn_dps_ocr_import = QtWidgets.QPushButton(i18n.t("ocr.dps_button"))
-        self.btn_dps_ocr_import.setFixedHeight(36)
+        self.btn_dps_ocr_import.setFixedHeight(ui_tokens.BUTTON_HEIGHT_MD)
         self.btn_dps_ocr_import.clicked.connect(
             lambda _checked=False: self._on_role_ocr_import_clicked("dps")
         )
@@ -570,7 +578,7 @@ class MainWindow(
             subrole_labels=["MS", "FS"],
         )
         self.btn_support_ocr_import = QtWidgets.QPushButton(i18n.t("ocr.support_button"))
-        self.btn_support_ocr_import.setFixedHeight(36)
+        self.btn_support_ocr_import.setFixedHeight(ui_tokens.BUTTON_HEIGHT_MD)
         self.btn_support_ocr_import.clicked.connect(
             lambda _checked=False: self._on_role_ocr_import_clicked("support")
         )
@@ -591,19 +599,19 @@ class MainWindow(
         grid.addWidget(self.support, 0, 2)
         self.btn_all_players = QtWidgets.QPushButton(i18n.t("players.list_button"))
         ui_helpers.set_fixed_width_from_translations([self.btn_all_players], ["players.list_button"], padding=40)
-        self.btn_all_players.setFixedHeight(36)
+        self.btn_all_players.setFixedHeight(ui_tokens.BUTTON_HEIGHT_MD)
         self.btn_all_players.setToolTip(i18n.t("players.list_button_tooltip"))
         self.player_list_panel = PlayerListPanelController(self, self.btn_all_players)
         self.btn_all_players.clicked.connect(self.player_list_panel.toggle_panel)
         self.btn_open_q_ocr = QtWidgets.QPushButton(i18n.t("ocr.open_q_button"))
         ui_helpers.set_fixed_width_from_translations([self.btn_open_q_ocr], ["ocr.open_q_button"], padding=40)
-        self.btn_open_q_ocr.setFixedHeight(36)
+        self.btn_open_q_ocr.setFixedHeight(ui_tokens.BUTTON_HEIGHT_MD)
         self.btn_open_q_ocr.setToolTip(i18n.t("ocr.open_q_button_tooltip"))
         self.btn_open_q_ocr.clicked.connect(self._on_open_q_ocr_clicked)
         self._role_left_controls = QtWidgets.QWidget()
         role_left_controls_layout = QtWidgets.QHBoxLayout(self._role_left_controls)
         role_left_controls_layout.setContentsMargins(0, 0, 0, 0)
-        role_left_controls_layout.setSpacing(8)
+        role_left_controls_layout.setSpacing(ui_tokens.SECTION_SPACING)
         role_left_controls_layout.addWidget(self.btn_all_players)
         role_left_controls_layout.addWidget(self.btn_open_q_ocr)
         role_left_controls_layout.addStretch(1)
@@ -703,6 +711,8 @@ class MainWindow(
     def _build_controls(self, root: QtWidgets.QVBoxLayout) -> None:
         # --- Controls unten wie gehabt ---
         controls = QtWidgets.QHBoxLayout()
+        controls.setContentsMargins(0, 4, 0, 0)
+        controls.setSpacing(ui_tokens.SECTION_SPACING)
         root.addLayout(controls)
         self.duration = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         self.duration.setRange(config.MIN_DURATION_MS, config.MAX_DURATION_MS)
@@ -711,7 +721,7 @@ class MainWindow(
         self.btn_spin_all = QtWidgets.QPushButton(i18n.t("controls.spin_all"))
         self.btn_spin_all.setObjectName("btn_spin_all")
         ui_helpers.set_fixed_width_from_translations([self.btn_spin_all], ["controls.spin_all"], padding=40)
-        self.btn_spin_all.setFixedHeight(44)
+        self.btn_spin_all.setFixedHeight(ui_tokens.BUTTON_HEIGHT_XL)
         self.btn_spin_all.setToolTip(i18n.t("controls.spin_all_tooltip"))
         self.btn_spin_all.clicked.connect(self.spin_all)
         self.spin_mode_toggle = SpinModeToggle()
@@ -732,7 +742,7 @@ class MainWindow(
         controls.addStretch(1)
         self.lbl_anim_duration = QtWidgets.QLabel(i18n.t("controls.anim_duration"))
         controls.addWidget(self.lbl_anim_duration)
-        self.duration.setFixedHeight(30)
+        self.duration.setFixedHeight(ui_tokens.SLIDER_HEIGHT_MD)
         controls.addWidget(self.duration)
         controls.addWidget(self.spin_mode_toggle)
         controls.addWidget(self.lbl_open_count)
@@ -742,7 +752,7 @@ class MainWindow(
         self.btn_cancel_spin = QtWidgets.QPushButton(i18n.t("controls.cancel_spin"))
         self.btn_cancel_spin.setObjectName("btn_cancel_spin")
         ui_helpers.set_fixed_width_from_translations([self.btn_cancel_spin], ["controls.cancel_spin"], padding=40)
-        self.btn_cancel_spin.setFixedHeight(44)
+        self.btn_cancel_spin.setFixedHeight(ui_tokens.BUTTON_HEIGHT_XL)
         self.btn_cancel_spin.setEnabled(False)
         self.btn_cancel_spin.setToolTip(i18n.t("controls.cancel_spin_tooltip"))
         style_helpers.style_danger_button(self.btn_cancel_spin, theme_util.get_theme(getattr(self, "theme", "light")))

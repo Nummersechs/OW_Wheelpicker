@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Callable, List, Optional
 from PySide6 import QtCore, QtGui, QtWidgets
 import i18n
-from view import style_helpers
+from view import style_helpers, ui_tokens
 from utils import ui_helpers
 
 DELETE_MARK_COLUMN_WIDTH = 18
@@ -17,6 +17,7 @@ SUBROLE_GROUP_RIGHT_MARGIN = 0
 SUBROLE_CHECKBOX_HORIZONTAL_PADDING = 0
 NAME_EDIT_MAX_WIDTH_WITH_SUBROLES = 188
 _DELETE_MARKED_STYLE_CACHE: dict[str, str] = {}
+_NAMES_ACTION_ROW_STYLE_CACHE: dict[str, str] = {}
 
 
 def _delete_marked_button_style(theme) -> str:
@@ -37,6 +38,16 @@ def _delete_marked_button_style(theme) -> str:
         f"QToolButton:disabled {{ color:{theme.disabled_text}; background:{theme.alt_base}; border:1px solid {theme.border}; }}"
     )
     _DELETE_MARKED_STYLE_CACHE[theme_key] = cached
+    return cached
+
+
+def _names_action_row_style(theme) -> str:
+    theme_key = str(getattr(theme, "key", "light"))
+    cached = _NAMES_ACTION_ROW_STYLE_CACHE.get(theme_key)
+    if cached is not None:
+        return cached
+    cached = "QWidget#namesActionRow { background: transparent; border: none; }"
+    _NAMES_ACTION_ROW_STYLE_CACHE[theme_key] = cached
     return cached
 
 
@@ -549,7 +560,7 @@ class NameRowWidget(QtWidgets.QWidget):
         right_margin = DELETE_MARK_ROW_RIGHT_MARGIN if subrole_labels else 4
         # Keep the active checkbox visually clear from the name edit field.
         layout.setContentsMargins(0, 0, right_margin, 0)
-        layout.setSpacing(3)
+        layout.setSpacing(ui_tokens.NAME_ROW_HORIZONTAL_SPACING)
 
         self.chk_active = QtWidgets.QCheckBox()
         self.chk_active.setFixedWidth(18)
@@ -799,35 +810,37 @@ class NamesListPanel(QtWidgets.QWidget):
 
         self.btn_delete_marked = QtWidgets.QToolButton()
         self.btn_delete_marked.setText("🗑")
-        self.btn_delete_marked.setFixedSize(DELETE_MARK_BUTTON_WIDTH, 28)
+        self.btn_delete_marked.setFixedSize(DELETE_MARK_BUTTON_WIDTH, ui_tokens.BUTTON_HEIGHT_SM)
         self.btn_delete_marked.setToolTip(i18n.t("names.delete_marked_tooltip"))
         self.btn_delete_marked.clicked.connect(self._on_delete_marked_clicked)
         self.btn_delete_marked.setVisible(self.names.has_subroles and self._enable_mark_for_delete)
         self.btn_delete_marked.setProperty("dangerActive", False)
 
         self.btn_toggle_all_names = QtWidgets.QPushButton()
-        self.btn_toggle_all_names.setFixedHeight(28)
+        self.btn_toggle_all_names.setFixedHeight(ui_tokens.BUTTON_HEIGHT_SM)
         self.btn_toggle_all_names.clicked.connect(self._on_toggle_all_names_clicked)
 
         self.btn_sort_names = QtWidgets.QPushButton(i18n.t("wheel.sort_names"))
-        self.btn_sort_names.setFixedHeight(28)
+        self.btn_sort_names.setFixedHeight(ui_tokens.BUTTON_HEIGHT_SM)
         self.btn_sort_names.setToolTip(i18n.t("wheel.sort_names_tooltip"))
         self.btn_sort_names.clicked.connect(self._on_sort_names_clicked)
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(1)
+        layout.setSpacing(ui_tokens.NAMES_PANEL_LAYOUT_SPACING)
 
         layout.addWidget(self.names)
 
         self._action_row_widget = QtWidgets.QWidget(self)
+        self._action_row_widget.setObjectName("namesActionRow")
         action_row = QtWidgets.QHBoxLayout(self._action_row_widget)
-        action_row.setContentsMargins(0, 0, 0, 0)
-        action_row.setSpacing(8)
+        action_row.setContentsMargins(0, ui_tokens.NAMES_PANEL_ACTION_TOP_MARGIN, 0, 0)
+        action_row.setSpacing(ui_tokens.SECTION_SPACING)
         action_row.addWidget(self.btn_toggle_all_names, 0, QtCore.Qt.AlignLeft)
         action_row.addStretch(1)
         action_row.addWidget(self.btn_sort_names, 0, QtCore.Qt.AlignRight)
         action_row.addWidget(self.btn_delete_marked, 0, QtCore.Qt.AlignRight)
+        self._action_row_widget.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
         layout.addWidget(self._action_row_widget)
 
         self.names.itemChanged.connect(self._update_toggle_all_button_label)
@@ -841,6 +854,18 @@ class NamesListPanel(QtWidgets.QWidget):
         self._update_toggle_all_button_label()
         self._update_delete_marked_button_state()
         self.apply_fixed_widths()
+
+    def set_compact_vertical(self, compact: bool = True) -> None:
+        compact_mode = bool(compact)
+        if compact_mode:
+            self.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Maximum)
+            self.names.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+            self._action_row_widget.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
+        else:
+            self.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
+            self.names.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+            self._action_row_widget.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
+        self.updateGeometry()
 
     def set_language(self, _lang: str):
         self.btn_sort_names.setText(i18n.t("wheel.sort_names"))
@@ -865,6 +890,11 @@ class NamesListPanel(QtWidgets.QWidget):
         style_helpers.style_primary_button(self.btn_toggle_all_names, theme)
         self.btn_delete_marked.setStyleSheet(_delete_marked_button_style(theme))
         style_helpers.style_names_list(self.names, theme)
+        style_helpers.set_stylesheet_if_needed(
+            self._action_row_widget,
+            f"names_action_row:{theme_key}",
+            _names_action_row_style(theme),
+        )
         self._applied_theme_key = theme_key
 
     def apply_fixed_widths(self):

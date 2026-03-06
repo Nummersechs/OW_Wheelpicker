@@ -18,6 +18,7 @@ class _AlwaysRunningThread:
         self.quit_calls = 0
         self.wait_calls = 0
         self.terminate_calls = 0
+        self.wait_timeouts: list[int] = []
 
     def isRunning(self) -> bool:
         return True
@@ -30,6 +31,7 @@ class _AlwaysRunningThread:
 
     def wait(self, _timeout_ms: int) -> bool:
         self.wait_calls += 1
+        self.wait_timeouts.append(int(_timeout_ms))
         return False
 
     def terminate(self) -> None:
@@ -127,6 +129,40 @@ class TestMainWindowShutdownMixin(unittest.TestCase):
         self.assertEqual(thread.terminate_calls, 1)
         single_shot.assert_not_called()
         handle_close.assert_called_once()
+
+    def test_close_event_uses_retry_wait_profile_after_deferred_close(self):
+        mw = self._make_window()
+        thread = _AlwaysRunningThread()
+        mw._ocr_preload_job = {"thread": thread}
+        mw._close_thread_wait_started_at = 1.0
+        cfg_values = {
+            "SHUTDOWN_THREAD_RETRY_MS": 50,
+            "SHUTDOWN_OCR_PRELOAD_GRACEFUL_WAIT_MS": 9999,
+            "SHUTDOWN_OCR_PRELOAD_TERMINATE_WAIT_MS": 888,
+            "SHUTDOWN_OCR_PRELOAD_RETRY_GRACEFUL_WAIT_MS": 0,
+            "SHUTDOWN_OCR_PRELOAD_RETRY_TERMINATE_WAIT_MS": 42,
+        }
+        mw._cfg = lambda key, default=None: cfg_values.get(key, default)
+        event = _FakeCloseEvent()
+        scheduled: list[tuple[int, object]] = []
+
+        with patch(
+            "controller.main_window_parts.main_window_shutdown.QtCore.QTimer.singleShot",
+            side_effect=lambda delay_ms, callback: scheduled.append((int(delay_ms), callback)),
+        ), patch(
+            "controller.main_window_parts.main_window_shutdown.shutdown_manager.handle_close_event"
+        ) as handle_close:
+            MainWindow.closeEvent(mw, event)
+
+        self.assertTrue(event.ignored)
+        self.assertEqual(len(scheduled), 1)
+        self.assertEqual(scheduled[0][0], 50)
+        self.assertEqual(thread.interrupt_calls, 1)
+        self.assertEqual(thread.quit_calls, 1)
+        self.assertEqual(thread.terminate_calls, 1)
+        # Retry profile skips graceful wait and only does the short terminate wait.
+        self.assertEqual(thread.wait_timeouts, [42])
+        handle_close.assert_not_called()
 
 
 if __name__ == "__main__":

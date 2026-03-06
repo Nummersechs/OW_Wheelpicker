@@ -4,6 +4,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from utils import qt_runtime
 from utils import theme as theme_util
+from view import ui_tokens
 
 _HEADER_STYLE_CACHE: dict[str, str] = {}
 _NAME_EDIT_STYLE_CACHE: dict[str, str] = {}
@@ -86,7 +87,7 @@ def _list_style(theme: theme_util.Theme) -> str:
         "QListWidget {"
         f" background:transparent; color:{theme.text}; border:0; border-radius:0; padding:0;"
         "}"
-        f"QListWidget::item {{ color:{theme.text}; height:28px; padding:0 8px; }}"
+        f"QListWidget::item {{ color:{theme.text}; height:{ui_tokens.PROFILE_ROW_HEIGHT}px; padding:0 8px; }}"
         f"QListWidget::item:selected {{ background:{_rgba(theme.primary, 0.28)}; color:{theme.text}; }}"
     )
     _LIST_STYLE_CACHE[theme.key] = cached
@@ -245,7 +246,7 @@ class PlayerProfileDropdown(QtWidgets.QWidget):
         self.header = QtWidgets.QFrame(self)
         self.header.setObjectName("profileHeader")
         row = QtWidgets.QHBoxLayout(self.header)
-        row.setContentsMargins(10, 0, 0, 0)
+        row.setContentsMargins(ui_tokens.PROFILE_HEADER_LEFT_MARGIN, 0, 0, 0)
         row.setSpacing(0)
         self.name_edit = QtWidgets.QLineEdit(self.header)
         self.name_edit.setFrame(False)
@@ -254,7 +255,7 @@ class PlayerProfileDropdown(QtWidgets.QWidget):
         self.btn_toggle.setAutoRaise(True)
         self.btn_toggle.setCursor(QtCore.Qt.PointingHandCursor)
         self.btn_toggle.setText("▾")
-        self.btn_toggle.setFixedWidth(44)
+        self.btn_toggle.setFixedWidth(ui_tokens.PROFILE_TOGGLE_WIDTH)
         row.addWidget(self.name_edit, 1)
         row.addWidget(self.btn_toggle, 0)
         root.addWidget(self.header)
@@ -333,7 +334,7 @@ class PlayerProfileDropdown(QtWidgets.QWidget):
         anchor = self.header.mapToGlobal(QtCore.QPoint(0, self.header.height()))
         count = max(1, self.list_widget.count())
         visible_rows = min(6, count)
-        row_h = self.list_widget.sizeHintForRow(0) if self.list_widget.count() > 0 else 28
+        row_h = self.list_widget.sizeHintForRow(0) if self.list_widget.count() > 0 else ui_tokens.PROFILE_ROW_HEIGHT
         row_h = max(26, row_h)
         popup_h = int(visible_rows * row_h + 8)
         popup_w = max(self.width(), 220)

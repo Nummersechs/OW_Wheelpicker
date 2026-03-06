@@ -2,7 +2,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from html import escape
 import i18n
 from utils import flag_icons, qt_runtime, theme as theme_util
-from . import style_helpers
+from . import style_helpers, ui_tokens
 from .name_list import (
     NAME_EDIT_HEIGHT,
     NAME_LIST_ROW_HEIGHT,
@@ -71,8 +71,13 @@ class ResultOverlay(QtWidgets.QWidget):
         self.card.setObjectName("resultCard")
 
         v = QtWidgets.QVBoxLayout(self.card)
-        v.setContentsMargins(26, 22, 26, 22)
-        v.setSpacing(10)
+        v.setContentsMargins(
+            ui_tokens.OVERLAY_CARD_MARGIN_H,
+            ui_tokens.OVERLAY_CARD_MARGIN_V,
+            ui_tokens.OVERLAY_CARD_MARGIN_H,
+            ui_tokens.OVERLAY_CARD_MARGIN_V,
+        )
+        v.setSpacing(ui_tokens.OVERLAY_LAYOUT_SPACING)
 
         self.title = QtWidgets.QLabel(i18n.t("overlay.title_result"))
         self.title.setAlignment(QtCore.Qt.AlignCenter)
@@ -80,12 +85,12 @@ class ResultOverlay(QtWidgets.QWidget):
         # Top-Bar mit zentrierter Überschrift und Sprache-Button rechts
         top_row = QtWidgets.QHBoxLayout()
         top_row.setContentsMargins(0, 0, 0, 0)
-        top_row.setSpacing(6)
+        top_row.setSpacing(ui_tokens.OVERLAY_TOP_ROW_SPACING)
 
         self.btn_language = QtWidgets.QToolButton()
         self.btn_language.setAutoRaise(True)
         self.btn_language.setCursor(QtCore.Qt.PointingHandCursor)
-        self.btn_language.setFixedSize(40, 32)
+        self.btn_language.setFixedSize(ui_tokens.TOOL_BUTTON_WIDTH_MD, ui_tokens.TOOL_BUTTON_HEIGHT_MD)
         self.btn_language.setIconSize(QtCore.QSize(28, 20))
         self.btn_language.clicked.connect(self.languageToggleRequested.emit)
 
@@ -119,28 +124,31 @@ class ResultOverlay(QtWidgets.QWidget):
         v.addWidget(self.ocr_names_panel, 1)
 
         self.btn_close = QtWidgets.QPushButton(i18n.t("overlay.button_ok"))
-        self.btn_close.setFixedHeight(40)
         self.btn_close.clicked.connect(self._close)
 
         self.btn_disable = QtWidgets.QPushButton(i18n.t("overlay.button_disable_results"))
-        self.btn_disable.setFixedHeight(40)
         self.btn_disable.clicked.connect(self.disableResultsRequested.emit)
 
         self.btn_online = QtWidgets.QPushButton(i18n.t("overlay.button_online"))
-        self.btn_online.setFixedHeight(40)
         self.btn_offline = QtWidgets.QPushButton(i18n.t("overlay.button_offline"))
-        self.btn_offline.setFixedHeight(40)
 
         self.btn_delete_cancel = QtWidgets.QPushButton(i18n.t("names.delete_confirm_cancel"))
-        self.btn_delete_cancel.setFixedHeight(40)
         self.btn_delete_confirm = QtWidgets.QPushButton(i18n.t("names.delete_confirm_delete"))
-        self.btn_delete_confirm.setFixedHeight(40)
         self.btn_ocr_cancel = QtWidgets.QPushButton(i18n.t("ocr.pick_cancel"))
-        self.btn_ocr_cancel.setFixedHeight(40)
         self.btn_ocr_replace = QtWidgets.QPushButton(i18n.t("ocr.pick_replace"))
-        self.btn_ocr_replace.setFixedHeight(40)
         self.btn_ocr_confirm = QtWidgets.QPushButton(i18n.t("ocr.pick_confirm"))
-        self.btn_ocr_confirm.setFixedHeight(40)
+        for btn in (
+            self.btn_close,
+            self.btn_disable,
+            self.btn_online,
+            self.btn_offline,
+            self.btn_delete_cancel,
+            self.btn_delete_confirm,
+            self.btn_ocr_cancel,
+            self.btn_ocr_replace,
+            self.btn_ocr_confirm,
+        ):
+            btn.setFixedHeight(ui_tokens.BUTTON_HEIGHT_LG)
         self._apply_button_labels()
         self._set_min_widths()
 
@@ -154,7 +162,7 @@ class ResultOverlay(QtWidgets.QWidget):
 
         # Buttons in einer Zeile anordnen
         btn_row = QtWidgets.QHBoxLayout()
-        btn_row.setSpacing(8)
+        btn_row.setSpacing(ui_tokens.OVERLAY_ACTION_SPACING_BASE)
         btn_row.addStretch(1)
         btn_row.addWidget(self.btn_offline)
         btn_row.addWidget(self.btn_online)
@@ -242,11 +250,11 @@ class ResultOverlay(QtWidgets.QWidget):
                 and not (online or offline or delete_cancel or delete_confirm or ocr_cancel or ocr_replace or ocr_confirm)
             )
             if ocr_mode_active:
-                self._btn_row.setSpacing(80)
+                self._btn_row.setSpacing(ui_tokens.OVERLAY_ACTION_SPACING_OCR)
             elif result_actions_active:
-                self._btn_row.setSpacing(14)
+                self._btn_row.setSpacing(ui_tokens.OVERLAY_ACTION_SPACING_RESULT)
             else:
-                self._btn_row.setSpacing(8)
+                self._btn_row.setSpacing(ui_tokens.OVERLAY_ACTION_SPACING_BASE)
 
     def show_result(self, tank, dps, sup):
         self._apply_button_labels()
@@ -421,14 +429,50 @@ class ResultOverlay(QtWidgets.QWidget):
         except Exception:
             return False
 
-    def _apply_choice_button_tooltips(self) -> None:
-        if self._choice_buttons_loading():
-            loading_tip = i18n.t("overlay.choice_loading_tooltip")
-            self.btn_online.setToolTip(loading_tip)
-            self.btn_offline.setToolTip(loading_tip)
+    def _refresh_live_tooltip_for_widget(self, widget: QtWidgets.QWidget, text: str) -> None:
+        if widget is None:
             return
-        self.btn_online.setToolTip(i18n.t("overlay.button_online_tooltip"))
-        self.btn_offline.setToolTip(i18n.t("overlay.button_offline_tooltip"))
+        try:
+            if not QtWidgets.QToolTip.isVisible():
+                return
+        except Exception:
+            return
+        try:
+            global_pos = QtGui.QCursor.pos()
+        except Exception:
+            return
+        try:
+            local_pos = widget.mapFromGlobal(global_pos)
+            if not widget.rect().contains(local_pos):
+                return
+        except Exception:
+            try:
+                if not bool(widget.underMouse()):
+                    return
+            except Exception:
+                return
+        try:
+            QtWidgets.QToolTip.showText(global_pos, str(text or ""), widget, widget.rect())
+        except Exception:
+            pass
+
+    def _set_button_tooltip(self, button: QtWidgets.QWidget, text: str) -> None:
+        if button is None:
+            return
+        value = str(text or "")
+        button.setToolTip(value)
+        self._refresh_live_tooltip_for_widget(button, value)
+
+    def _apply_choice_button_tooltips(self) -> None:
+        loading_tip = i18n.t("overlay.choice_loading_tooltip")
+        online_tip = (
+            loading_tip if not bool(self.btn_online.isEnabled()) else i18n.t("overlay.button_online_tooltip")
+        )
+        offline_tip = (
+            loading_tip if not bool(self.btn_offline.isEnabled()) else i18n.t("overlay.button_offline_tooltip")
+        )
+        self._set_button_tooltip(self.btn_online, online_tip)
+        self._set_button_tooltip(self.btn_offline, offline_tip)
 
     def _choose_online(self):
         self.hide()

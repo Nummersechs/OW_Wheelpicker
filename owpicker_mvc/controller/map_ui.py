@@ -5,11 +5,12 @@ from PySide6 import QtCore, QtWidgets
 import config
 import i18n
 from utils import qt_runtime, theme as theme_util, ui_helpers
-from view import style_helpers
+from view import style_helpers, ui_tokens
 from view.wheel_view import WheelView
 from view.list_panel import ListPanel
 
 _MAP_TYPE_LIST_STYLE_CACHE: dict[str, str] = {}
+_MAP_NAMES_HINT_STYLE_CACHE: dict[str, str] = {}
 
 
 def _map_type_list_style(theme: theme_util.Theme) -> str:
@@ -30,6 +31,19 @@ def _map_type_list_style(theme: theme_util.Theme) -> str:
         "}"
     )
     _MAP_TYPE_LIST_STYLE_CACHE[theme.key] = cached
+    return cached
+
+
+def _map_names_hint_style(theme: theme_util.Theme) -> str:
+    cached = _MAP_NAMES_HINT_STYLE_CACHE.get(theme.key)
+    if cached is not None:
+        return cached
+    cached = (
+        f"color:{theme.muted_text};"
+        " font-size:12px; padding:2px;"
+        f" background:{theme.card_bg}; border:none;"
+    )
+    _MAP_NAMES_HINT_STYLE_CACHE[theme.key] = cached
     return cached
 
 
@@ -86,8 +100,13 @@ class MapUI(QtCore.QObject):
         sidebar = QtWidgets.QFrame()
         sidebar.setObjectName("mapSidebar")
         sb_layout = QtWidgets.QVBoxLayout(sidebar)
-        sb_layout.setContentsMargins(8, 8, 8, 8)
-        sb_layout.setSpacing(6)
+        sb_layout.setContentsMargins(
+            ui_tokens.PANEL_CONTENT_MARGIN_H,
+            ui_tokens.PANEL_CONTENT_MARGIN_V,
+            ui_tokens.PANEL_CONTENT_MARGIN_H,
+            ui_tokens.PANEL_CONTENT_MARGIN_V,
+        )
+        sb_layout.setSpacing(ui_tokens.PANEL_LAYOUT_SPACING)
         self.lbl_map_types = QtWidgets.QLabel(i18n.t("map.types"))
         style_helpers.apply_theme_roles(
             theme_util.get_theme(self.theme_key),
@@ -96,8 +115,10 @@ class MapUI(QtCore.QObject):
         sb_layout.addWidget(self.lbl_map_types)
         self.map_type_checks: dict[str, QtWidgets.QCheckBox] = {}
         self._map_type_list_layout = QtWidgets.QVBoxLayout()
-        self._map_type_list_layout.setSpacing(4)
+        self._map_type_list_layout.setContentsMargins(0, 2, 0, 0)
+        self._map_type_list_layout.setSpacing(ui_tokens.SECTION_SPACING)
         sb_layout.addLayout(self._map_type_list_layout)
+        sb_layout.addSpacing(ui_tokens.SECTION_SPACING)
         self.btn_edit_map_types = QtWidgets.QPushButton(i18n.t("map.edit_types"))
         self.btn_edit_map_types.setToolTip(i18n.t("map.edit_types_tooltip"))
         self.btn_edit_map_types.clicked.connect(lambda: self._show_map_type_editor(container))
@@ -181,33 +202,99 @@ class MapUI(QtCore.QObject):
             item = self.map_grid.takeAt(0)
             w = item.widget()
             if w:
-                w.setParent(None)
+                # Disconnect dynamic height callbacks first so no stale callbacks
+                # keep removed panels alive or refresh deleted widgets.
+                names_canvas = getattr(w, "names", None)
+                callback = getattr(names_canvas, "_map_dynamic_height_callback", None)
+                if isinstance(names_canvas, QtWidgets.QListWidget) and callable(callback):
+                    model = names_canvas.model()
+                    if model is not None:
+                        for sig_name in ("rowsInserted", "rowsRemoved", "modelReset"):
+                            sig = getattr(model, sig_name, None)
+                            if sig is None:
+                                continue
+                            try:
+                                sig.disconnect(callback)
+                            except Exception:
+                                pass
+                    try:
+                        setattr(names_canvas, "_map_dynamic_height_callback", None)
+                    except Exception:
+                        pass
+                try:
+                    w.hide()
+                except Exception:
+                    pass
                 w.deleteLater()
+            del item
         self.map_lists.clear()
         # Clear sidebar checks
         while self._map_type_list_layout.count():
             item = self._map_type_list_layout.takeAt(0)
             w = item.widget()
             if w:
-                w.setParent(None)
+                try:
+                    w.hide()
+                except Exception:
+                    pass
                 w.deleteLater()
+            del item
+        self.map_type_checks.clear()
+
+    def _map_list_target_names_height(self, wheel: ListPanel) -> int | None:
+        names_canvas = getattr(wheel, "names", None)
+        if not isinstance(names_canvas, QtWidgets.QListWidget):
+            return None
+        try:
+            row_height = int(names_canvas.sizeHintForRow(0))
+        except Exception:
+            row_height = 0
+        if row_height <= 0:
+            row_height = max(18, int(getattr(names_canvas, "_row_height", 20)))
+        row_count = max(1, int(names_canvas.count()))
+        min_rows = max(1, int(getattr(config, "MAP_LIST_NAMES_MIN_VISIBLE_ROWS", 2)))
+        max_rows = max(min_rows, int(getattr(config, "MAP_LIST_NAMES_MAX_VISIBLE_ROWS", 6)))
+        visible_rows = max(min_rows, min(row_count, max_rows))
+        frame = max(0, int(names_canvas.frameWidth()) * 2)
+        extra_padding = max(0, int(getattr(config, "MAP_LIST_NAMES_EXTRA_PADDING_PX", 8)))
+        target = int((visible_rows * row_height) + frame + extra_padding)
+        return max(40, target)
+
+    def _apply_dynamic_map_list_height(self, wheel: ListPanel) -> None:
+        names_canvas = getattr(wheel, "names", None)
+        if not isinstance(names_canvas, QtWidgets.QListWidget):
+            return
+        target_height = self._map_list_target_names_height(wheel)
+        if target_height is None:
+            return
+        names_canvas.setMinimumHeight(target_height)
+        names_canvas.setMaximumHeight(target_height)
+
+    def _bind_dynamic_map_list_height(self, wheel: ListPanel) -> None:
+        names_canvas = getattr(wheel, "names", None)
+        if not isinstance(names_canvas, QtWidgets.QListWidget):
+            return
+        if bool(getattr(names_canvas, "_map_dynamic_height_bound", False)):
+            return
+        setattr(names_canvas, "_map_dynamic_height_bound", True)
+
+        def _schedule_resize(*_args, _wheel=wheel):
+            QtCore.QTimer.singleShot(0, lambda w=_wheel: self._apply_dynamic_map_list_height(w))
+
+        setattr(names_canvas, "_map_dynamic_height_callback", _schedule_resize)
+        model = names_canvas.model()
+        if model is not None:
+            model.rowsInserted.connect(_schedule_resize)
+            model.rowsRemoved.connect(_schedule_resize)
+            model.modelReset.connect(_schedule_resize)
+        _schedule_resize()
 
     def _add_map_list(self, cat: str, role_state: dict) -> None:
         include_checked = role_state.get("include_in_all", True)
         parent = getattr(self, "map_grid_container", None)
         w = ListPanel(cat, role_state.get("entries", []), parent=parent)
-        # Increase only the map names-list canvas height (not row visuals/buttons).
-        try:
-            names_canvas = getattr(w, "names", None)
-            if isinstance(names_canvas, QtWidgets.QListWidget):
-                base_canvas_h = max(
-                    int(names_canvas.minimumHeight()),
-                    int(names_canvas.sizeHint().height()),
-                    120,
-                )
-                names_canvas.setMinimumHeight(max(1, int(round(base_canvas_h * 1.3))))
-        except Exception:
-            pass
+        w.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Maximum)
+        self._bind_dynamic_map_list_height(w)
         w.set_spin_button_text(i18n.t("wheel.spin_single_map"))
         w.set_language(self.language)
         w.set_interactive_enabled(include_checked)
@@ -216,6 +303,11 @@ class MapUI(QtCore.QObject):
         w.btn_include_in_all.setVisible(False)
         if hasattr(w, "names_panel"):
             w.names_panel.set_auto_focus_enabled(False)
+            if hasattr(w.names_panel, "set_compact_vertical"):
+                try:
+                    w.names_panel.set_compact_vertical(True)
+                except Exception:
+                    pass
         w.btn_local_spin.setFocusPolicy(QtCore.Qt.ClickFocus)
         w.btn_include_in_all.setFocusPolicy(QtCore.Qt.ClickFocus)
         if hasattr(w, "names"):
@@ -228,7 +320,7 @@ class MapUI(QtCore.QObject):
         w.stateChanged.connect(self._schedule_update)
         w.request_spin.connect(lambda _=None, c=cat: self.requestSpinCategory.emit(c))
         self.map_lists[cat] = w
-        self.map_grid.addWidget(w)
+        self.map_grid.addWidget(w, 0, QtCore.Qt.AlignTop)
 
         cb = QtWidgets.QCheckBox(cat)
         cb.setChecked(include_checked)
@@ -242,6 +334,7 @@ class MapUI(QtCore.QObject):
         for cat in self.map_categories:
             role_state = map_state.get(cat) or _default_map_role_state()
             self._add_map_list(cat, role_state)
+        self.map_grid.addStretch(1)
         self._map_type_list_layout.addStretch(1)
         self._theme_apply_signature = None
         self.apply_theme(theme_util.get_theme(self.theme_key))
@@ -258,6 +351,7 @@ class MapUI(QtCore.QObject):
 
     def _build_list_step(self):
         if not self._pending_list_categories:
+            self.map_grid.addStretch(1)
             self._map_type_list_layout.addStretch(1)
             self.rebuild_combined(emit_state=False, force_wheel=True)
             self._theme_apply_signature = None
@@ -296,8 +390,13 @@ class MapUI(QtCore.QObject):
             self._map_type_editor = QtWidgets.QFrame(parent_widget)
             self._map_type_editor.setFixedSize(360, 320)
             layout = QtWidgets.QVBoxLayout(self._map_type_editor)
-            layout.setContentsMargins(10, 10, 10, 10)
-            layout.setSpacing(8)
+            layout.setContentsMargins(
+                ui_tokens.PANEL_CONTENT_MARGIN_H,
+                ui_tokens.PANEL_CONTENT_MARGIN_V,
+                ui_tokens.PANEL_CONTENT_MARGIN_H,
+                ui_tokens.PANEL_CONTENT_MARGIN_V,
+            )
+            layout.setSpacing(ui_tokens.PANEL_LAYOUT_SPACING)
             self._map_type_editor_title = QtWidgets.QLabel(i18n.t("map.editor.title"))
             layout.addWidget(self._map_type_editor_title)
 
@@ -310,7 +409,7 @@ class MapUI(QtCore.QObject):
             layout.addWidget(self._map_type_list_widget, 1)
 
             btn_grid = QtWidgets.QGridLayout()
-            btn_grid.setContentsMargins(16, 6, 16, 6)
+            btn_grid.setContentsMargins(16, ui_tokens.SECTION_SPACING + 2, 16, 8)
             btn_grid.setHorizontalSpacing(16)
             self._map_type_btn_add = QtWidgets.QPushButton(i18n.t("map.editor.add"))
             self._map_type_btn_del = QtWidgets.QPushButton(i18n.t("map.editor.delete"))
@@ -325,7 +424,7 @@ class MapUI(QtCore.QObject):
             layout.addLayout(btn_grid)
 
             confirm_row = QtWidgets.QHBoxLayout()
-            confirm_row.setContentsMargins(16, 6, 16, 6)
+            confirm_row.setContentsMargins(16, ui_tokens.SECTION_SPACING + 2, 16, 8)
             self._map_type_btn_ok = QtWidgets.QPushButton(i18n.t("map.editor.apply"))
             self._map_type_btn_cancel = QtWidgets.QPushButton(i18n.t("map.editor.cancel"))
             self._map_type_btn_ok.setToolTip(i18n.t("map.editor.apply_tooltip"))
@@ -538,6 +637,11 @@ class MapUI(QtCore.QObject):
             self.map_main.apply_theme(theme)
         for w in self.map_lists.values():
             w.apply_theme(theme)
+            style_helpers.set_stylesheet_if_needed(
+                getattr(w, "names_hint", None),
+                f"map_names_hint:{theme.key}",
+                _map_names_hint_style(theme),
+            )
         self._apply_theme_to_map_controls(theme)
         self._refresh_palette_backed_widgets()
         self._theme_apply_signature = signature

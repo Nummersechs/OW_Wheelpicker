@@ -31,6 +31,11 @@ TRACE_FOCUS = False
 TRACE_HOVER = False
 TRACE_SPIN_PERF = True
 TRACE_CLEAR_ON_START = False
+# Reduziert Rauschen in flow_trace.log durch häufige Startup-/OCR-Events.
+# Bei Bedarf für tiefe Analysen temporär aktivieren.
+TRACE_STARTUP_VISUAL_FINALIZE_DEFER = False
+TRACE_OCR_PRELOAD_VERBOSE = False
+TRACE_SHUTDOWN_STEP_VERBOSE = False
 FOCUS_TRACE_DURATION_S = 12.0
 FOCUS_TRACE_MAX_EVENTS = 800
 DISABLE_TOOLTIPS = True
@@ -66,6 +71,21 @@ STARTUP_VISUAL_FINALIZE_BUSY_RETRY_MS = 250
 # Kurze Abschluss-Einblendung beim Beenden anzeigen.
 SHUTDOWN_OVERLAY_ENABLED = True
 SHUTDOWN_OVERLAY_DELAY_MS = 320
+# Shutdown wait windows for OCR worker threads.
+# Async OCR import thread (normal OCR action):
+SHUTDOWN_OCR_ASYNC_GRACEFUL_WAIT_MS = 1200
+SHUTDOWN_OCR_ASYNC_TERMINATE_WAIT_MS = 700
+# Retry waits after close was already deferred once (keeps UI responsive).
+SHUTDOWN_OCR_ASYNC_RETRY_GRACEFUL_WAIT_MS = 0
+SHUTDOWN_OCR_ASYNC_RETRY_TERMINATE_WAIT_MS = 120
+# Background OCR preload thread:
+SHUTDOWN_OCR_PRELOAD_GRACEFUL_WAIT_MS = 1400
+SHUTDOWN_OCR_PRELOAD_TERMINATE_WAIT_MS = 350
+# Retry waits after close was already deferred once (keeps UI responsive).
+SHUTDOWN_OCR_PRELOAD_RETRY_GRACEFUL_WAIT_MS = 0
+SHUTDOWN_OCR_PRELOAD_RETRY_TERMINATE_WAIT_MS = 120
+# Retry cadence while waiting for still-running threads during close.
+SHUTDOWN_THREAD_RETRY_MS = 180
 # Delay used when deferred post-choice initialization must be retried because
 # the wheel is currently spinning.
 POST_CHOICE_INIT_BUSY_RETRY_MS = 220
@@ -90,6 +110,9 @@ _disable_flags_if_quiet(
     "TRACE_HOVER",
     "TRACE_SPIN_PERF",
     "TRACE_CLEAR_ON_START",
+    "TRACE_STARTUP_VISUAL_FINALIZE_DEFER",
+    "TRACE_OCR_PRELOAD_VERBOSE",
+    "TRACE_SHUTDOWN_STEP_VERBOSE",
 )
 
 # ---------- Performance / Resource policy ----------
@@ -530,6 +553,13 @@ MAP_INCLUDE_DEFAULTS = [
     # "Assault",  # bewusst aus
     # "Clash",    # bewusst aus
 ]
+
+# Dynamische Höhe der Namenslisten im Map-Mode.
+# Die sichtbaren Reihen werden pro Map-Typ anhand der aktuellen Namensanzahl
+# zwischen MIN und MAX begrenzt.
+MAP_LIST_NAMES_MIN_VISIBLE_ROWS = 2
+MAP_LIST_NAMES_MAX_VISIBLE_ROWS = 6
+MAP_LIST_NAMES_EXTRA_PADDING_PX = 8
 
 # ---------- Server ----------
 API_BASE_URL = "http://localhost:5326"

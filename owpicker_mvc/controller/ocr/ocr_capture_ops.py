@@ -2140,7 +2140,11 @@ def _start_ocr_async_import(
         relay.error.connect(_handle_worker_error)
         worker.finished.connect(thread.quit)
         worker.failed.connect(thread.quit)
-        thread.started.connect(worker.run)
+        try:
+            job["started_connection"] = thread.started.connect(worker.run)
+        except Exception:
+            thread.started.connect(worker.run)
+            job["started_connection"] = None
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)

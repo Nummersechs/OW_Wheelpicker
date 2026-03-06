@@ -4,7 +4,7 @@ from PySide6 import QtCore, QtWidgets
 
 import i18n
 from utils import theme as theme_util, ui_helpers
-from view import style_helpers
+from view import style_helpers, ui_tokens
 from view.name_list import NamesListPanel
 
 
@@ -38,8 +38,13 @@ class BasePanel(QtWidgets.QWidget):
         outer.addWidget(self.card)
 
         self._inner_layout = QtWidgets.QVBoxLayout(self.card)
-        self._inner_layout.setContentsMargins(16, 12, 16, 12)
-        self._inner_layout.setSpacing(10)
+        self._inner_layout.setContentsMargins(
+            ui_tokens.PANEL_CONTENT_MARGIN_H,
+            ui_tokens.PANEL_CONTENT_MARGIN_V,
+            ui_tokens.PANEL_CONTENT_MARGIN_H,
+            ui_tokens.PANEL_CONTENT_MARGIN_V,
+        )
+        self._inner_layout.setSpacing(ui_tokens.PANEL_LAYOUT_SPACING)
 
         self.header_layout = QtWidgets.QHBoxLayout()
         self.header_layout.setContentsMargins(0, 0, 0, 0)
@@ -56,20 +61,20 @@ class BasePanel(QtWidgets.QWidget):
         self._inner_layout.addLayout(self.header_layout)
 
         self.btn_local_spin = QtWidgets.QPushButton(spin_label)
-        self.btn_local_spin.setFixedHeight(36)
+        self.btn_local_spin.setFixedHeight(ui_tokens.BUTTON_HEIGHT_MD)
         self.btn_local_spin.setToolTip(i18n.t("wheel.spin_button_tooltip"))
         self.btn_local_spin.clicked.connect(self.request_spin.emit)
 
         self.btn_include_in_all = QtWidgets.QPushButton()
         self.btn_include_in_all.setCheckable(True)
         self.btn_include_in_all.setChecked(True)
-        self.btn_include_in_all.setFixedHeight(36)
+        self.btn_include_in_all.setFixedHeight(ui_tokens.BUTTON_HEIGHT_MD)
         self.btn_include_in_all.setToolTip(i18n.t("wheel.include_tooltip"))
         self.btn_include_in_all.toggled.connect(self._on_include_in_all_toggled)
         self._on_include_in_all_toggled(self.btn_include_in_all.isChecked())
 
         btn_row = QtWidgets.QHBoxLayout()
-        btn_row.setSpacing(8)
+        btn_row.setSpacing(ui_tokens.SECTION_SPACING)
         btn_row.addWidget(self.btn_local_spin, 1)
         btn_row.addWidget(self.btn_include_in_all, 0)
 
