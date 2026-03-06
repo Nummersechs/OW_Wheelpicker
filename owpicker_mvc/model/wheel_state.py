@@ -211,10 +211,3 @@ class WheelState:
         if not names:
             return []
         return [i for i in range(len(names)) if i not in self.disabled_indices]
-
-    def enabled_labels(self, names: List[str]) -> set[str]:
-        if not names:
-            return set()
-        if not self.disabled_indices:
-            return set(names)
-        return {n for i, n in enumerate(names) if i not in self.disabled_indices}

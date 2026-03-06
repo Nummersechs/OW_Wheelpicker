@@ -100,31 +100,6 @@ class WheelViewEntriesMixin:
             self.stateChanged.emit()
         return changed
 
-    def rename_name(self, old: str, new: str) -> bool:
-        """Rename a name in the list while keeping its state/subroles."""
-        old = str(old or "").strip()
-        new = str(new or "").strip()
-        if not old or not new or old == new:
-            return False
-        changed = False
-        with self._suspend_list_signals() as prev:
-            for i in range(self.names.count()):
-                item = self.names.item(i)
-                if item is None:
-                    continue
-                if self._item_text(item) != old:
-                    continue
-                widget = self.names.itemWidget(item)
-                if isinstance(widget, NameRowWidget):
-                    widget.edit.setText(new)
-                item.setText(new)
-                changed = True
-            if changed:
-                self._apply_names_list_changes()
-        if changed and not prev:
-            self.stateChanged.emit()
-        return changed
-
     def set_names_active(self, names: set[str], active: bool) -> bool:
         """Set active state for matching names in the list."""
         if not names:
@@ -165,19 +140,6 @@ class WheelViewEntriesMixin:
         if not names:
             return False
         changed = self._wheel_state.disable_label(names, label, include_related_pairs=False)
-        if changed:
-            self._refresh_disabled_indices()
-            self.stateChanged.emit()
-        return changed
-
-    def disable_label_with_related_pairs(self, label: str) -> bool:
-        """Disable the label and all other pair segments that share a name."""
-        if not label:
-            return False
-        names = list(getattr(self.wheel, "names", []))
-        if not names:
-            return False
-        changed = self._wheel_state.disable_label(names, label, include_related_pairs=True)
         if changed:
             self._refresh_disabled_indices()
             self.stateChanged.emit()

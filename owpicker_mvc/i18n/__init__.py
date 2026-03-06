@@ -3,7 +3,6 @@ Sources per language live in i18n/de.py / i18n/en.py to keep strings organized."
 from __future__ import annotations
 
 from typing import Dict
-import sys
 
 from . import de as i18n_de
 from . import en as i18n_en
@@ -16,16 +15,6 @@ LANG_SOURCES: Dict[str, Dict[str, str]] = {
 
 SUPPORTED_LANGS = tuple(LANG_SOURCES.keys())
 _current_language = "de"
-
-
-def flag_for_language(lang: str) -> str:
-    """Return a small language marker; fall back to plain text on Windows."""
-    is_windows = sys.platform.startswith("win")
-    if lang == "de":
-        return "DE" if is_windows else "🇩🇪"
-    if lang == "en":
-        return "EN" if is_windows else "🇬🇧"
-    return lang.upper()
 
 
 def _build_translations() -> Dict[str, Dict[str, str]]:

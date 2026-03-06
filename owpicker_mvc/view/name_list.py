@@ -323,19 +323,6 @@ class NamesList(QtWidgets.QListWidget):
         self.doItemsLayout()
         QtCore.QTimer.singleShot(0, self._sync_viewport_right_padding)
 
-    def set_subrole_controls_layout_visible(self, visible: bool) -> None:
-        """Adjust row sizing/margins when subrole controls are toggled."""
-        new_val = bool(visible and self.has_subroles)
-        if new_val == bool(self._subrole_controls_layout_visible):
-            return
-        self._subrole_controls_layout_visible = new_val
-        self._apply_visual_profile_to_all_rows()
-        try:
-            self.doItemsLayout()
-        except Exception:
-            pass
-        QtCore.QTimer.singleShot(0, self._sync_viewport_right_padding)
-
     def _detach_row_widget(self, item: QtWidgets.QListWidgetItem) -> None:
         widget = self.itemWidget(item)
         if widget is None:

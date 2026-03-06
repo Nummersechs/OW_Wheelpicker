@@ -264,10 +264,6 @@ def style_primary_button(btn: QtWidgets.QPushButton, theme: theme_util.Theme) ->
     style_button(btn, theme, "primary")
 
 
-def style_include_button(btn: QtWidgets.QPushButton, theme: theme_util.Theme) -> None:
-    style_button(btn, theme, "include")
-
-
 def style_danger_button(btn: QtWidgets.QPushButton, theme: theme_util.Theme) -> None:
     style_button(btn, theme, "danger")
 
@@ -284,10 +280,6 @@ def style_names_list(list_widget: QtWidgets.QListWidget, theme: theme_util.Theme
     if not list_widget:
         return
     set_stylesheet_if_needed(list_widget, f"names_list:{theme.key}", _names_list_style(theme))
-
-
-def style_mode_button(btn: QtWidgets.QPushButton, theme: theme_util.Theme) -> None:
-    style_button(btn, theme, "mode")
 
 
 def style_horizontal_slider(slider: QtWidgets.QSlider, theme: theme_util.Theme) -> None:
