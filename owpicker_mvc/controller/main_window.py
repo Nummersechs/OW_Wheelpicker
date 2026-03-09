@@ -25,6 +25,8 @@ from .main_window_parts.main_window_spin import MainWindowSpinMixin
 from .ocr.ocr_role_import import PendingOCRImport
 from services import state_store
 from services.app_settings import AppSettings
+from model.main_window_runtime_state import ShutdownRuntimeState, StartupRuntimeState
+from model.mode_keys import AppMode
 from model.role_keys import role_wheel_map, role_wheels
 from utils import theme as theme_util, ui_helpers
 from view.overlay import ResultOverlay
@@ -78,6 +80,90 @@ class MainWindow(
     MainWindowInputMixin,
     QtWidgets.QMainWindow,
 ):
+    _STARTUP_RUNTIME_ATTRS: dict[str, str] = {
+        "_startup_finalize_done": "finalize_done",
+        "_startup_finalize_scheduled": "finalize_scheduled",
+        "_startup_visual_finalize_pending": "visual_finalize_pending",
+        "_startup_block_input": "block_input",
+        "_startup_block_input_until": "block_input_until",
+        "_startup_warmup_running": "warmup_running",
+        "_startup_warmup_done": "warmup_done",
+        "_startup_warmup_finalize_scheduled": "warmup_finalize_scheduled",
+        "_startup_task_queue": "task_queue",
+        "_startup_current_task": "current_task",
+        "_startup_waiting_for_map": "waiting_for_map",
+        "_startup_map_prebuild_deadline": "map_prebuild_deadline",
+        "_startup_waiting_for_ocr_preload": "waiting_for_ocr_preload",
+        "_startup_ocr_preload_deadline": "ocr_preload_deadline",
+        "_startup_ocr_preload_started_at": "ocr_preload_started_at",
+        "_startup_ocr_preload_running_wait_logged": "ocr_preload_running_wait_logged",
+        "_startup_drain_active": "drain_active",
+    }
+    _SHUTDOWN_RUNTIME_ATTRS: dict[str, str] = {
+        "_closing": "closing",
+        "_close_overlay_active": "close_overlay_active",
+        "_close_overlay_done": "close_overlay_done",
+        "_close_overlay_timer": "close_overlay_timer",
+        "_close_retry_timer": "close_retry_timer",
+        "_close_thread_wait_started_at": "close_thread_wait_started_at",
+        "_shutdown_force_exit_deadline": "shutdown_force_exit_deadline",
+        "_shutdown_force_exit_watchdog_token": "shutdown_force_exit_watchdog_token",
+        "_shutdown_blocker_trace_last_at": "shutdown_blocker_trace_last_at",
+    }
+
+    def __setattr__(self, name: str, value: object) -> None:
+        startup_map = type(self)._STARTUP_RUNTIME_ATTRS
+        if name in startup_map:
+            state = self.__dict__.get("_startup_state", None)
+            if state is not None:
+                setattr(state, startup_map[name], value)
+        shutdown_map = type(self)._SHUTDOWN_RUNTIME_ATTRS
+        if name in shutdown_map:
+            state = self.__dict__.get("_shutdown_state", None)
+            if state is not None:
+                setattr(state, shutdown_map[name], value)
+        super().__setattr__(name, value)
+
+    def _sync_startup_runtime_attrs(self) -> None:
+        state = getattr(self, "_startup_state", None)
+        if state is None:
+            return
+        for attr, field_name in self._STARTUP_RUNTIME_ATTRS.items():
+            super().__setattr__(attr, getattr(state, field_name))
+
+    def _sync_shutdown_runtime_attrs(self) -> None:
+        state = getattr(self, "_shutdown_state", None)
+        if state is None:
+            return
+        for attr, field_name in self._SHUTDOWN_RUNTIME_ATTRS.items():
+            super().__setattr__(attr, getattr(state, field_name))
+
+    def _set_startup_runtime_state(self, **updates: object) -> None:
+        state = getattr(self, "_startup_state", None)
+        if state is None:
+            reverse_map = {field_name: attr for attr, field_name in self._STARTUP_RUNTIME_ATTRS.items()}
+            for field_name, value in updates.items():
+                attr_name = reverse_map.get(field_name)
+                if attr_name is not None:
+                    super().__setattr__(attr_name, value)
+            return
+        for field_name, value in updates.items():
+            setattr(state, field_name, value)
+        self._sync_startup_runtime_attrs()
+
+    def _set_shutdown_runtime_state(self, **updates: object) -> None:
+        state = getattr(self, "_shutdown_state", None)
+        if state is None:
+            reverse_map = {field_name: attr for attr, field_name in self._SHUTDOWN_RUNTIME_ATTRS.items()}
+            for field_name, value in updates.items():
+                attr_name = reverse_map.get(field_name)
+                if attr_name is not None:
+                    super().__setattr__(attr_name, value)
+            return
+        for field_name, value in updates.items():
+            setattr(state, field_name, value)
+        self._sync_shutdown_runtime_attrs()
+
     def __init__(self):
         super().__init__()
         # Basisverzeichnisse bestimmen (Assets vs. writable state) und gespeicherten Zustand laden
@@ -85,6 +171,7 @@ class MainWindow(
         self._state_dir = self._state_base_dir()
         self._state_file = self._get_state_file()
         self.settings = AppSettings.from_module(config)
+        self._quiet_mode = bool(self._cfg("QUIET", False))
         configured_log_dir = str(self._cfg("LOG_OUTPUT_DIR", "logs")).strip()
         log_root = Path(configured_log_dir) if configured_log_dir else Path()
         if not configured_log_dir:
@@ -92,10 +179,11 @@ class MainWindow(
         elif not log_root.is_absolute():
             log_root = self._state_dir / log_root
         self._log_dir = log_root
-        try:
-            self._log_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            self._log_dir = self._state_dir
+        if not self._quiet_mode:
+            try:
+                self._log_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                self._log_dir = self._state_dir
         self._run_id = f"{int(time.time() * 1000)}_{os.getpid()}"
         saved = StateSyncController.load_saved_state(self._state_file)
         default_lang = self._cfg("DEFAULT_LANGUAGE", "en")
@@ -117,8 +205,8 @@ class MainWindow(
 
         self._restoring_state = True   # während des Aufbaus nicht speichern
         self._player_profile_combo_syncing = False
-        self.current_mode = "players"  # immer mit Spieler-Auswahl starten
-        self.last_non_hero_mode = "players"
+        self.current_mode = AppMode.PLAYERS.value  # immer mit Spieler-Auswahl starten
+        self.last_non_hero_mode = AppMode.PLAYERS.value
         self.hero_ban_active = False
         self._hero_ban_rebuild = False
         self._hero_ban_pending = False
@@ -128,13 +216,10 @@ class MainWindow(
         self._mode_results: dict[str, dict[str, str]] = {}
         self.state_sync = StateSyncController(self, self._state_file)
         self._mode_choice_locked = False
-        self._closing = False
-        self._close_overlay_active = False
-        self._close_overlay_done = False
-        self._close_overlay_timer: QtCore.QTimer | None = None
-        self._startup_finalize_done = False
-        self._startup_finalize_scheduled = False
-        self._startup_visual_finalize_pending = False
+        self._startup_state = StartupRuntimeState()
+        self._shutdown_state = ShutdownRuntimeState()
+        self._sync_startup_runtime_attrs()
+        self._sync_shutdown_runtime_attrs()
         self._choice_shown_at: float | None = None
         self._post_choice_delay_ms = 350
         self._post_choice_step_ms = 90
@@ -199,24 +284,10 @@ class MainWindow(
         self._app_event_filter_installed = False
         self._applied_theme_key: str | None = None
         self._mode_button_checked_cache: dict[int, bool] = {}
-        self._startup_block_input = False
-        self._startup_block_input_until: float | None = None
-        self._startup_warmup_running = False
-        self._startup_warmup_done = False
-        self._startup_warmup_finalize_scheduled = False
-        self._startup_task_queue: list[tuple[str, Callable[[], None]]] = []
-        self._startup_current_task: str | None = None
-        self._startup_waiting_for_map = False
-        self._startup_map_prebuild_deadline: float | None = None
-        self._startup_waiting_for_ocr_preload = False
-        self._startup_ocr_preload_deadline: float | None = None
-        self._startup_ocr_preload_started_at: float | None = None
-        self._startup_ocr_preload_running_wait_logged = False
         self._blocked_input_total = 0
         self._blocked_input_counts: dict[int, int] = {}
         self._blocked_input_first_t: float | None = None
         self._blocked_input_last_t: float | None = None
-        self._startup_drain_active = False
         self._startup_drain_timer: QtCore.QTimer | None = None
         self._drained_input_total = 0
         self._drained_input_counts: dict[int, int] = {}
@@ -289,6 +360,11 @@ class MainWindow(
 
     def _cfg(self, key: str, default=None):
         settings = getattr(self, "settings", None)
+        if settings is not None and hasattr(settings, "resolve"):
+            try:
+                return settings.resolve(key, default)
+            except Exception:
+                pass
         if settings is not None and hasattr(settings, "get"):
             try:
                 return settings.get(key, default)

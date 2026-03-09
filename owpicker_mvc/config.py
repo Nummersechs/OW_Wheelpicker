@@ -5,6 +5,85 @@ Hier kannst du das Verhalten und die Startdaten des Programms anpassen.
 
 import sys
 
+
+def _as_bool(value) -> bool:
+    """Best-effort bool coercion with support for common string forms."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off", ""}:
+            return False
+    return bool(value)
+
+
+def _as_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _as_float(value, default: float) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _normalize_str(value, default: str = "") -> str:
+    text = str(value if value is not None else "").strip()
+    if text:
+        return text
+    return str(default)
+
+
+def _normalize_csv_list(value, default: list[str]) -> list[str]:
+    if isinstance(value, str):
+        raw_tokens = [tok.strip() for tok in value.replace("+", ",").split(",")]
+    elif isinstance(value, (list, tuple, set)):
+        raw_tokens = [str(tok).strip() for tok in value]
+    else:
+        raw_tokens = []
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for token in raw_tokens:
+        if not token:
+            continue
+        key = token.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(token)
+    if deduped:
+        return deduped
+    return list(default)
+
+
+def _normalize_int_list(value, default: list[int], *, min_value: int = 0, max_value: int = 10_000) -> list[int]:
+    if isinstance(value, str):
+        raw_items = [part.strip() for part in value.replace(";", ",").split(",")]
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = list(value)
+    else:
+        raw_items = []
+    normalized: list[int] = []
+    seen: set[int] = set()
+    for item in raw_items:
+        number = _as_int(item, min_value)
+        number = max(int(min_value), min(int(max_value), int(number)))
+        if number in seen:
+            continue
+        seen.add(number)
+        normalized.append(number)
+    if normalized:
+        return normalized
+    return [max(int(min_value), min(int(max_value), int(v))) for v in default]
+
 # ---------- Runtime / Logging ----------
 DEBUG = False
 # Relative paths are created inside the writable app state directory.
@@ -124,7 +203,7 @@ HOVER_PUMP_DURATION_MS = 0
 HOVER_PUMP_INTERVAL_MS = 90
 
 # QUIET erzwingt "silent runtime" für alle Debug-/Trace-Kanäle.
-_disable_flags_if_quiet(
+QUIET_DISABLED_TRACE_FLAGS = (
     "DEBUG",
     "TRACE_FLOW",
     "TRACE_SHUTDOWN",
@@ -137,6 +216,7 @@ _disable_flags_if_quiet(
     "TRACE_OCR_RUNTIME",
     "TRACE_SHUTDOWN_STEP_VERBOSE",
 )
+_disable_flags_if_quiet(*QUIET_DISABLED_TRACE_FLAGS)
 
 # ---------- Performance / Resource policy ----------
 MAP_PREBUILD_ON_START = True
@@ -402,12 +482,13 @@ OCR_DEBUG_LINE_MAX_ENTRIES_PER_RUN = 60
 OCR_DEBUG_TRACE_LINE_MAPPING = True
 OCR_DEBUG_TRACE_MAX_ENTRIES = 220
 # QUIET erzwingt zusätzlich: keine OCR-Debug-Reports/Dateilogs.
-_disable_flags_if_quiet(
+QUIET_DISABLED_OCR_DEBUG_FLAGS = (
     "OCR_DEBUG_SHOW_REPORT",
     "OCR_DEBUG_INCLUDE_REPORT_TEXT",
     "OCR_DEBUG_LOG_TO_FILE",
     "OCR_DEBUG_LINE_ANALYSIS",
 )
+_disable_flags_if_quiet(*QUIET_DISABLED_OCR_DEBUG_FLAGS)
 # Optional manual vocabulary that improves OCR correction for known player names.
 # Keep disabled by default to avoid bias from hardcoded names.
 OCR_USE_NAME_HINTS = False
@@ -602,3 +683,106 @@ MAP_LIST_NAMES_EXTRA_PADDING_PX = 8
 
 # ---------- Server ----------
 API_BASE_URL = "http://localhost:5326"
+
+
+def _normalize_config_values() -> None:
+    """Normalize and harden config values to consistent runtime-safe types."""
+    global QUIET
+    global DEBUG
+    global LOG_OUTPUT_DIR
+    global WINDOWS_SINGLE_INSTANCE
+    global WINDOWS_SINGLE_INSTANCE_LOCK_NAME
+    global DEFAULT_LANGUAGE
+    global OCR_ENGINE
+    global OCR_EASYOCR_LANG
+    global OCR_RETRY_EXTRA_PSMS
+    global OCR_ROW_PASS_PSMS
+    global MIN_DURATION_MS
+    global MAX_DURATION_MS
+    global DEFAULT_DURATION_MS
+    global NETWORK_SYNC_WORKERS
+    global PLAYER_PROFILE_MAX_SLOTS
+    global OCR_NAME_MIN_CHARS
+    global OCR_NAME_MAX_CHARS
+    global OCR_NAME_MAX_WORDS
+    global OCR_MAX_VARIANTS
+    global OCR_MAX_VARIANTS_WINDOWS
+    global OCR_RECALL_RETRY_MAX_VARIANTS
+    global OCR_TIMEOUT_S
+    global OCR_TIMEOUT_S_WINDOWS
+    global OCR_PRELOAD_SUBPROCESS_TIMEOUT_S
+    global MAP_LIST_NAMES_MIN_VISIBLE_ROWS
+    global MAP_LIST_NAMES_MAX_VISIBLE_ROWS
+    global MAP_LIST_NAMES_EXTRA_PADDING_PX
+    global MAP_CATEGORIES
+    global MAP_INCLUDE_DEFAULTS
+    global DEFAULT_MAPS
+    global API_BASE_URL
+
+    QUIET = _as_bool(QUIET)
+    DEBUG = _as_bool(DEBUG)
+    LOG_OUTPUT_DIR = _normalize_str(LOG_OUTPUT_DIR, "logs")
+    WINDOWS_SINGLE_INSTANCE = _as_bool(WINDOWS_SINGLE_INSTANCE)
+    WINDOWS_SINGLE_INSTANCE_LOCK_NAME = _normalize_str(WINDOWS_SINGLE_INSTANCE_LOCK_NAME, "ow_wheelpicker_instance")
+
+    DEFAULT_LANGUAGE = _normalize_str(DEFAULT_LANGUAGE, "en").lower()
+    if DEFAULT_LANGUAGE not in {"de", "en"}:
+        DEFAULT_LANGUAGE = "en"
+
+    OCR_ENGINE = _normalize_str(OCR_ENGINE, "easyocr").lower()
+    if OCR_ENGINE != "easyocr":
+        OCR_ENGINE = "easyocr"
+
+    OCR_EASYOCR_LANG = ",".join(_normalize_csv_list(OCR_EASYOCR_LANG, ["en"]))
+    OCR_RETRY_EXTRA_PSMS = _normalize_int_list(OCR_RETRY_EXTRA_PSMS, [7, 13], min_value=1, max_value=99)
+    OCR_ROW_PASS_PSMS = _normalize_int_list(OCR_ROW_PASS_PSMS, [7, 13, 6], min_value=1, max_value=99)
+
+    MIN_DURATION_MS = max(0, _as_int(MIN_DURATION_MS, 0))
+    MAX_DURATION_MS = max(MIN_DURATION_MS, _as_int(MAX_DURATION_MS, 10_000))
+    DEFAULT_DURATION_MS = max(MIN_DURATION_MS, min(MAX_DURATION_MS, _as_int(DEFAULT_DURATION_MS, 3_000)))
+
+    NETWORK_SYNC_WORKERS = max(1, _as_int(NETWORK_SYNC_WORKERS, 2))
+    PLAYER_PROFILE_MAX_SLOTS = max(1, _as_int(PLAYER_PROFILE_MAX_SLOTS, 6))
+
+    OCR_NAME_MIN_CHARS = max(1, _as_int(OCR_NAME_MIN_CHARS, 2))
+    OCR_NAME_MAX_CHARS = max(OCR_NAME_MIN_CHARS, _as_int(OCR_NAME_MAX_CHARS, 64))
+    OCR_NAME_MAX_WORDS = max(1, _as_int(OCR_NAME_MAX_WORDS, 8))
+
+    OCR_MAX_VARIANTS = max(0, _as_int(OCR_MAX_VARIANTS, 2))
+    OCR_MAX_VARIANTS_WINDOWS = max(0, _as_int(OCR_MAX_VARIANTS_WINDOWS, 1))
+    OCR_RECALL_RETRY_MAX_VARIANTS = max(0, _as_int(OCR_RECALL_RETRY_MAX_VARIANTS, 4))
+
+    OCR_TIMEOUT_S = max(0.5, _as_float(OCR_TIMEOUT_S, 8.0))
+    OCR_TIMEOUT_S_WINDOWS = max(0.5, _as_float(OCR_TIMEOUT_S_WINDOWS, 6.0))
+    OCR_PRELOAD_SUBPROCESS_TIMEOUT_S = max(1.0, _as_float(OCR_PRELOAD_SUBPROCESS_TIMEOUT_S, 60.0))
+
+    MAP_LIST_NAMES_MIN_VISIBLE_ROWS = max(1, _as_int(MAP_LIST_NAMES_MIN_VISIBLE_ROWS, 2))
+    MAP_LIST_NAMES_MAX_VISIBLE_ROWS = max(
+        MAP_LIST_NAMES_MIN_VISIBLE_ROWS,
+        _as_int(MAP_LIST_NAMES_MAX_VISIBLE_ROWS, 6),
+    )
+    MAP_LIST_NAMES_EXTRA_PADDING_PX = max(0, _as_int(MAP_LIST_NAMES_EXTRA_PADDING_PX, 8))
+
+    map_categories = _normalize_csv_list(MAP_CATEGORIES, list(DEFAULT_MAPS.keys()))
+    MAP_CATEGORIES = list(map_categories)
+
+    cleaned_defaults: dict[str, list[str]] = {}
+    for category in MAP_CATEGORIES:
+        raw_names = DEFAULT_MAPS.get(category, [])
+        if not isinstance(raw_names, (list, tuple, set)):
+            raw_names = []
+        cleaned_names = _normalize_csv_list(raw_names, [])
+        cleaned_defaults[category] = cleaned_names
+    DEFAULT_MAPS = cleaned_defaults
+
+    include_defaults = _normalize_csv_list(MAP_INCLUDE_DEFAULTS, [])
+    MAP_INCLUDE_DEFAULTS = [name for name in include_defaults if name in MAP_CATEGORIES]
+
+    API_BASE_URL = _normalize_str(API_BASE_URL, "http://localhost:5326")
+
+    # Re-apply quiet guards after type normalization so invalid overrides
+    # cannot accidentally re-enable debug output.
+    _disable_flags_if_quiet(*(QUIET_DISABLED_TRACE_FLAGS + QUIET_DISABLED_OCR_DEBUG_FLAGS))
+
+
+_normalize_config_values()

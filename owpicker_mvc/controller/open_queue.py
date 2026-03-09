@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from model.mode_keys import is_role_mode
 from model.role_keys import role_wheels
 from view.wheel_view import WheelView
 
@@ -23,7 +24,9 @@ class OpenQueueController:
         return [(role, wheel) for role, wheel in role_wheels(self._mw)]
 
     def spin_mode_allowed(self) -> bool:
-        return self._mw.current_mode in ("players", "heroes") and not getattr(self._mw, "hero_ban_active", False)
+        return is_role_mode(getattr(self._mw, "current_mode", None)) and not getattr(
+            self._mw, "hero_ban_active", False
+        )
 
     def is_mode_active(self) -> bool:
         if not self.spin_mode_allowed():

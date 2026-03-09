@@ -223,7 +223,12 @@ class NamesList(QtWidgets.QListWidget):
                 viewport.update()
             except Exception:
                 pass
-        self.update()
+        try:
+            # QListWidget exposes an overload update(item), which can mask the
+            # QWidget.update() no-arg variant in some PySide builds.
+            QtWidgets.QWidget.update(self)
+        except Exception:
+            pass
 
     def _schedule_geometry_sync(self) -> None:
         if self._bulk_update_depth > 0:

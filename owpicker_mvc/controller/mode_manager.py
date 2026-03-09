@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import List
 from logic import hero_ban_merge
+from model.mode_keys import AppMode, ROLE_MODE_VALUES, normalize_mode
 from model.role_keys import role_wheel_map, role_wheels
 from PySide6 import QtWidgets, QtCore
 import i18n
@@ -122,7 +123,8 @@ def update_hero_ban_wheel(mw):
 
 def on_mode_button_clicked(mw, target: str):
     came_from_hero_ban = mw.hero_ban_active
-    if target == "hero_ban":
+    target_mode = normalize_mode(target, default=AppMode.PLAYERS)
+    if target_mode == AppMode.HERO_BAN.value:
         if mw.hero_ban_active:
             return
         mw.last_non_hero_mode = mw.current_mode
@@ -131,14 +133,14 @@ def on_mode_button_clicked(mw, target: str):
             role_wheel_map(mw),
             hero_ban_active=mw.hero_ban_active,
         )
-        mw.current_mode = "heroes"
+        mw.current_mode = AppMode.HEROES.value
         mw.btn_mode_players.setChecked(False)
         mw.btn_mode_heroes.setChecked(False)
         mw.btn_mode_heroban.setChecked(True)
-        mw._load_mode_into_wheels("heroes", hero_ban=True)
+        mw._load_mode_into_wheels(AppMode.HEROES.value, hero_ban=True)
         return
 
-    if target not in ("players", "heroes"):
+    if target_mode not in ROLE_MODE_VALUES:
         return
     if mw.hero_ban_active:
         mw._state_store.capture_mode_from_wheels(
@@ -148,12 +150,12 @@ def on_mode_button_clicked(mw, target: str):
         )
         mw.hero_ban_active = False
         mw.dps.set_override_entries(None)
-    if target == mw.current_mode and not came_from_hero_ban:
+    if target_mode == mw.current_mode and not came_from_hero_ban:
         return
-    mw.current_mode = target
-    mw.last_non_hero_mode = target
-    mw.btn_mode_players.setChecked(target == "players")
-    mw.btn_mode_heroes.setChecked(target == "heroes")
+    mw.current_mode = target_mode
+    mw.last_non_hero_mode = target_mode
+    mw.btn_mode_players.setChecked(target_mode == AppMode.PLAYERS.value)
+    mw.btn_mode_heroes.setChecked(target_mode == AppMode.HEROES.value)
     mw.btn_mode_heroban.setChecked(False)
-    mw._load_mode_into_wheels(target, hero_ban=False)
+    mw._load_mode_into_wheels(target_mode, hero_ban=False)
     mw.state_sync.save_state()

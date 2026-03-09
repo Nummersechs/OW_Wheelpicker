@@ -63,8 +63,10 @@ class MainWindowShutdownMixin:
             except Exception:
                 pass
         token = object()
-        self._shutdown_force_exit_deadline = deadline
-        self._shutdown_force_exit_watchdog_token = token
+        self._set_shutdown_runtime_state(
+            shutdown_force_exit_deadline=deadline,
+            shutdown_force_exit_watchdog_token=token,
+        )
 
         def _watchdog(local_token: object, sleep_ms: int, fire_reason: str) -> None:
             time.sleep(max(0.0, float(sleep_ms) / 1000.0))
@@ -675,7 +677,7 @@ class MainWindowShutdownMixin:
                 if isinstance(last, (int, float)):
                     if (now - float(last)) * 1000.0 < float(interval_ms):
                         return
-        self._shutdown_blocker_trace_last_at = now
+        self._set_shutdown_runtime_state(shutdown_blocker_trace_last_at=now)
 
         async_job = getattr(self, "_ocr_async_job", None)
         preload_job = getattr(self, "_ocr_preload_job", None)
@@ -740,7 +742,7 @@ class MainWindowShutdownMixin:
         now = time.monotonic()
         wait_started = getattr(self, "_close_thread_wait_started_at", None)
         if wait_started is None:
-            self._close_thread_wait_started_at = now
+            self._set_shutdown_runtime_state(close_thread_wait_started_at=now)
             elapsed_ms = 0
         else:
             elapsed_ms = max(0, int((now - float(wait_started)) * 1000.0))
@@ -767,7 +769,7 @@ class MainWindowShutdownMixin:
                 timer.timeout.connect(self.close)
                 if hasattr(self, "_timers"):
                     self._timers.register(timer)
-                self._close_retry_timer = timer
+                self._set_shutdown_runtime_state(close_retry_timer=timer)
             except Exception:
                 timer = None
         if timer is None:
@@ -785,14 +787,16 @@ class MainWindowShutdownMixin:
         timer.timeout.connect(self._continue_close_after_overlay)
         if hasattr(self, "_timers"):
             self._timers.register(timer)
-        self._close_overlay_timer = timer
+        self._set_shutdown_runtime_state(close_overlay_timer=timer)
         return timer
 
     def _continue_close_after_overlay(self) -> None:
         if not bool(getattr(self, "_close_overlay_active", False)):
             return
-        self._close_overlay_active = False
-        self._close_overlay_done = True
+        self._set_shutdown_runtime_state(
+            close_overlay_active=False,
+            close_overlay_done=True,
+        )
         self.close()
 
     def _show_close_overlay(self) -> bool:
@@ -812,11 +816,13 @@ class MainWindowShutdownMixin:
             overlay.setEnabled(False)
         except Exception:
             return False
-        self._close_overlay_active = True
-        self._close_overlay_done = False
+        self._set_shutdown_runtime_state(
+            close_overlay_active=True,
+            close_overlay_done=False,
+            closing=True,
+        )
         # Mark close intent early so no new background OCR preload can start
         # while shutdown overlay is shown.
-        self._closing = True
         timer = self._ensure_close_overlay_timer()
         timer.start(delay_ms)
         return True
@@ -844,7 +850,7 @@ class MainWindowShutdownMixin:
             retry_timer.stop()
         # Mark close intent before thread checks/cancellation to block any new
         # OCR preload scheduling paths during shutdown retries.
-        self._closing = True
+        self._set_shutdown_runtime_state(closing=True)
         self._trace_shutdown_blockers(stage="close_enter", reason="close_request", force=True)
 
         if hasattr(self, "_cancel_ocr_background_preload"):
@@ -1024,7 +1030,7 @@ class MainWindowShutdownMixin:
             else:
                 self._defer_close_for_running_thread(event, reason="python_thread")
                 return
-        self._close_thread_wait_started_at = None
+        self._set_shutdown_runtime_state(close_thread_wait_started_at=None)
         if bool(self._cfg("SHUTDOWN_RELEASE_OCR_CACHE", False)) and hasattr(
             self, "_release_ocr_runtime_cache"
         ):

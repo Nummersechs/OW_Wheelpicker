@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from model.mode_keys import is_role_mode
 from model.role_keys import role_wheels as build_role_wheels
 
 
@@ -26,7 +27,7 @@ class RoleModeController:
         return self.any_selected() and getattr(self._mw, "pending", 0) == 0
 
     def is_active_mode(self) -> bool:
-        if self._mw.current_mode not in ("players", "heroes"):
+        if not is_role_mode(getattr(self._mw, "current_mode", None)):
             return False
         if getattr(self._mw, "hero_ban_active", False):
             return False

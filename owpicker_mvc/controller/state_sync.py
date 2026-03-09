@@ -85,6 +85,11 @@ class StateSyncController(QtCore.QObject):
 
     def _cfg(self, key: str, default: Any = None) -> Any:
         settings = self._settings
+        if settings is not None and hasattr(settings, "resolve"):
+            try:
+                return settings.resolve(key, default)
+            except Exception:
+                pass
         if settings is not None and hasattr(settings, "get"):
             try:
                 return settings.get(key, default)

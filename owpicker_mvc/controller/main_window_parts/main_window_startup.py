@@ -13,13 +13,13 @@ class MainWindowStartupMixin:
             return
         if getattr(self, "_startup_finalize_scheduled", False):
             return
-        self._startup_finalize_scheduled = True
+        self._set_startup_runtime_state(finalize_scheduled=True)
         if delay_ms is None:
             delay_ms = int(self._cfg("STARTUP_FINALIZE_DELAY_MS", 60))
         QtCore.QTimer.singleShot(max(0, int(delay_ms)), self._run_finalize_startup)
 
     def _run_finalize_startup(self) -> None:
-        self._startup_finalize_scheduled = False
+        self._set_startup_runtime_state(finalize_scheduled=False)
         if getattr(self, "_startup_finalize_done", False):
             return
         self._finalize_startup()
@@ -67,7 +67,7 @@ class MainWindowStartupMixin:
             )
             self._schedule_startup_visual_finalize(delay_ms=retry_ms)
             return
-        self._startup_visual_finalize_pending = False
+        self._set_startup_runtime_state(visual_finalize_pending=False)
         self._trace_event("startup_visual_finalize:start")
         self._apply_theme(defer_heavy=True)
         self._apply_language(defer_heavy=True)
@@ -140,12 +140,14 @@ class MainWindowStartupMixin:
         min_block_ms = max(0, int(self._cfg("STARTUP_MIN_BLOCK_INPUT_MS", 0)))
         # Fast-path for normal startup: no warmup tasks and no explicit lock.
         if not tasks and min_block_ms <= 0:
-            self._startup_task_queue = []
-            self._startup_warmup_running = False
-            self._startup_warmup_done = True
-            self._startup_block_input = False
-            self._startup_block_input_until = None
-            self._startup_drain_active = False
+            self._set_startup_runtime_state(
+                task_queue=[],
+                warmup_running=False,
+                warmup_done=True,
+                block_input=False,
+                block_input_until=None,
+                drain_active=False,
+            )
             self._trace_event("startup_warmup:skipped")
             self._refresh_app_event_filter_state()
             try:
@@ -154,13 +156,15 @@ class MainWindowStartupMixin:
             except Exception:
                 pass
             return
-        self._startup_task_queue = tasks
-        self._startup_warmup_running = True
-        self._startup_block_input = True
+        self._set_startup_runtime_state(
+            task_queue=tasks,
+            warmup_running=True,
+            block_input=True,
+        )
         if min_block_ms > 0:
-            self._startup_block_input_until = time.monotonic() + (min_block_ms / 1000.0)
+            self._set_startup_runtime_state(block_input_until=time.monotonic() + (min_block_ms / 1000.0))
         else:
-            self._startup_block_input_until = None
+            self._set_startup_runtime_state(block_input_until=None)
         self._refresh_app_event_filter_state()
         self._trace_event("startup_warmup:start", tasks=[name for name, _ in tasks], min_block_ms=min_block_ms)
         if not tasks:
@@ -173,7 +177,7 @@ class MainWindowStartupMixin:
             self._finish_startup_warmup()
             return
         name, fn = self._startup_task_queue.pop(0)
-        self._startup_current_task = name
+        self._set_startup_runtime_state(current_task=name)
         self._trace_event("startup_warmup:task_start", task=name)
         QtCore.QTimer.singleShot(0, fn)
 
@@ -181,7 +185,7 @@ class MainWindowStartupMixin:
         task = name or getattr(self, "_startup_current_task", None)
         if task:
             self._trace_event("startup_warmup:task_done", task=task)
-        self._startup_current_task = None
+        self._set_startup_runtime_state(current_task=None)
         QtCore.QTimer.singleShot(0, self._run_next_startup_task)
 
     def _finish_startup_warmup(self) -> None:
@@ -189,7 +193,7 @@ class MainWindowStartupMixin:
             return
         if getattr(self, "_startup_warmup_finalize_scheduled", False):
             return
-        self._startup_warmup_finalize_scheduled = True
+        self._set_startup_runtime_state(warmup_finalize_scheduled=True)
         extra_ms = max(0, int(self._cfg("STARTUP_WARMUP_COOLDOWN_MS", 500)))
         remaining_lock_ms = 0
         block_until = getattr(self, "_startup_block_input_until", None)
@@ -202,22 +206,24 @@ class MainWindowStartupMixin:
     def _finalize_startup_warmup(self) -> None:
         if getattr(self, "_startup_warmup_done", False):
             return
-        self._startup_warmup_running = False
-        self._startup_warmup_done = True
+        self._set_startup_runtime_state(
+            warmup_running=False,
+            warmup_done=True,
+            block_input=False,
+            block_input_until=None,
+            drain_active=True,
+            task_queue=[],
+            current_task=None,
+            waiting_for_map=False,
+            map_prebuild_deadline=None,
+            waiting_for_ocr_preload=False,
+            ocr_preload_deadline=None,
+            ocr_preload_started_at=None,
+            ocr_preload_running_wait_logged=False,
+        )
         self._flush_posted_events("startup_warmup_done")
-        self._startup_block_input = False
-        self._startup_block_input_until = None
-        self._startup_drain_active = True
         self._refresh_app_event_filter_state()
         self._restart_startup_drain_timer()
-        self._startup_task_queue = []
-        self._startup_current_task = None
-        self._startup_waiting_for_map = False
-        self._startup_map_prebuild_deadline = None
-        self._startup_waiting_for_ocr_preload = False
-        self._startup_ocr_preload_deadline = None
-        self._startup_ocr_preload_started_at = None
-        self._startup_ocr_preload_running_wait_logged = False
         # Heavy UI updates were deferred; apply once warmup is done.
         self._flush_pending_heavy_ui_updates(step_ms=int(self._post_choice_step_ms))
         self._sync_mode_stack()
@@ -275,21 +281,25 @@ class MainWindowStartupMixin:
         if not callable(run_preload):
             self._startup_task_done("ocr_preload")
             return
-        self._startup_waiting_for_ocr_preload = True
-        self._startup_ocr_preload_running_wait_logged = False
-        self._startup_ocr_preload_started_at = None
+        self._set_startup_runtime_state(
+            waiting_for_ocr_preload=True,
+            ocr_preload_running_wait_logged=False,
+            ocr_preload_started_at=None,
+        )
         max_wait_ms = max(250, int(self._cfg("STARTUP_OCR_PRELOAD_MAX_WAIT_MS", 1800)))
-        self._startup_ocr_preload_deadline = time.monotonic() + (max_wait_ms / 1000.0)
+        self._set_startup_runtime_state(ocr_preload_deadline=time.monotonic() + (max_wait_ms / 1000.0))
         try:
             run_preload()
         except Exception:
-            self._startup_waiting_for_ocr_preload = False
-            self._startup_ocr_preload_deadline = None
-            self._startup_ocr_preload_started_at = None
+            self._set_startup_runtime_state(
+                waiting_for_ocr_preload=False,
+                ocr_preload_deadline=None,
+                ocr_preload_started_at=None,
+            )
             self._startup_task_done("ocr_preload")
             return
         if self._startup_ocr_preload_thread_running():
-            self._startup_ocr_preload_started_at = time.monotonic()
+            self._set_startup_runtime_state(ocr_preload_started_at=time.monotonic())
         self._poll_startup_ocr_preload()
 
     def _startup_ocr_preload_thread_running(self) -> bool:
@@ -308,9 +318,11 @@ class MainWindowStartupMixin:
         if not bool(getattr(self, "_startup_waiting_for_ocr_preload", False)):
             return
         if bool(getattr(self, "_ocr_preload_done", False)) or bool(getattr(self, "_ocr_preload_attempted", False)):
-            self._startup_waiting_for_ocr_preload = False
-            self._startup_ocr_preload_deadline = None
-            self._startup_ocr_preload_started_at = None
+            self._set_startup_runtime_state(
+                waiting_for_ocr_preload=False,
+                ocr_preload_deadline=None,
+                ocr_preload_started_at=None,
+            )
             self._startup_task_done("ocr_preload")
             return
         wait_ms = max(40, int(self._cfg("POST_CHOICE_INIT_BUSY_RETRY_MS", 220)))
@@ -321,7 +333,7 @@ class MainWindowStartupMixin:
                 started_at = getattr(self, "_startup_ocr_preload_started_at", None)
                 if started_at is None:
                     started_at = now
-                    self._startup_ocr_preload_started_at = started_at
+                    self._set_startup_runtime_state(ocr_preload_started_at=started_at)
                 running_max_wait_ms = max(
                     int(self._cfg("STARTUP_OCR_PRELOAD_MAX_WAIT_MS", 1800)),
                     int(self._cfg("STARTUP_OCR_PRELOAD_RUNNING_MAX_WAIT_MS", 14000)),
@@ -330,9 +342,9 @@ class MainWindowStartupMixin:
                 running_remaining_ms = max(0, int(running_max_wait_ms - running_elapsed_ms))
                 if running_remaining_ms > 0:
                     wait_running_ms = max(40, min(wait_ms, running_remaining_ms))
-                    self._startup_ocr_preload_deadline = now + (wait_running_ms / 1000.0)
+                    self._set_startup_runtime_state(ocr_preload_deadline=now + (wait_running_ms / 1000.0))
                     if not bool(getattr(self, "_startup_ocr_preload_running_wait_logged", False)):
-                        self._startup_ocr_preload_running_wait_logged = True
+                        self._set_startup_runtime_state(ocr_preload_running_wait_logged=True)
                         self._trace_event(
                             "startup_warmup:ocr_preload_wait_running",
                             elapsed_ms=running_elapsed_ms,
@@ -340,9 +352,11 @@ class MainWindowStartupMixin:
                         )
                     QtCore.QTimer.singleShot(wait_running_ms, self._poll_startup_ocr_preload)
                     return
-            self._startup_waiting_for_ocr_preload = False
-            self._startup_ocr_preload_deadline = None
-            self._startup_ocr_preload_started_at = None
+            self._set_startup_runtime_state(
+                waiting_for_ocr_preload=False,
+                ocr_preload_deadline=None,
+                ocr_preload_started_at=None,
+            )
             self._trace_event("startup_warmup:ocr_preload_timeout")
             self._startup_task_done("ocr_preload")
             return
@@ -362,11 +376,13 @@ class MainWindowStartupMixin:
                     if self._startup_ocr_preload_thread_running() and getattr(
                         self, "_startup_ocr_preload_started_at", None
                     ) is None:
-                        self._startup_ocr_preload_started_at = time.monotonic()
+                        self._set_startup_runtime_state(ocr_preload_started_at=time.monotonic())
                 except Exception:
-                    self._startup_waiting_for_ocr_preload = False
-                    self._startup_ocr_preload_deadline = None
-                    self._startup_ocr_preload_started_at = None
+                    self._set_startup_runtime_state(
+                        waiting_for_ocr_preload=False,
+                        ocr_preload_deadline=None,
+                        ocr_preload_started_at=None,
+                    )
                     self._startup_task_done("ocr_preload")
                     return
         QtCore.QTimer.singleShot(wait_ms, self._poll_startup_ocr_preload)
@@ -378,9 +394,9 @@ class MainWindowStartupMixin:
         if getattr(self, "_map_initialized", False) and getattr(self, "_map_lists_ready", False):
             self._startup_task_done("map_prebuild")
             return
-        self._startup_waiting_for_map = True
+        self._set_startup_runtime_state(waiting_for_map=True)
         max_wait_ms = max(400, int(self._cfg("STARTUP_MAP_PREBUILD_MAX_WAIT_MS", 2200)))
-        self._startup_map_prebuild_deadline = time.monotonic() + (max_wait_ms / 1000.0)
+        self._set_startup_runtime_state(map_prebuild_deadline=time.monotonic() + (max_wait_ms / 1000.0))
         self._schedule_map_prebuild()
         self._poll_startup_map_prebuild()
 
@@ -388,14 +404,12 @@ class MainWindowStartupMixin:
         if not bool(getattr(self, "_startup_waiting_for_map", False)):
             return
         if bool(getattr(self, "_map_initialized", False)) and bool(getattr(self, "_map_lists_ready", False)):
-            self._startup_waiting_for_map = False
-            self._startup_map_prebuild_deadline = None
+            self._set_startup_runtime_state(waiting_for_map=False, map_prebuild_deadline=None)
             self._startup_task_done("map_prebuild")
             return
         deadline = getattr(self, "_startup_map_prebuild_deadline", None)
         if deadline is not None and time.monotonic() >= float(deadline):
-            self._startup_waiting_for_map = False
-            self._startup_map_prebuild_deadline = None
+            self._set_startup_runtime_state(waiting_for_map=False, map_prebuild_deadline=None)
             self._trace_event("startup_warmup:map_prebuild_timeout")
             self._startup_task_done("map_prebuild")
             return
@@ -417,7 +431,7 @@ class MainWindowStartupMixin:
         if bool(self._cfg("STARTUP_VISUAL_FINALIZE_DEFERRED", True)):
             # Keep first paint/input responsive; visual finalize runs once the
             # overlay is gone and the UI is idle.
-            self._startup_visual_finalize_pending = True
+            self._set_startup_runtime_state(visual_finalize_pending=True)
             # Apply lightweight theme/language updates immediately so widgets
             # don't temporarily render with stale startup colors.
             self._apply_theme(defer_heavy=True)
@@ -428,7 +442,7 @@ class MainWindowStartupMixin:
             self._apply_language(defer_heavy=True)
         # Tooltips sofort erlauben (werden später noch einmal frisch berechnet)
         self._set_tooltips_ready(True)
-        self._startup_finalize_done = True
+        self._set_startup_runtime_state(finalize_done=True)
 
     def _schedule_post_choice_init(self, delay_ms: int) -> None:
         if getattr(self, "_closing", False):
@@ -520,6 +534,5 @@ class MainWindowStartupMixin:
             self._pending_map_mode_switch = False
             QtCore.QTimer.singleShot(0, lambda: self._on_mode_button_clicked("maps"))
         if getattr(self, "_startup_waiting_for_map", False):
-            self._startup_waiting_for_map = False
-            self._startup_map_prebuild_deadline = None
+            self._set_startup_runtime_state(waiting_for_map=False, map_prebuild_deadline=None)
             self._startup_task_done("map_prebuild")
