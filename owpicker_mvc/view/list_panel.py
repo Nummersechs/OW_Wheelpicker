@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import List
 
 from PySide6 import QtCore, QtWidgets
@@ -68,11 +69,14 @@ class ListPanel(BasePanel):
                     )
         blockers = [QtCore.QSignalBlocker(self.names), QtCore.QSignalBlocker(self.names.model())]
         try:
-            self.names.clear()
-            if not normalized:
-                self.names.add_name("")
-            for entry in normalized:
-                self.names.add_name(entry["name"], active=entry["active"])
+            batch_update = getattr(self.names, "batch_update", None)
+            batch_ctx = batch_update() if callable(batch_update) else nullcontext()
+            with batch_ctx:
+                self.names.clear()
+                if not normalized:
+                    self.names.add_name("")
+                for entry in normalized:
+                    self.names.add_name(entry["name"], active=entry["active"])
         finally:
             del blockers
         if hasattr(self, "names_panel"):

@@ -41,14 +41,14 @@ The Windows EXE uses EasyOCR and does not require users to install Tesseract.
 
 1. Download EasyOCR models once during build preparation.
 2. Set `OW_OCR_ENGINE=easyocr` and `OW_INCLUDE_EASYOCR=1`.
-3. Keep `OW_INCLUDE_OCR_BUNDLE=0` (no Tesseract bundle).
-4. Set `OW_EASYOCR_MODEL_DIR` to your local model folder so models are bundled into the EXE.
-5. `OW_INCLUDE_REQUESTS` is optional and defaults to `0` (smaller/faster build). Set it to `1` only if you need online sync.
-6. For smaller release builds, use `OW_BUILD_PROFILE=release`. On Windows, keep `OW_STRIP=0` unless you have a working `strip` tool installed.
-7. Verify build output contains lines like:
+3. Set `OW_EASYOCR_MODEL_DIR` to your local model folder so models are bundled into the EXE.
+4. `OW_INCLUDE_REQUESTS` is optional and defaults to `0` (smaller/faster build). Set it to `1` only if you need online sync.
+5. For smaller release builds, use `OW_BUILD_PROFILE=release`. On Windows, keep `OW_STRIP=0` unless you have a working `strip` tool installed.
+6. Verify build output contains lines like:
    - `[spec] EasyOCR bundle enabled.`
    - `[spec] EasyOCR model source: ...`
-   - `[spec] Build profile=... | dist_mode=... | strip=...`
+   - `[spec] Build profile=... | dist_mode=... | strip=... | ...`
+7. Important: preload all languages from `OCR_EASYOCR_LANG` (not only `en`) before building, otherwise onefile may miss required language models.
 
 Example (Windows CMD):
 
@@ -58,7 +58,6 @@ set OW_PRUNE_QT=1
 set OW_INCLUDE_REQUESTS=0
 set OW_OCR_ENGINE=easyocr
 set OW_INCLUDE_EASYOCR=1
-set OW_INCLUDE_OCR_BUNDLE=0
 set OW_EASYOCR_MODEL_DIR=%CD%\owpicker_mvc\EasyOCR\model
 set OW_DIST_MODE=onedir
 pyinstaller --noconfirm --clean owpicker_mvc/OverwatchWheels.spec

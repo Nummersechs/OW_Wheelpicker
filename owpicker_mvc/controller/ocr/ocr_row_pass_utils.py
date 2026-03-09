@@ -542,13 +542,17 @@ def _run_row_segmentation_pass(
                 return True
             return False
 
-        first = options[0]
-        if not _looks_like_noise(first):
-            return first
-        for candidate in options[1:]:
-            if not _looks_like_noise(candidate):
-                return candidate
-        return first
+        ranked = sorted(
+            options,
+            key=lambda value: (
+                _looks_like_noise(value),
+                sum(1 for ch in str(value or "") if (not ch.isalpha()) and (not ch.isspace())),
+                sum(1 for ch in str(value or "") if not ch.isalnum()),
+                -sum(1 for ch in str(value or "") if ch.isalpha()),
+                -len(str(value or "").strip()),
+            ),
+        )
+        return ranked[0]
 
     source_candidates: list[tuple[Path, QtGui.QImage, int]] = []
     max_width = -1

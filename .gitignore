@@ -211,3 +211,5 @@ __marimo__/
 */*.json
 *.zip
 owpicker_mvc/terminal.txt
+
+EasyOCR/

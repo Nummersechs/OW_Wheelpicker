@@ -17,6 +17,42 @@ class _FakeButton:
         return self._enabled
 
 
+class _FakeSpinAllButton:
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        tooltip: str,
+        top_left: QtCore.QPoint | None = None,
+        size: QtCore.QSize | None = None,
+    ):
+        self._enabled = bool(enabled)
+        self._tooltip = str(tooltip)
+        self._top_left = top_left or QtCore.QPoint(0, 0)
+        self._size = size or QtCore.QSize(140, 44)
+
+    def isEnabled(self) -> bool:
+        return self._enabled
+
+    def setEnabled(self, enabled: bool) -> None:
+        self._enabled = bool(enabled)
+
+    def toolTip(self) -> str:
+        return self._tooltip
+
+    def setToolTip(self, text: str) -> None:
+        self._tooltip = str(text)
+
+    def mapToGlobal(self, point: QtCore.QPoint) -> QtCore.QPoint:
+        return self._top_left + point
+
+    def size(self) -> QtCore.QSize:
+        return QtCore.QSize(self._size)
+
+    def rect(self) -> QtCore.QRect:
+        return QtCore.QRect(0, 0, self._size.width(), self._size.height())
+
+
 class _FakeOverlay:
     def __init__(
         self,
@@ -30,9 +66,17 @@ class _FakeOverlay:
         self._last_view = {"type": view_type}
         self.btn_offline = _FakeButton(offline_enabled)
         self.btn_online = _FakeButton(online_enabled)
+        self.show_online_choice_calls = 0
+        self.choice_enabled_calls: list[bool] = []
 
     def isVisible(self) -> bool:
         return self._visible
+
+    def show_online_choice(self) -> None:
+        self.show_online_choice_calls += 1
+
+    def set_choice_enabled(self, enabled: bool) -> None:
+        self.choice_enabled_calls.append(bool(enabled))
 
 
 class _FakeSender:
@@ -184,6 +228,36 @@ class TestMainWindowInputFilter(unittest.TestCase):
             )
         finally:
             config.STARTUP_DROP_CHOICE_POINTER_EVENTS = prev
+
+    def test_sync_disabled_spin_all_tooltip_shows_on_hover_inside_button(self):
+        mw = MainWindow.__new__(MainWindow)
+        mw.btn_spin_all = _FakeSpinAllButton(
+            enabled=False,
+            tooltip="disabled spin tooltip",
+            top_left=QtCore.QPoint(100, 100),
+            size=QtCore.QSize(160, 46),
+        )
+        mw._disabled_spin_all_hover_active = False
+
+        with patch("controller.main_window_parts.main_window_input.QtWidgets.QToolTip.showText") as show_text:
+            handled = mw._sync_disabled_spin_all_tooltip(QtCore.QPoint(120, 120), force_show=True)
+            self.assertTrue(handled)
+            show_text.assert_called_once()
+
+    def test_sync_disabled_spin_all_tooltip_hides_when_button_enabled(self):
+        mw = MainWindow.__new__(MainWindow)
+        mw.btn_spin_all = _FakeSpinAllButton(
+            enabled=True,
+            tooltip="spin tooltip",
+            top_left=QtCore.QPoint(100, 100),
+            size=QtCore.QSize(160, 46),
+        )
+        mw._disabled_spin_all_hover_active = True
+
+        with patch("controller.main_window_parts.main_window_input.QtWidgets.QToolTip.hideText") as hide_text:
+            handled = mw._sync_disabled_spin_all_tooltip(QtCore.QPoint(120, 120), force_show=True)
+            self.assertFalse(handled)
+            hide_text.assert_called_once()
 
     def test_focus_event_blocked_while_startup_input_lock_active(self):
         mw = MainWindow.__new__(MainWindow)
@@ -413,6 +487,66 @@ class TestMainWindowInputFilter(unittest.TestCase):
         delay_ms = int(single_shot.call_args[0][0])
         self.assertGreaterEqual(delay_ms, 2000)
         self.assertTrue(any(name == "startup_warmup:cooldown" for name, _extra in traces))
+
+    def test_show_mode_choice_disables_choice_buttons_and_starts_warmup(self):
+        overlay = _FakeOverlay(offline_enabled=True, online_enabled=True)
+        mw = MainWindow.__new__(MainWindow)
+        mw.overlay = overlay
+        mw._choice_shown_at = None
+        controls: list[bool] = []
+        heavy_updates: list[bool] = []
+        warmup_calls: list[bool] = []
+        refresh_calls: list[bool] = []
+        traces: list[tuple[str, dict]] = []
+        mw._set_controls_enabled = lambda enabled: controls.append(bool(enabled))
+        mw._set_heavy_ui_updates_enabled = lambda enabled: heavy_updates.append(bool(enabled))
+        mw._start_startup_warmup = lambda: warmup_calls.append(True)
+        mw._refresh_app_event_filter_state = lambda: refresh_calls.append(True)
+        mw._trace_event = lambda name, **extra: traces.append((name, extra))
+
+        mw._show_mode_choice()
+
+        self.assertEqual(controls, [False])
+        self.assertEqual(heavy_updates, [False])
+        self.assertEqual(overlay.show_online_choice_calls, 1)
+        self.assertEqual(overlay.choice_enabled_calls, [False])
+        self.assertEqual(warmup_calls, [True])
+        self.assertEqual(refresh_calls, [True])
+        self.assertIsNotNone(mw._choice_shown_at)
+        self.assertTrue(any(name == "show_mode_choice" for name, _extra in traces))
+
+    def test_startup_warmup_queue_includes_ocr_preload_task_when_enabled(self):
+        mw = MainWindow.__new__(MainWindow)
+        mw._startup_warmup_done = False
+        mw._startup_warmup_running = False
+        mw._startup_task_queue = []
+        mw._startup_task_done = lambda _name=None: None
+        mw._startup_current_task = None
+        mw._startup_block_input = False
+        mw._startup_block_input_until = None
+        mw._startup_drain_active = False
+        mw._refresh_app_event_filter_state = lambda: None
+        mw._trace_event = lambda *_args, **_kwargs: None
+        run_next_calls: list[bool] = []
+        mw._run_next_startup_task = lambda: run_next_calls.append(True)
+
+        values = {
+            "STARTUP_WHEEL_CACHE_WARMUP": False,
+            "SOUND_WARMUP_ON_START": False,
+            "MAP_PREBUILD_ON_START": False,
+            "STARTUP_OCR_PRELOAD": True,
+            "STARTUP_MIN_BLOCK_INPUT_MS": 0,
+        }
+        mw._cfg = lambda key, default=None: values.get(key, default)
+
+        mw._start_startup_warmup()
+
+        self.assertTrue(mw._startup_warmup_running)
+        self.assertTrue(mw._startup_block_input)
+        self.assertIsNone(mw._startup_block_input_until)
+        self.assertEqual(len(mw._startup_task_queue), 1)
+        self.assertEqual(mw._startup_task_queue[0][0], "ocr_preload")
+        self.assertEqual(run_next_calls, [True])
 
     def test_poll_startup_ocr_preload_extends_wait_while_thread_is_running(self):
         class _RunningThread:

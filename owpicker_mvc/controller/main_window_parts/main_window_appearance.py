@@ -49,7 +49,7 @@ class MainWindowAppearanceMixin:
             for btn in self._mode_buttons:
                 style_helpers.apply_theme_role(btn, theme, "button.mode")
             # Ensure initial checked mode button gets the correct visual state
-            # immediately, even before deferred heavy-theme updates run.
+            # immediately; heavy pass should avoid repeating this work.
             self._update_mode_button_styles(force=True)
         style_helpers.apply_theme_roles(
             theme,
@@ -87,12 +87,16 @@ class MainWindowAppearanceMixin:
         for _role, wheel in self._role_wheels():
             if wheel and hasattr(wheel, "apply_theme"):
                 targets.append(wheel)
+        if not targets:
+            # Theme-Button wieder freigeben, falls er kurz deaktiviert wurde.
+            if hasattr(self, "btn_theme"):
+                self.btn_theme.setEnabled(True)
+            return
 
         freeze_targets: list[QtWidgets.QWidget] = []
         for candidate in (
             self.centralWidget(),
             getattr(self, "role_container", None),
-            getattr(self, "map_container", None),
         ):
             if isinstance(candidate, QtWidgets.QWidget):
                 freeze_targets.append(candidate)
@@ -110,9 +114,6 @@ class MainWindowAppearanceMixin:
         try:
             for wheel in targets:
                 wheel.apply_theme(theme)
-            if hasattr(self, "map_ui"):
-                self.map_ui.apply_theme(theme)
-            self._update_mode_button_styles(force=True)
         finally:
             for widget in dedup:
                 widget.setUpdatesEnabled(True)
@@ -124,7 +125,7 @@ class MainWindowAppearanceMixin:
 
     def _update_mode_button_styles(self, *_args, force: bool = False):
         """
-        Polisht nur Buttons, deren checked-Zustand sich geändert hat, um
+        Aktualisiert nur Buttons, deren checked-Zustand sich geändert hat, um
         unnötige Reflows bei Theme-/UI-Updates zu vermeiden.
         """
         if not getattr(self, "_mode_buttons", None):
@@ -135,11 +136,7 @@ class MainWindowAppearanceMixin:
             cache_key = id(btn)
             if not force and checked_cache.get(cache_key) == checked:
                 continue
-            style = btn.style()
-            if style is not None:
-                style.unpolish(btn)
-                style.polish(btn)
-            btn.updateGeometry()
+            btn.update()
             checked_cache[cache_key] = checked
         self._mode_button_checked_cache = checked_cache
 
@@ -200,15 +197,13 @@ class MainWindowAppearanceMixin:
         super().resizeEvent(e)
         if self.overlay and self.centralWidget():
             self.overlay.setGeometry(self.centralWidget().rect())
-        if getattr(self, "hero_ban_active", False):
-            # Keep hero-ban width lock synchronized with window size changes.
-            self._apply_role_width_lock(True)
         if hasattr(self, "player_list_panel"):
             self.player_list_panel.on_resize()
 
     def _set_hero_ban_visuals(self, active: bool):
-        """Delegiert an den Mode-Manager und sperrt Breiten in Hero-Ban."""
-        self._apply_role_width_lock(active)
+        """Delegiert an den Mode-Manager; Breiten bleiben modusunabhängig gleich."""
+        # Keep resize behavior identical across all modes, including Hero Ban.
+        self._apply_role_width_lock(False)
         mode_manager.set_hero_ban_visuals(self, active)
 
     def _update_title(self):
@@ -286,7 +281,10 @@ class MainWindowAppearanceMixin:
         self.lbl_volume_icon.setToolTip(i18n.t("volume.icon_tooltip"))
         self.volume_slider.setToolTip(i18n.t("volume.slider_tooltip"))
         self.btn_spin_all.setText(i18n.t("controls.spin_all"))
-        self.btn_spin_all.setToolTip(i18n.t("controls.spin_all_tooltip"))
+        if hasattr(self, "_apply_spin_all_tooltip_state"):
+            self._apply_spin_all_tooltip_state()
+        else:
+            self.btn_spin_all.setToolTip(i18n.t("controls.spin_all_tooltip"))
         if hasattr(self, "spin_mode_toggle"):
             self.spin_mode_toggle.setToolTip(i18n.t("controls.spin_mode_tooltip"))
         self.btn_cancel_spin.setText(i18n.t("controls.cancel_spin"))

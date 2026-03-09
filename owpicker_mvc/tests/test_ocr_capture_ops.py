@@ -157,6 +157,62 @@ class TestOCRCaptureOps(unittest.TestCase):
         self.assertEqual(result, ("pix", None))
         self.assertFalse(select_mock.call_args.kwargs.get("auto_accept_on_release"))
 
+    def test_macos_native_capture_minimizes_then_hides_window(self):
+        mw = _DummyMainWindow(
+            {
+                "OCR_USE_NATIVE_MAC_CAPTURE": True,
+                "OCR_HIDE_MAIN_WINDOW_FOR_CAPTURE": True,
+                "OCR_CAPTURE_PREPARE_DELAY_MS": 0,
+                "OCR_CAPTURE_TIMEOUT_S": 1.0,
+            },
+            visible=True,
+            minimized=False,
+        )
+        with (
+            patch("controller.ocr.ocr_capture_ops.sys.platform", "darwin"),
+            patch("controller.ocr.ocr_capture_ops.QtWidgets.QMessageBox.information"),
+            patch("controller.ocr.ocr_capture_ops.select_region_with_macos_screencapture", return_value=("pix", None)),
+            patch("controller.ocr.ocr_capture_ops.QtWidgets.QApplication.processEvents"),
+            patch("controller.ocr.ocr_capture_ops.qt_runtime.safe_raise") as raise_mock,
+            patch("controller.ocr.ocr_capture_ops.qt_runtime.safe_activate_window") as activate_mock,
+        ):
+            result = capture_region_for_ocr(mw)
+
+        self.assertEqual(result, ("pix", None))
+        self.assertEqual(mw.show_minimized_calls, 1)
+        self.assertEqual(mw.hide_calls, 1)
+        self.assertEqual(mw.show_calls, 1)
+        raise_mock.assert_called_once_with(mw)
+        activate_mock.assert_called_once_with(mw)
+
+    def test_macos_native_capture_respects_hide_setting_false(self):
+        mw = _DummyMainWindow(
+            {
+                "OCR_USE_NATIVE_MAC_CAPTURE": True,
+                "OCR_HIDE_MAIN_WINDOW_FOR_CAPTURE": False,
+                "OCR_CAPTURE_PREPARE_DELAY_MS": 0,
+                "OCR_CAPTURE_TIMEOUT_S": 1.0,
+            },
+            visible=True,
+            minimized=False,
+        )
+        with (
+            patch("controller.ocr.ocr_capture_ops.sys.platform", "darwin"),
+            patch("controller.ocr.ocr_capture_ops.QtWidgets.QMessageBox.information"),
+            patch("controller.ocr.ocr_capture_ops.select_region_with_macos_screencapture", return_value=("pix", None)),
+            patch("controller.ocr.ocr_capture_ops.QtWidgets.QApplication.processEvents"),
+            patch("controller.ocr.ocr_capture_ops.qt_runtime.safe_raise") as raise_mock,
+            patch("controller.ocr.ocr_capture_ops.qt_runtime.safe_activate_window") as activate_mock,
+        ):
+            result = capture_region_for_ocr(mw)
+
+        self.assertEqual(result, ("pix", None))
+        self.assertEqual(mw.show_minimized_calls, 0)
+        self.assertEqual(mw.hide_calls, 0)
+        self.assertEqual(mw.show_calls, 0)
+        raise_mock.assert_not_called()
+        activate_mock.assert_not_called()
+
     def _ocr_cfg(self) -> dict:
         return {
             "fast_mode": True,

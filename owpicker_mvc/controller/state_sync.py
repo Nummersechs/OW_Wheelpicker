@@ -1,16 +1,49 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
+import concurrent.futures.thread as _futures_thread
 from pathlib import Path
 import importlib
 import json
 import threading
+import weakref
 from typing import Any, Dict, List
 
 from PySide6 import QtCore
 
 import config
 from model.role_keys import role_wheel_map
+
+
+class _DaemonThreadPoolExecutor(ThreadPoolExecutor):
+    """ThreadPoolExecutor variant whose workers are daemon threads."""
+
+    def _adjust_thread_count(self) -> None:  # pragma: no cover - stdlib private API shim
+        # If idle threads are available, don't spin new threads.
+        if self._idle_semaphore.acquire(timeout=0):
+            return
+
+        def weakref_cb(_, q=self._work_queue):
+            q.put(None)
+
+        num_threads = len(self._threads)
+        if num_threads >= self._max_workers:
+            return
+        thread_name = f"{self._thread_name_prefix or self}_{num_threads}"
+        worker = threading.Thread(
+            name=thread_name,
+            target=_futures_thread._worker,
+            args=(
+                weakref.ref(self, weakref_cb),
+                self._work_queue,
+                self._initializer,
+                self._initargs,
+            ),
+            daemon=True,
+        )
+        worker.start()
+        self._threads.add(worker)
+        _futures_thread._threads_queues[worker] = self._work_queue
 
 
 class StateSyncController(QtCore.QObject):
@@ -222,7 +255,7 @@ class StateSyncController(QtCore.QObject):
             return None
         if self._executor is not None:
             return self._executor
-        self._executor = ThreadPoolExecutor(
+        self._executor = _DaemonThreadPoolExecutor(
             max_workers=self._executor_workers,
             thread_name_prefix="state_sync",
         )

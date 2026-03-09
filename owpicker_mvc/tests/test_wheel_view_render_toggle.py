@@ -3,8 +3,10 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
+from unittest.mock import patch
 
+import i18n
 from utils import qt_runtime
 from view.wheel_view import WheelView
 
@@ -131,6 +133,96 @@ class TestWheelViewRenderToggle(unittest.TestCase):
         self.assertLessEqual(abs(row.edit.geometry().x() - x_before), 2)
         self.assertLessEqual(abs(row.edit.geometry().width() - w_before), 2)
         self.assertFalse(row.chk_mark_for_delete.isHidden())
+        wheel.close()
+
+    def test_add_name_reuses_empty_placeholder_row(self):
+        wheel = WheelView("Test", [])
+        QtWidgets.QApplication.processEvents()
+
+        self.assertEqual(wheel.names.count(), 1)
+        self.assertEqual(wheel.get_current_names(), [])
+
+        changed = wheel.add_name("Alpha", active=True)
+        QtWidgets.QApplication.processEvents()
+
+        self.assertTrue(changed)
+        self.assertEqual(wheel.names.count(), 1)
+        self.assertEqual(wheel.get_current_names(), ["Alpha"])
+        self.assertEqual(list(getattr(wheel.wheel, "names", [])), ["Alpha"])
+        wheel.close()
+
+    def test_spin_button_tooltip_explains_disabled_state_when_no_names(self):
+        wheel = WheelView("Test", [])
+        QtWidgets.QApplication.processEvents()
+
+        self.assertFalse(wheel.btn_local_spin.isEnabled())
+        self.assertEqual(
+            wheel.btn_local_spin.toolTip(),
+            i18n.t("wheel.spin_button_disabled_no_names_tooltip"),
+        )
+
+        wheel.add_name("Alpha", active=True)
+        QtWidgets.QApplication.processEvents()
+
+        self.assertTrue(wheel.btn_local_spin.isEnabled())
+        self.assertEqual(
+            wheel.btn_local_spin.toolTip(),
+            i18n.t("wheel.spin_button_tooltip"),
+        )
+        wheel.close()
+
+    def test_disabled_spin_button_hover_shows_tooltip_via_card_event_filter(self):
+        wheel = WheelView("Test", [])
+        wheel.show()
+        QtWidgets.QApplication.processEvents()
+        self.assertFalse(wheel.btn_local_spin.isEnabled())
+
+        pos_global = wheel.btn_local_spin.mapToGlobal(QtCore.QPoint(4, 4))
+        pos_local = wheel.card.mapFromGlobal(pos_global)
+        evt = QtGui.QHelpEvent(QtCore.QEvent.ToolTip, pos_local, pos_global)
+
+        with patch("view.base_panel.QtWidgets.QToolTip.showText") as show_text:
+            handled = wheel.eventFilter(wheel.card, evt)
+            self.assertTrue(handled)
+            show_text.assert_called_once()
+        wheel.close()
+
+    def test_pair_mode_falls_back_to_single_when_only_one_active_name_remains(self):
+        wheel = WheelView(
+            "Test",
+            ["Alpha", "Beta"],
+            allow_pair_toggle=True,
+        )
+        QtWidgets.QApplication.processEvents()
+
+        wheel.toggle.setChecked(True)
+        QtWidgets.QApplication.processEvents()
+        self.assertTrue(wheel.pair_mode)
+
+        changed = wheel.set_names_active({"Beta"}, False)
+        self.assertTrue(changed)
+        QtWidgets.QApplication.processEvents()
+
+        self.assertFalse(wheel.pair_mode)
+        self.assertFalse(wheel.toggle.isChecked())
+        self.assertEqual(list(getattr(wheel.wheel, "names", [])), ["Alpha"])
+        wheel.close()
+
+    def test_pair_toggle_cannot_force_pair_mode_with_single_name(self):
+        wheel = WheelView(
+            "Test",
+            ["Solo"],
+            allow_pair_toggle=True,
+        )
+        QtWidgets.QApplication.processEvents()
+        self.assertFalse(wheel.toggle.isEnabled())
+
+        wheel.toggle.setChecked(True)
+        QtWidgets.QApplication.processEvents()
+
+        self.assertFalse(wheel.pair_mode)
+        self.assertFalse(wheel.toggle.isChecked())
+        self.assertEqual(list(getattr(wheel.wheel, "names", [])), ["Solo"])
         wheel.close()
 
 

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Callable, List, Optional
 from PySide6 import QtCore, QtGui, QtWidgets
 import i18n
 from view import style_helpers, ui_tokens
-from utils import ui_helpers
+from utils import ui_helpers, theme as theme_util
 
 DELETE_MARK_COLUMN_WIDTH = 18
 DELETE_MARK_BUTTON_WIDTH = 28
@@ -21,28 +22,37 @@ NAME_EDIT_MAX_WIDTH_WITH_SUBROLES = 0
 NAMES_PANEL_MAX_WIDTH_WITH_SUBROLES = 420
 NAMES_PANEL_MAX_WIDTH_DEFAULT = 560
 NAMES_PANEL_MIN_WIDTH_BASE = 260
-_DELETE_MARKED_STYLE_CACHE: dict[str, str] = {}
+_DELETE_MARKED_STYLE_CACHE: dict[tuple[str, bool], str] = {}
 _NAMES_ACTION_ROW_STYLE_CACHE: dict[str, str] = {}
 
 
-def _delete_marked_button_style(theme) -> str:
+def _delete_marked_button_style(theme, *, danger_active: bool = False) -> str:
     theme_key = str(getattr(theme, "key", "light"))
-    cached = _DELETE_MARKED_STYLE_CACHE.get(theme_key)
+    cache_key = (theme_key, bool(danger_active))
+    cached = _DELETE_MARKED_STYLE_CACHE.get(cache_key)
     if cached is not None:
         return cached
+    if danger_active:
+        main_bg = "#c62828"
+        main_border = "#8e1f1f"
+        main_hover = "#d32f2f"
+        main_pressed = "#b71c1c"
+        main_text = "white"
+    else:
+        main_bg = str(theme.base)
+        main_border = str(theme.border)
+        main_hover = str(theme.tool_hover)
+        main_pressed = str(theme.tool_pressed)
+        main_text = str(theme.text)
     cached = (
         "QToolButton {"
-        f" color:{theme.text}; background:{theme.base}; border:1px solid {theme.border};"
+        f" color:{main_text}; background:{main_bg}; border:1px solid {main_border};"
         " border-radius:8px; font-size:15px; }"
-        f"QToolButton:hover {{ background:{theme.tool_hover}; }}"
-        f"QToolButton:pressed {{ background:{theme.tool_pressed}; }}"
-        "QToolButton[dangerActive=\"true\"] {"
-        " color:white; background:#c62828; border:1px solid #8e1f1f; }"
-        "QToolButton[dangerActive=\"true\"]:hover { background:#d32f2f; }"
-        "QToolButton[dangerActive=\"true\"]:pressed { background:#b71c1c; }"
+        f"QToolButton:hover {{ background:{main_hover}; }}"
+        f"QToolButton:pressed {{ background:{main_pressed}; }}"
         f"QToolButton:disabled {{ color:{theme.disabled_text}; background:{theme.alt_base}; border:1px solid {theme.border}; }}"
     )
-    _DELETE_MARKED_STYLE_CACHE[theme_key] = cached
+    _DELETE_MARKED_STYLE_CACHE[cache_key] = cached
     return cached
 
 
@@ -123,7 +133,12 @@ class NamesList(QtWidgets.QListWidget):
         self._auto_focus_enabled = True
         self._auto_focus_requires_active = False
         self._viewport_right_margin = -1
+        self._last_viewport_width = -1
         self._syncing_viewport_margin = False
+        self._geometry_sync_pending = False
+        self._bulk_update_depth = 0
+        self._bulk_geometry_dirty = False
+        self._bulk_prev_updates_enabled = True
         self._row_height = NAME_LIST_ROW_HEIGHT
         self._name_edit_height = NAME_EDIT_HEIGHT
         self._name_min_width_with_subroles = NAME_EDIT_MIN_WIDTH_WITH_SUBROLES
@@ -161,7 +176,72 @@ class NamesList(QtWidgets.QListWidget):
         sb = self.verticalScrollBar()
         if sb is not None:
             sb.rangeChanged.connect(self._sync_viewport_right_padding)
-        QtCore.QTimer.singleShot(0, self._sync_viewport_right_padding)
+        self._schedule_geometry_sync()
+
+    @contextmanager
+    def batch_update(self):
+        self._begin_bulk_update()
+        try:
+            yield
+        finally:
+            self._end_bulk_update()
+
+    def _set_updates_enabled_recursive(self, enabled: bool) -> None:
+        try:
+            self.setUpdatesEnabled(bool(enabled))
+        except Exception:
+            pass
+        viewport = self.viewport()
+        if viewport is not None:
+            try:
+                viewport.setUpdatesEnabled(bool(enabled))
+            except Exception:
+                pass
+
+    def _begin_bulk_update(self) -> None:
+        if self._bulk_update_depth <= 0:
+            self._bulk_prev_updates_enabled = bool(self.updatesEnabled())
+            self._bulk_geometry_dirty = False
+            self._set_updates_enabled_recursive(False)
+        self._bulk_update_depth += 1
+
+    def _end_bulk_update(self) -> None:
+        if self._bulk_update_depth <= 0:
+            return
+        self._bulk_update_depth -= 1
+        if self._bulk_update_depth > 0:
+            return
+        self._set_updates_enabled_recursive(self._bulk_prev_updates_enabled)
+        if self._bulk_geometry_dirty:
+            self._bulk_geometry_dirty = False
+            self._schedule_geometry_sync()
+        else:
+            self._refresh_row_widget_geometry()
+        viewport = self.viewport()
+        if viewport is not None:
+            try:
+                viewport.update()
+            except Exception:
+                pass
+        self.update()
+
+    def _schedule_geometry_sync(self) -> None:
+        if self._bulk_update_depth > 0:
+            self._bulk_geometry_dirty = True
+            return
+        if self._geometry_sync_pending:
+            return
+        self._geometry_sync_pending = True
+        QtCore.QTimer.singleShot(0, self._run_scheduled_geometry_sync)
+
+    def _run_scheduled_geometry_sync(self) -> None:
+        self._geometry_sync_pending = False
+        if self._bulk_update_depth > 0:
+            self._bulk_geometry_dirty = True
+            return
+        changed = self._sync_viewport_right_padding()
+        if not changed:
+            self._refresh_row_widget_geometry()
 
     def _scrollbar_extent(self, sb: QtWidgets.QScrollBar | None = None) -> int:
         scrollbar = sb if sb is not None else self.verticalScrollBar()
@@ -171,15 +251,20 @@ class NamesList(QtWidgets.QListWidget):
         hint = scrollbar.sizeHint().width()
         return max(0, int(extent), int(hint))
 
-    def _sync_viewport_right_padding(self, *_args) -> None:
+    def _sync_viewport_right_padding(self, *_args) -> bool:
+        if self._bulk_update_depth > 0:
+            self._bulk_geometry_dirty = True
+            return False
         if self._syncing_viewport_margin:
-            return
+            return False
+        viewport = self.viewport()
+        viewport_width = int(viewport.width()) if viewport is not None else -1
         # Keep viewport margins at 0 so row widgets are always laid out to the
         # actually visible width and right-side controls cannot be clipped.
         margin_right = 0
-        if margin_right == self._viewport_right_margin:
-            self._refresh_row_widget_geometry()
-            return
+        if margin_right == self._viewport_right_margin and viewport_width == self._last_viewport_width:
+            return False
+        self._last_viewport_width = viewport_width
         self._viewport_right_margin = margin_right
         self._syncing_viewport_margin = True
         try:
@@ -189,6 +274,7 @@ class NamesList(QtWidgets.QListWidget):
         # Viewport margin changes can make previously laid-out row widgets too wide.
         # Re-layout immediately so right-side controls do not get clipped.
         self._refresh_row_widget_geometry()
+        return True
 
     def _refresh_row_widget_geometry(self) -> None:
         try:
@@ -205,9 +291,7 @@ class NamesList(QtWidgets.QListWidget):
 
     def resizeEvent(self, ev: QtGui.QResizeEvent) -> None:
         super().resizeEvent(ev)
-        self._refresh_row_widget_geometry()
-        QtCore.QTimer.singleShot(0, self._sync_viewport_right_padding)
-        QtCore.QTimer.singleShot(0, self._refresh_row_widget_geometry)
+        self._schedule_geometry_sync()
 
     def showEvent(self, ev: QtGui.QShowEvent) -> None:
         super().showEvent(ev)
@@ -215,8 +299,7 @@ class NamesList(QtWidgets.QListWidget):
             self.doItemsLayout()
         except Exception:
             pass
-        self._sync_viewport_right_padding()
-        QtCore.QTimer.singleShot(0, self._sync_viewport_right_padding)
+        self._schedule_geometry_sync()
 
     def wheelEvent(self, ev: QtGui.QWheelEvent):
         """Etwas weniger sensibles Scrollen als Qt-Default."""
@@ -414,6 +497,9 @@ class NamesList(QtWidgets.QListWidget):
         select_row: bool = True,
         focus_if_empty: bool = True,
     ) -> QtWidgets.QListWidgetItem:
+        if self._bulk_update_depth > 0:
+            select_row = False
+            focus_if_empty = False
         item = self._new_item(text, subroles=subroles, active=active)
         item.setData(self.MARK_FOR_DELETE_ROLE, bool(marked_for_delete))
         if row is None:
@@ -428,11 +514,14 @@ class NamesList(QtWidgets.QListWidget):
             widget = self.itemWidget(item)
             if widget and self._allow_auto_focus():
                 widget.focus_name()
-        try:
-            self.doItemsLayout()
-        except Exception:
-            pass
-        self._sync_viewport_right_padding()
+        if self._bulk_update_depth > 0:
+            self._bulk_geometry_dirty = True
+        else:
+            try:
+                self.doItemsLayout()
+            except Exception:
+                pass
+            self._sync_viewport_right_padding()
         return item
 
     def add_name(self, text: str = "", subroles: Optional[List[str]] = None, active: Optional[bool] = None):
@@ -543,50 +632,46 @@ class NamesList(QtWidgets.QListWidget):
         self._auto_focus_enabled = False
         blockers = [QtCore.QSignalBlocker(self), QtCore.QSignalBlocker(self.model())]
         try:
-            while self.count():
-                old_item = self.item(0)
-                if old_item is None:
-                    break
-                self._detach_row_widget(old_item)
-                removed_item = self.takeItem(0)
-                if removed_item is not None:
-                    del removed_item
-            for text, active, subroles, marked in entries:
-                # Reuse the same creation path as the initial list build.
-                self.add_name(text, subroles=subroles, active=active)
-                item = self.item(self.count() - 1)
-                if item is None:
-                    continue
-                item.setData(self.MARK_FOR_DELETE_ROLE, bool(marked))
-                row_widget = self.itemWidget(item)
-                if isinstance(row_widget, NameRowWidget):
-                    if row_widget.chk_mark_for_delete is not None:
-                        row_widget.chk_mark_for_delete.setChecked(bool(marked))
-                        # Keep delete marker control visible after rebuild/sort.
-                        row_widget.chk_mark_for_delete.setVisible(True)
-                        delete_cell = row_widget.chk_mark_for_delete.parentWidget()
-                        if isinstance(delete_cell, QtWidgets.QWidget):
-                            delete_cell.setVisible(True)
-                    if subrole_group_visible is not None:
-                        group = getattr(row_widget, "_subrole_group", None)
-                        if isinstance(group, QtWidgets.QWidget):
-                            group.setVisible(bool(subrole_group_visible))
-                    if subrole_checks_visible is not None and row_widget.subrole_checks:
-                        for cb in row_widget.subrole_checks:
-                            cb.setVisible(bool(subrole_checks_visible))
-                    row_layout = row_widget.layout()
-                    if isinstance(row_layout, QtWidgets.QLayout):
-                        row_layout.invalidate()
-                    row_widget.updateGeometry()
+            with self.batch_update():
+                while self.count():
+                    old_item = self.item(0)
+                    if old_item is None:
+                        break
+                    self._detach_row_widget(old_item)
+                    removed_item = self.takeItem(0)
+                    if removed_item is not None:
+                        del removed_item
+                for text, active, subroles, marked in entries:
+                    # Reuse the same creation path as the initial list build.
+                    self.add_name(text, subroles=subroles, active=active)
+                    item = self.item(self.count() - 1)
+                    if item is None:
+                        continue
+                    item.setData(self.MARK_FOR_DELETE_ROLE, bool(marked))
+                    row_widget = self.itemWidget(item)
+                    if isinstance(row_widget, NameRowWidget):
+                        if row_widget.chk_mark_for_delete is not None:
+                            row_widget.chk_mark_for_delete.setChecked(bool(marked))
+                            # Keep delete marker control visible after rebuild/sort.
+                            row_widget.chk_mark_for_delete.setVisible(True)
+                            delete_cell = row_widget.chk_mark_for_delete.parentWidget()
+                            if isinstance(delete_cell, QtWidgets.QWidget):
+                                delete_cell.setVisible(True)
+                        if subrole_group_visible is not None:
+                            group = getattr(row_widget, "_subrole_group", None)
+                            if isinstance(group, QtWidgets.QWidget):
+                                group.setVisible(bool(subrole_group_visible))
+                        if subrole_checks_visible is not None and row_widget.subrole_checks:
+                            for cb in row_widget.subrole_checks:
+                                cb.setVisible(bool(subrole_checks_visible))
+                        row_layout = row_widget.layout()
+                        if isinstance(row_layout, QtWidgets.QLayout):
+                            row_layout.invalidate()
+                        row_widget.updateGeometry()
         finally:
             self._auto_focus_enabled = prev_auto_focus_enabled
             self._auto_focus_requires_active = prev_auto_focus_requires_active
             del blockers
-        try:
-            self.doItemsLayout()
-        except Exception:
-            pass
-        self._sync_viewport_right_padding()
         self.metaChanged.emit()
 
     def _show_context_menu(self, pos: QtCore.QPoint):
@@ -622,10 +707,13 @@ class NameRowWidget(QtWidgets.QWidget):
         layout.setSpacing(ui_tokens.NAME_ROW_HORIZONTAL_SPACING)
         self._configured_name_min_width = 1
         self._configured_name_max_width: int | None = None
+        self._applied_edit_min_width = -1
+        self._applied_edit_max_width = -1
         self.subrole_checks: list[QtWidgets.QCheckBox] = []
         self._subrole_group: QtWidgets.QWidget | None = None
         self._subrole_layout: QtWidgets.QHBoxLayout | None = None
         self._delete_cell: QtWidgets.QWidget | None = None
+        self._subrole_checkbox_hpadding = 0
 
         self.chk_active = QtWidgets.QCheckBox()
         self.chk_active.setFixedWidth(18)
@@ -703,9 +791,7 @@ class NameRowWidget(QtWidgets.QWidget):
                 self.subrole_checks.append(cb)
                 subrole_layout.addWidget(cb, 0, QtCore.Qt.AlignVCenter)
             # Keep subrole block content-tight so it does not eat horizontal slack.
-            subrole_width = max(1, int(self._subrole_group.sizeHint().width()))
-            self._subrole_group.setMinimumWidth(subrole_width)
-            self._subrole_group.setMaximumWidth(subrole_width)
+            self._relayout_subrole_group()
             layout.addWidget(self._subrole_group, 0, QtCore.Qt.AlignVCenter)
 
         self.chk_mark_for_delete: QtWidgets.QCheckBox | None = None
@@ -793,8 +879,12 @@ class NameRowWidget(QtWidgets.QWidget):
             dynamic_max = min(dynamic_max, int(configured_max))
         dynamic_max = max(1, int(dynamic_max))
         dynamic_min = max(1, min(configured_min, dynamic_max))
-        self.edit.setMinimumWidth(dynamic_min)
-        self.edit.setMaximumWidth(dynamic_max)
+        if dynamic_min != self._applied_edit_min_width:
+            self.edit.setMinimumWidth(dynamic_min)
+            self._applied_edit_min_width = dynamic_min
+        if dynamic_max != self._applied_edit_max_width:
+            self.edit.setMaximumWidth(dynamic_max)
+            self._applied_edit_max_width = dynamic_max
 
     def set_name_edit_width_profile(self, *, min_width: int, max_width: int | None) -> None:
         self._configured_name_min_width = max(1, int(min_width))
@@ -804,6 +894,40 @@ class NameRowWidget(QtWidgets.QWidget):
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
         self._apply_name_edit_width_constraints()
+
+    def _relayout_subrole_group(self) -> None:
+        if self._subrole_group is None:
+            return
+        # Re-measure after style changes so two-letter labels do not clip on Windows.
+        for cb in self.subrole_checks:
+            cb.ensurePolished()
+            style = cb.style()
+            fm = cb.fontMetrics()
+            text_w = int(fm.horizontalAdvance(cb.text()))
+            indicator_w = int(style.pixelMetric(QtWidgets.QStyle.PM_IndicatorWidth, None, cb))
+            label_spacing = int(style.pixelMetric(QtWidgets.QStyle.PM_CheckBoxLabelSpacing, None, cb))
+            if label_spacing < 0:
+                label_spacing = 4
+            # Safety slack avoids clipping of compact labels like MT/OT on Windows.
+            content_w = (
+                indicator_w
+                + label_spacing
+                + text_w
+                + (2 * max(0, int(self._subrole_checkbox_hpadding)))
+                + 8
+            )
+            target_w = max(
+                1,
+                int(cb.sizeHint().width()),
+                int(cb.minimumSizeHint().width()),
+                int(content_w),
+            )
+            cb.setFixedWidth(target_w)
+        self._subrole_group.ensurePolished()
+        self._subrole_group.adjustSize()
+        width = max(1, int(self._subrole_group.sizeHint().width()))
+        self._subrole_group.setMinimumWidth(width)
+        self._subrole_group.setMaximumWidth(width)
 
     def apply_subrole_visual_profile(
         self,
@@ -821,12 +945,6 @@ class NameRowWidget(QtWidgets.QWidget):
                 0,
             )
             self._subrole_layout.setSpacing(max(0, int(spacing)))
-        if self._subrole_group is not None:
-            # Re-lock width after spacing/margins changed.
-            self._subrole_group.adjustSize()
-            width = max(1, int(self._subrole_group.sizeHint().width()))
-            self._subrole_group.setMinimumWidth(width)
-            self._subrole_group.setMaximumWidth(width)
         if checkbox_hpadding > 0:
             style = (
                 "QCheckBox { "
@@ -836,9 +954,27 @@ class NameRowWidget(QtWidgets.QWidget):
             )
         else:
             style = ""
+        self._subrole_checkbox_hpadding = max(0, int(checkbox_hpadding))
         for cb in self.subrole_checks:
             cb.setStyleSheet(style)
+        self._relayout_subrole_group()
         self._apply_name_edit_width_constraints()
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
+        super().showEvent(event)
+        if self._subrole_group is not None:
+            QtCore.QTimer.singleShot(0, self._relayout_subrole_group)
+
+    def changeEvent(self, event: QtCore.QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() in (
+            QtCore.QEvent.StyleChange,
+            QtCore.QEvent.FontChange,
+            QtCore.QEvent.PolishRequest,
+            QtCore.QEvent.ApplicationFontChange,
+        ):
+            if self._subrole_group is not None:
+                QtCore.QTimer.singleShot(0, self._relayout_subrole_group)
 
     def focus_name(self, force: bool = False):
         if force:
@@ -976,11 +1112,16 @@ class NamesListPanel(QtWidgets.QWidget):
         self._interaction_enabled = True
         self._delete_confirm_handler: Callable[[int], bool] | None = None
         self._applied_theme_key: str | None = None
+        self._applied_theme = None
         self._panel_width_update_pending = False
         self._applied_panel_min_width = -1
         self._applied_panel_max_width = -1
+        self._fill_parent_width = False
         self._parent_filter_installed = False
         self._window_filter_installed = False
+        self._panel_width_timer = QtCore.QTimer(self)
+        self._panel_width_timer.setSingleShot(True)
+        self._panel_width_timer.timeout.connect(self._apply_panel_width_constraints)
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
 
         self.btn_delete_marked = QtWidgets.QToolButton()
@@ -1038,9 +1179,10 @@ class NamesListPanel(QtWidgets.QWidget):
 
     def _schedule_panel_width_update(self, *_args) -> None:
         if self._panel_width_update_pending:
+            self._panel_width_timer.start(20)
             return
         self._panel_width_update_pending = True
-        QtCore.QTimer.singleShot(0, self._apply_panel_width_constraints)
+        self._panel_width_timer.start(20)
 
     def _ensure_parent_event_filter(self) -> None:
         if self._parent_filter_installed:
@@ -1184,6 +1326,13 @@ class NamesListPanel(QtWidgets.QWidget):
             self._action_row_widget.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
         self.updateGeometry()
 
+    def set_fill_parent_width(self, enabled: bool) -> None:
+        target = bool(enabled)
+        if self._fill_parent_width == target:
+            return
+        self._fill_parent_width = target
+        self._schedule_panel_width_update()
+
     def set_language(self, _lang: str):
         self.btn_sort_names.setText(i18n.t("wheel.sort_names"))
         self.btn_sort_names.setToolTip(i18n.t("wheel.sort_names_tooltip"))
@@ -1207,13 +1356,19 @@ class NamesListPanel(QtWidgets.QWidget):
             return
         style_helpers.style_primary_button(self.btn_sort_names, theme)
         style_helpers.style_primary_button(self.btn_toggle_all_names, theme)
-        self.btn_delete_marked.setStyleSheet(_delete_marked_button_style(theme))
+        self.btn_delete_marked.setStyleSheet(
+            _delete_marked_button_style(
+                theme,
+                danger_active=bool(self.btn_delete_marked.property("dangerActive")),
+            )
+        )
         style_helpers.style_names_list(self.names, theme)
         style_helpers.set_stylesheet_if_needed(
             self._action_row_widget,
             f"names_action_row:{theme_key}",
             _names_action_row_style(theme),
         )
+        self._applied_theme = theme
         self._applied_theme_key = theme_key
 
     def apply_fixed_widths(self):
@@ -1233,6 +1388,21 @@ class NamesListPanel(QtWidgets.QWidget):
 
     def _apply_panel_width_constraints(self) -> None:
         self._panel_width_update_pending = False
+        if self._fill_parent_width:
+            panel_min = 0
+            panel_max = 16777215
+            changed = False
+            if panel_min != self._applied_panel_min_width:
+                self._applied_panel_min_width = panel_min
+                self.setMinimumWidth(panel_min)
+                changed = True
+            if panel_max != self._applied_panel_max_width:
+                self._applied_panel_max_width = panel_max
+                self.setMaximumWidth(panel_max)
+                changed = True
+            if changed:
+                self.updateGeometry()
+            return
         panel_pref_max = (
             int(NAMES_PANEL_MAX_WIDTH_WITH_SUBROLES)
             if self.names.has_subroles
@@ -1263,13 +1433,17 @@ class NamesListPanel(QtWidgets.QWidget):
             panel_target = max(panel_floor, min(panel_hard_max, int(content_target)))
         panel_min = max(80, min(panel_floor, panel_target))
         panel_max = max(panel_min, panel_target)
+        changed = False
         if panel_min != self._applied_panel_min_width:
             self._applied_panel_min_width = panel_min
             self.setMinimumWidth(panel_min)
+            changed = True
         if panel_max != self._applied_panel_max_width:
             self._applied_panel_max_width = panel_max
             self.setMaximumWidth(panel_max)
-        self.updateGeometry()
+            changed = True
+        if changed:
+            self.updateGeometry()
 
     def set_auto_focus_enabled(self, enabled: bool, require_active_focus: bool | None = None) -> None:
         if hasattr(self, "names"):
@@ -1357,11 +1531,17 @@ class NamesListPanel(QtWidgets.QWidget):
             self.btn_delete_marked.setToolTip(i18n.t("names.delete_marked_tooltip"))
 
     def _set_delete_button_danger_state(self, active: bool) -> None:
-        self.btn_delete_marked.setProperty("dangerActive", bool(active))
-        style = self.btn_delete_marked.style()
-        if style is not None:
-            style.unpolish(self.btn_delete_marked)
-            style.polish(self.btn_delete_marked)
+        target = bool(active)
+        current = bool(self.btn_delete_marked.property("dangerActive"))
+        if current == target:
+            return
+        self.btn_delete_marked.setProperty("dangerActive", target)
+        theme = self._applied_theme
+        if theme is None:
+            theme_key = str(self._applied_theme_key or "light")
+            theme = theme_util.get_theme(theme_key)
+            self._applied_theme = theme
+        self.btn_delete_marked.setStyleSheet(_delete_marked_button_style(theme, danger_active=target))
         self.btn_delete_marked.update()
 
     def _on_toggle_all_names_clicked(self):

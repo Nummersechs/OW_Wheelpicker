@@ -6,7 +6,9 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import time
+import warnings
 from PySide6 import QtCore, QtGui, QtWidgets
 
 import i18n
@@ -21,6 +23,7 @@ from utils import ui_helpers
 
 class _OCRPreloadWorker(QtCore.QObject):
     finished = QtCore.Signal(bool, str)
+    lifecycle = QtCore.Signal(str, object)
 
     def __init__(
         self,
@@ -28,18 +31,209 @@ class _OCRPreloadWorker(QtCore.QObject):
         easyocr_kwargs: dict[str, object],
         project_root: str,
         subprocess_timeout_s: float,
+        use_subprocess_probe: bool = True,
+        inprocess_cache_warmup: bool = True,
     ) -> None:
         super().__init__()
         self._easyocr_kwargs = dict(easyocr_kwargs)
         self._project_root = str(project_root or "").strip()
+        self._quiet = bool(self._easyocr_kwargs.get("quiet", False))
+        self._use_subprocess_probe = bool(use_subprocess_probe)
+        self._inprocess_cache_warmup = bool(inprocess_cache_warmup)
+        self._suppressed_exception_seen: set[tuple[str, str, str]] = set()
+        self._cancel_requested = False
+        self._proc_lock = threading.Lock()
+        self._proc: subprocess.Popen[str] | None = None
         try:
             self._subprocess_timeout_s = max(1.0, float(subprocess_timeout_s))
         except Exception:
             self._subprocess_timeout_s = 60.0
 
+    def _warn_suppressed_exception(self, where: str, exc: Exception) -> None:
+        if self._quiet:
+            return
+        signature = (str(where or "ocr_preload_worker"), type(exc).__name__, str(exc))
+        if signature in self._suppressed_exception_seen:
+            return
+        self._suppressed_exception_seen.add(signature)
+        try:
+            warnings.warn(
+                f"OCR preload worker suppressed exception at {where}: {exc!r}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        except Exception:
+            pass
+
+    def _set_proc(self, proc: subprocess.Popen[str] | None) -> None:
+        with self._proc_lock:
+            self._proc = proc
+
+    def _clear_proc(self, proc: subprocess.Popen[str] | None) -> None:
+        with self._proc_lock:
+            if self._proc is proc:
+                self._proc = None
+
+    def _emit_lifecycle(self, event_name: str, **payload) -> None:
+        try:
+            self.lifecycle.emit(str(event_name or "").strip(), dict(payload))
+        except Exception:
+            pass
+
+    def _terminate_subprocess(self, proc: subprocess.Popen[str] | None, *, where: str) -> None:
+        if proc is None:
+            return
+        child_pid = ""
+        try:
+            raw_pid = getattr(proc, "pid", None)
+            if raw_pid is not None:
+                child_pid = str(int(raw_pid))
+        except Exception:
+            child_pid = ""
+        try:
+            if proc.poll() is not None:
+                return
+        except Exception:
+            return
+        try:
+            from ..ocr import ocr_runtime_trace
+
+            ocr_runtime_trace.trace(
+                "ocr_preload_worker:subprocess_stop_requested",
+                where=str(where or ""),
+                child_pid=child_pid,
+            )
+        except Exception:
+            pass
+        self._emit_lifecycle(
+            "ocr_preload_worker:subprocess_stop_requested",
+            where=str(where or ""),
+            child_pid=child_pid,
+        )
+        try:
+            proc.terminate()
+        except Exception as exc:
+            self._warn_suppressed_exception(f"{where}:terminate", exc)
+        try:
+            proc.wait(timeout=0.25)
+            try:
+                from ..ocr import ocr_runtime_trace
+
+                ocr_runtime_trace.trace(
+                    "ocr_preload_worker:subprocess_stopped",
+                    where=str(where or ""),
+                    child_pid=child_pid,
+                    mode="terminate",
+                )
+            except Exception:
+                pass
+            self._emit_lifecycle(
+                "ocr_preload_worker:subprocess_stopped",
+                where=str(where or ""),
+                child_pid=child_pid,
+                mode="terminate",
+            )
+            return
+        except Exception:
+            pass
+        try:
+            proc.kill()
+        except Exception as exc:
+            self._warn_suppressed_exception(f"{where}:kill", exc)
+        try:
+            proc.wait(timeout=0.25)
+        except Exception:
+            pass
+        try:
+            from ..ocr import ocr_runtime_trace
+
+            ocr_runtime_trace.trace(
+                "ocr_preload_worker:subprocess_stopped",
+                where=str(where or ""),
+                child_pid=child_pid,
+                mode="kill",
+            )
+        except Exception:
+            pass
+        self._emit_lifecycle(
+            "ocr_preload_worker:subprocess_stopped",
+            where=str(where or ""),
+            child_pid=child_pid,
+            mode="kill",
+        )
+
+    @QtCore.Slot()
+    def cancel(self) -> None:
+        self._cancel_requested = True
+        try:
+            thread = self.thread()
+        except Exception:
+            thread = None
+        if thread is not None:
+            try:
+                thread.requestInterruption()
+            except Exception:
+                pass
+        proc: subprocess.Popen[str] | None = None
+        with self._proc_lock:
+            proc = self._proc
+        self._terminate_subprocess(proc, where="cancel")
+
+    def _run_inprocess_warmup(self) -> tuple[bool, str]:
+        try:
+            from ..ocr import ocr_import, ocr_runtime_trace
+        except Exception as exc:
+            return False, f"inprocess-import-error:{exc!r}"
+
+        try:
+            ocr_runtime_trace.trace("ocr_preload_worker:inprocess_warmup_start")
+        except Exception:
+            pass
+
+        availability_fn = getattr(ocr_import, "easyocr_available", None)
+        if not callable(availability_fn):
+            return False, "inprocess-availability-missing"
+        try:
+            ok = bool(availability_fn(**self._easyocr_kwargs))
+        except Exception as exc:
+            return False, f"inprocess-availability-error:{exc!r}"
+        if ok:
+            try:
+                ocr_runtime_trace.trace("ocr_preload_worker:inprocess_warmup_done", ok=True)
+            except Exception:
+                pass
+            return True, "ready"
+
+        detail = "inprocess-not-ready"
+        diag_fn = getattr(ocr_import, "easyocr_resolution_diagnostics", None)
+        if callable(diag_fn):
+            try:
+                diag = str(diag_fn(**self._easyocr_kwargs)).strip()
+                if diag:
+                    detail = diag
+            except Exception as exc:
+                detail = f"inprocess-diagnostics-error:{exc!r}"
+        try:
+            ocr_runtime_trace.trace(
+                "ocr_preload_worker:inprocess_warmup_done",
+                ok=False,
+                detail=str(detail or ""),
+            )
+        except Exception:
+            pass
+        return False, detail
+
     @QtCore.Slot()
     def run(self) -> None:
+        try:
+            from ..ocr import ocr_runtime_trace
+
+            ocr_runtime_trace.trace("ocr_preload_worker:start", frozen=bool(getattr(sys, "frozen", False)))
+        except Exception:
+            pass
         def _interrupted() -> bool:
+            if bool(self._cancel_requested):
+                return True
             try:
                 thread = QtCore.QThread.currentThread()
             except Exception:
@@ -55,11 +249,33 @@ class _OCRPreloadWorker(QtCore.QObject):
         # is still running; without this, Qt may keep waiting for seconds.
         try:
             QtCore.QThread.setTerminationEnabled(True)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._warn_suppressed_exception("worker_run:set_termination_enabled", exc)
         if _interrupted():
+            try:
+                from ..ocr import ocr_runtime_trace
+
+                ocr_runtime_trace.trace("ocr_preload_worker:interrupted_early")
+            except Exception:
+                pass
             self.finished.emit(False, "interrupted")
             return
+
+        if not bool(self._use_subprocess_probe):
+            try:
+                from ..ocr import ocr_runtime_trace
+
+                ocr_runtime_trace.trace("ocr_preload_worker:inprocess_only_mode")
+            except Exception:
+                pass
+            self._emit_lifecycle("ocr_preload_worker:inprocess_only_mode")
+            warm_ok, warm_detail = self._run_inprocess_warmup()
+            if _interrupted():
+                self.finished.emit(False, "interrupted")
+                return
+            self.finished.emit(bool(warm_ok), str(warm_detail or ("ready" if warm_ok else "not-ready")))
+            return
+
         script = (
             "import json, pathlib, sys\n"
             "payload = json.loads(sys.argv[1])\n"
@@ -86,74 +302,170 @@ class _OCRPreloadWorker(QtCore.QObject):
                 text=True,
             )
         except Exception as exc:
+            try:
+                from ..ocr import ocr_runtime_trace
+
+                ocr_runtime_trace.trace("ocr_preload_worker:subprocess_start_error", error=repr(exc))
+            except Exception:
+                pass
+            self._emit_lifecycle("ocr_preload_worker:subprocess_start_error", error=repr(exc))
             self.finished.emit(False, f"preload-subprocess-start-error:{exc!r}")
             return
-
-        started_at = time.monotonic()
-        while True:
-            if _interrupted():
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
-                try:
-                    proc.wait(timeout=0.25)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-                self.finished.emit(False, "interrupted")
-                return
-            rc = proc.poll()
-            if rc is not None:
-                break
-            if (time.monotonic() - started_at) >= self._subprocess_timeout_s:
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
-                try:
-                    proc.wait(timeout=0.25)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-                self.finished.emit(False, "preload-timeout")
-                return
-            time.sleep(0.05)
-
+        child_pid = ""
         try:
-            stdout, stderr = proc.communicate(timeout=0.2)
+            raw_pid = getattr(proc, "pid", None)
+            if raw_pid is not None:
+                child_pid = str(int(raw_pid))
         except Exception:
-            stdout, stderr = "", ""
-
-        if int(proc.returncode or 1) != 0:
-            message = (stderr or stdout or "").strip()
-            if message:
-                self.finished.emit(False, f"preload-subprocess-error:{message}")
-            else:
-                self.finished.emit(False, "preload-subprocess-error")
-            return
-
-        line = ""
-        for raw_line in reversed((stdout or "").splitlines()):
-            text = str(raw_line or "").strip()
-            if text:
-                line = text
-                break
-        if not line:
-            self.finished.emit(False, "preload-no-output")
-            return
+            child_pid = ""
+        spawn_started_at = time.monotonic()
         try:
-            data = json.loads(line)
-            ok = bool(data.get("ok", False))
-            detail = str(data.get("detail", "") or "").strip()
-        except Exception as exc:
-            self.finished.emit(False, f"preload-parse-error:{exc!r}")
-            return
-        self.finished.emit(ok, detail or ("ready" if ok else "not-ready"))
+            from ..ocr import ocr_runtime_trace
+
+            ocr_runtime_trace.trace(
+                "ocr_preload_worker:subprocess_spawned",
+                child_pid=child_pid,
+                timeout_s=float(self._subprocess_timeout_s),
+            )
+        except Exception:
+            pass
+        self._emit_lifecycle(
+            "ocr_preload_worker:subprocess_spawned",
+            child_pid=child_pid,
+            timeout_s=float(self._subprocess_timeout_s),
+        )
+        self._set_proc(proc)
+
+        try:
+            started_at = spawn_started_at
+            while True:
+                if _interrupted():
+                    try:
+                        from ..ocr import ocr_runtime_trace
+
+                        ocr_runtime_trace.trace(
+                            "ocr_preload_worker:subprocess_interrupted",
+                            child_pid=child_pid,
+                            runtime_ms=int((time.monotonic() - started_at) * 1000.0),
+                        )
+                    except Exception:
+                        pass
+                    self._emit_lifecycle(
+                        "ocr_preload_worker:subprocess_interrupted",
+                        child_pid=child_pid,
+                        runtime_ms=int((time.monotonic() - started_at) * 1000.0),
+                    )
+                    self._terminate_subprocess(proc, where="worker_run:interrupt")
+                    self.finished.emit(False, "interrupted")
+                    return
+                rc = proc.poll()
+                if rc is not None:
+                    try:
+                        from ..ocr import ocr_runtime_trace
+
+                        ocr_runtime_trace.trace(
+                            "ocr_preload_worker:subprocess_exited",
+                            child_pid=child_pid,
+                            returncode=int(rc),
+                            runtime_ms=int((time.monotonic() - started_at) * 1000.0),
+                        )
+                    except Exception:
+                        pass
+                    self._emit_lifecycle(
+                        "ocr_preload_worker:subprocess_exited",
+                        child_pid=child_pid,
+                        returncode=int(rc),
+                        runtime_ms=int((time.monotonic() - started_at) * 1000.0),
+                    )
+                    break
+                if (time.monotonic() - started_at) >= self._subprocess_timeout_s:
+                    try:
+                        from ..ocr import ocr_runtime_trace
+
+                        ocr_runtime_trace.trace(
+                            "ocr_preload_worker:subprocess_timeout",
+                            child_pid=child_pid,
+                            timeout_s=float(self._subprocess_timeout_s),
+                            runtime_ms=int((time.monotonic() - started_at) * 1000.0),
+                        )
+                    except Exception:
+                        pass
+                    self._emit_lifecycle(
+                        "ocr_preload_worker:subprocess_timeout",
+                        child_pid=child_pid,
+                        timeout_s=float(self._subprocess_timeout_s),
+                        runtime_ms=int((time.monotonic() - started_at) * 1000.0),
+                    )
+                    self._terminate_subprocess(proc, where="worker_run:timeout")
+                    self.finished.emit(False, "preload-timeout")
+                    return
+                time.sleep(0.05)
+
+            try:
+                stdout, stderr = proc.communicate(timeout=0.2)
+            except Exception:
+                stdout, stderr = "", ""
+
+            if int(proc.returncode or 1) != 0:
+                message = (stderr or stdout or "").strip()
+                try:
+                    from ..ocr import ocr_runtime_trace
+
+                    ocr_runtime_trace.trace(
+                        "ocr_preload_worker:subprocess_error",
+                        child_pid=child_pid,
+                        returncode=int(proc.returncode or 1),
+                        message=message,
+                    )
+                except Exception:
+                    pass
+                self._emit_lifecycle(
+                    "ocr_preload_worker:subprocess_error",
+                    child_pid=child_pid,
+                    returncode=int(proc.returncode or 1),
+                    message=message,
+                )
+                if message:
+                    self.finished.emit(False, f"preload-subprocess-error:{message}")
+                else:
+                    self.finished.emit(False, "preload-subprocess-error")
+                return
+
+            line = ""
+            for raw_line in reversed((stdout or "").splitlines()):
+                text = str(raw_line or "").strip()
+                if text:
+                    line = text
+                    break
+            if not line:
+                self.finished.emit(False, "preload-no-output")
+                return
+            try:
+                data = json.loads(line)
+                ok = bool(data.get("ok", False))
+                detail = str(data.get("detail", "") or "").strip()
+            except Exception as exc:
+                self.finished.emit(False, f"preload-parse-error:{exc!r}")
+                return
+            if ok and self._inprocess_cache_warmup:
+                if _interrupted():
+                    self.finished.emit(False, "interrupted")
+                    return
+                warm_ok, warm_detail = self._run_inprocess_warmup()
+                if not warm_ok:
+                    self.finished.emit(False, warm_detail or "inprocess-warmup-failed")
+                    return
+                if str(warm_detail or "").strip():
+                    detail = str(warm_detail).strip()
+            try:
+                from ..ocr import ocr_runtime_trace
+
+                ocr_runtime_trace.trace("ocr_preload_worker:done", ok=bool(ok), detail=str(detail or ""))
+            except Exception:
+                pass
+            self.finished.emit(ok, detail or ("ready" if ok else "not-ready"))
+        finally:
+            self._clear_proc(proc)
 
 
 class _OCRPreloadRelay(QtCore.QObject):
@@ -165,6 +477,38 @@ class _OCRPreloadRelay(QtCore.QObject):
 
 
 class MainWindowOCRMixin:
+    def _warn_ocr_suppressed_exception(self, where: str, exc: Exception) -> None:
+        try:
+            if bool(self._cfg("QUIET", False)):
+                return
+        except Exception:
+            pass
+        signature = (str(where or "ocr"), type(exc).__name__, str(exc))
+        seen = getattr(self, "_ocr_suppressed_exception_seen", None)
+        if not isinstance(seen, set):
+            seen = set()
+            setattr(self, "_ocr_suppressed_exception_seen", seen)
+        if signature in seen:
+            return
+        seen.add(signature)
+        try:
+            warnings.warn(
+                f"OCR suppressed exception at {where}: {exc!r}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        except Exception:
+            pass
+        if hasattr(self, "_trace_event"):
+            try:
+                self._trace_event(
+                    "ocr_suppressed_exception",
+                    where=str(where or "ocr"),
+                    error=repr(exc),
+                )
+            except Exception:
+                pass
+
     def _ocr_name_hint_candidates(self, role_key: str) -> list[str]:
         key = str(role_key or "").strip().casefold()
         names: list[str] = []
@@ -193,8 +537,8 @@ class MainWindowOCRMixin:
                 try:
                     for current in wheel.get_current_names():
                         _add(str(current or ""))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._warn_ocr_suppressed_exception("name_hint_candidates:role_list", exc)
         else:
             for role in self._ocr_distribution_role_keys():
                 wheel = self._target_wheel_for_ocr_role(role)
@@ -203,8 +547,8 @@ class MainWindowOCRMixin:
                 try:
                     for current in wheel.get_current_names():
                         _add(str(current or ""))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._warn_ocr_suppressed_exception("name_hint_candidates:all_roles_list", exc)
 
         return names
 
@@ -448,8 +792,8 @@ class MainWindowOCRMixin:
                 return
         try:
             QtWidgets.QToolTip.showText(global_pos, str(text or ""), widget, widget.rect())
-        except Exception:
-            pass
+        except Exception as exc:
+            self._warn_ocr_suppressed_exception("refresh_live_tooltip:show_text", exc)
 
     def _set_ocr_button_tooltip(self, btn: QtWidgets.QWidget, text: str) -> None:
         if btn is None:
@@ -496,16 +840,16 @@ class MainWindowOCRMixin:
         self._ocr_runtime_activated = True
         self._ocr_preload_done = True
         self._ocr_preload_attempted = True
-        if hasattr(self, "_update_role_ocr_buttons_enabled"):
+        if hasattr(self, "_update_role_ocr_buttons_enabled") and hasattr(self, "_role_ocr_buttons"):
             try:
                 self._update_role_ocr_buttons_enabled()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._warn_ocr_suppressed_exception("mark_runtime_activated:update_buttons", exc)
         if hasattr(self, "_cancel_ocr_background_preload"):
             try:
                 self._cancel_ocr_background_preload()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._warn_ocr_suppressed_exception("mark_runtime_activated:cancel_preload", exc)
 
     def _ocr_background_preload_enabled(self) -> bool:
         return bool(self._cfg("OCR_BACKGROUND_PRELOAD_ENABLED", True))
@@ -542,8 +886,8 @@ class MainWindowOCRMixin:
             return
         try:
             timer.stop()
-        except Exception:
-            pass
+        except Exception as exc:
+            self._warn_ocr_suppressed_exception("cancel_preload_timer:stop", exc)
 
     def _stop_ocr_background_preload_job(
         self,
@@ -556,6 +900,13 @@ class MainWindowOCRMixin:
             self._ocr_preload_job = None
             return
         thread = job.get("thread")
+        worker = job.get("worker")
+        cancel_slot = getattr(worker, "cancel", None)
+        if callable(cancel_slot):
+            try:
+                cancel_slot()
+            except Exception as exc:
+                self._warn_ocr_suppressed_exception("stop_preload_job:worker_cancel", exc)
         was_running = False
         if thread is not None:
             try:
@@ -565,18 +916,23 @@ class MainWindowOCRMixin:
         if was_running:
             try:
                 thread.requestInterruption()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._warn_ocr_suppressed_exception("stop_preload_job:request_interruption", exc)
             try:
                 thread.quit()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._warn_ocr_suppressed_exception("stop_preload_job:quit", exc)
         waited = False
         if was_running and int(wait_ms) > 0 and thread is not None:
             try:
                 waited = bool(thread.wait(int(wait_ms)))
             except Exception:
                 waited = False
+        if was_running and not waited and thread is not None and hasattr(thread, "terminate"):
+            try:
+                thread.terminate()
+            except Exception as exc:
+                self._warn_ocr_suppressed_exception("stop_preload_job:terminate", exc)
         keep_job = bool(was_running and not waited)
         if not keep_job:
             self._ocr_preload_job = None
@@ -589,8 +945,8 @@ class MainWindowOCRMixin:
                     waited=bool(waited),
                     keep_job=bool(keep_job),
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                self._warn_ocr_suppressed_exception("stop_preload_job:trace_cancelled", exc)
 
     def _schedule_ocr_background_preload(
         self,
@@ -624,8 +980,8 @@ class MainWindowOCRMixin:
                     delay_ms=delay,
                     reason=str(reason or "unspecified"),
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                self._warn_ocr_suppressed_exception("schedule_preload:trace_scheduled", exc)
 
     def _ocr_background_preload_block_reason(self) -> str | None:
         startup_warmup = bool(getattr(self, "_startup_warmup_running", False))
@@ -651,15 +1007,15 @@ class MainWindowOCRMixin:
         try:
             if int(getattr(self, "pending", 0) or 0) > 0:
                 return "spin_pending"
-        except Exception:
-            pass
+        except Exception as exc:
+            self._warn_ocr_suppressed_exception("preload_block_reason:pending", exc)
         has_spin_anim = getattr(self, "_has_active_spin_animations", None)
         if callable(has_spin_anim):
             try:
                 if bool(has_spin_anim(include_internal_flags=True)):
                     return "spin_anim_running"
-            except Exception:
-                pass
+            except Exception as exc:
+                self._warn_ocr_suppressed_exception("preload_block_reason:spin_anim", exc)
         return None
 
     def _run_ocr_background_preload(self) -> None:
@@ -689,19 +1045,35 @@ class MainWindowOCRMixin:
                         reason=block_reason,
                         retry_ms=retry_ms,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._warn_ocr_suppressed_exception("run_preload:trace_deferred", exc)
             return
 
         kwargs = self._easyocr_resolution_kwargs()
         preload_project_root = str(Path(__file__).resolve().parents[2])
         preload_timeout_s = float(self._cfg("OCR_PRELOAD_SUBPROCESS_TIMEOUT_S", 60.0))
+        use_subprocess_probe = bool(self._cfg("OCR_PRELOAD_USE_SUBPROCESS_PROBE", True))
+        if bool(getattr(sys, "frozen", False)) and sys.platform.startswith("win"):
+            use_subprocess_probe = bool(
+                self._cfg("OCR_PRELOAD_USE_SUBPROCESS_PROBE_WIN_FROZEN", False)
+            )
+        inprocess_cache_warmup = bool(self._cfg("OCR_PRELOAD_INPROCESS_CACHE_WARMUP", True))
         thread = QtCore.QThread(self)
+        try:
+            thread.setObjectName("ocr_preload_thread")
+        except Exception:
+            pass
         worker = _OCRPreloadWorker(
             easyocr_kwargs=kwargs,
             project_root=preload_project_root,
             subprocess_timeout_s=preload_timeout_s,
+            use_subprocess_probe=use_subprocess_probe,
+            inprocess_cache_warmup=inprocess_cache_warmup,
         )
+        try:
+            worker.setObjectName("ocr_preload_worker")
+        except Exception:
+            pass
         worker.moveToThread(thread)
         relay = _OCRPreloadRelay(self)
         job = {
@@ -729,8 +1101,8 @@ class MainWindowOCRMixin:
             if hasattr(self, "_update_role_ocr_buttons_enabled"):
                 try:
                     self._update_role_ocr_buttons_enabled()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._warn_ocr_suppressed_exception("run_preload:finalize_update_buttons", exc)
             if hasattr(self, "_trace_event"):
                 try:
                     self._trace_event(
@@ -738,8 +1110,8 @@ class MainWindowOCRMixin:
                         ok=bool(ok),
                         detail=str(detail or ""),
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._warn_ocr_suppressed_exception("run_preload:finalize_trace_finished", exc)
             # If the worker thread already stopped, clear the job reference now.
             if current is job:
                 thread_ref = job.get("thread")
@@ -751,6 +1123,31 @@ class MainWindowOCRMixin:
                         running = False
                 if not running:
                     self._ocr_preload_job = None
+
+        def _trace_preload_lifecycle(event_name: str, payload: object) -> None:
+            if not hasattr(self, "_trace_event"):
+                return
+            event = str(event_name or "").strip() or "ocr_preload_worker:lifecycle"
+            values = payload if isinstance(payload, dict) else {}
+
+            def _clean(value: object, *, max_len: int = 220) -> str:
+                text = str(value if value is not None else "")
+                if len(text) > max_len:
+                    return text[: max_len - 1] + "…"
+                return text
+
+            trace_payload: dict[str, object] = {}
+            for key in ("child_pid", "returncode", "runtime_ms", "timeout_s", "where", "mode"):
+                if key in values:
+                    trace_payload[key] = values.get(key)
+            if "message" in values:
+                trace_payload["message"] = _clean(values.get("message"))
+            if "error" in values:
+                trace_payload["error"] = _clean(values.get("error"))
+            try:
+                self._trace_event(event, **trace_payload)
+            except Exception as exc:
+                self._warn_ocr_suppressed_exception("run_preload:lifecycle_trace", exc)
 
         try:
             job["worker_done_connection"] = worker.finished.connect(
@@ -770,6 +1167,14 @@ class MainWindowOCRMixin:
         except Exception:
             worker.finished.connect(thread.quit)
             job["worker_quit_connection"] = None
+        try:
+            job["lifecycle_connection"] = worker.lifecycle.connect(
+                _trace_preload_lifecycle,
+                QtCore.Qt.QueuedConnection,
+            )
+        except Exception:
+            worker.lifecycle.connect(_trace_preload_lifecycle, QtCore.Qt.QueuedConnection)
+            job["lifecycle_connection"] = None
         def _cleanup_cancelled_preload() -> None:
             current = getattr(self, "_ocr_preload_job", None)
             if current is job:
@@ -777,8 +1182,8 @@ class MainWindowOCRMixin:
                 if hasattr(self, "_trace_event"):
                     try:
                         self._trace_event("ocr_preload_thread_finished")
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        self._warn_ocr_suppressed_exception("run_preload:cleanup_trace_finished", exc)
         try:
             job["cleanup_connection"] = thread.finished.connect(_cleanup_cancelled_preload)
         except Exception:
@@ -804,16 +1209,16 @@ class MainWindowOCRMixin:
             self._ocr_preload_job = None
             try:
                 worker.deleteLater()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._warn_ocr_suppressed_exception("run_preload:closing_delete_worker", exc)
             try:
                 relay.deleteLater()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._warn_ocr_suppressed_exception("run_preload:closing_delete_relay", exc)
             try:
                 thread.deleteLater()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._warn_ocr_suppressed_exception("run_preload:closing_delete_thread", exc)
             return
         startup_warmup = bool(getattr(self, "_startup_warmup_running", False))
         desired_priority = QtCore.QThread.NormalPriority if startup_warmup else QtCore.QThread.LowPriority
@@ -840,11 +1245,21 @@ class MainWindowOCRMixin:
             return
         try:
             timer.stop()
-        except Exception:
-            pass
+        except Exception as exc:
+            self._warn_ocr_suppressed_exception("cancel_cache_release_timer:stop", exc)
 
     def _schedule_ocr_runtime_cache_release(self) -> None:
         if getattr(self, "_closing", False):
+            return
+        if bool(getattr(sys, "frozen", False)) and sys.platform.startswith("win"):
+            if not bool(getattr(self, "_ocr_cache_release_disabled_trace_logged", False)):
+                try:
+                    from ..ocr import ocr_runtime_trace
+
+                    ocr_runtime_trace.trace("ocr_cache_release:disabled", reason="win_frozen")
+                except Exception:
+                    pass
+                self._ocr_cache_release_disabled_trace_logged = True
             return
         if getattr(self, "_ocr_async_job", None):
             return
@@ -860,15 +1275,15 @@ class MainWindowOCRMixin:
         if hasattr(self, "_trace_event"):
             try:
                 self._trace_event("ocr_cache_release_scheduled", delay_ms=delay_ms)
-            except Exception:
-                pass
+            except Exception as exc:
+                self._warn_ocr_suppressed_exception("schedule_cache_release:trace_scheduled", exc)
 
     def _spin_active_for_ocr_cache_release(self) -> bool:
         try:
             if int(getattr(self, "pending", 0)) > 0:
                 return True
-        except Exception:
-            pass
+        except Exception as exc:
+            self._warn_ocr_suppressed_exception("spin_active_for_cache_release:pending", exc)
         role_wheels_fn = getattr(self, "_role_wheels", None)
         if callable(role_wheels_fn):
             try:
@@ -878,17 +1293,25 @@ class MainWindowOCRMixin:
                             return True
                     except Exception:
                         continue
-            except Exception:
-                pass
+            except Exception as exc:
+                self._warn_ocr_suppressed_exception("spin_active_for_cache_release:role_wheels", exc)
         map_main = getattr(self, "map_main", None)
         if map_main is not None and hasattr(map_main, "is_anim_running"):
             try:
                 return bool(map_main.is_anim_running())
-            except Exception:
-                pass
+            except Exception as exc:
+                self._warn_ocr_suppressed_exception("spin_active_for_cache_release:map_main", exc)
         return False
 
     def _release_ocr_runtime_cache(self) -> None:
+        if bool(getattr(sys, "frozen", False)) and sys.platform.startswith("win"):
+            try:
+                from ..ocr import ocr_runtime_trace
+
+                ocr_runtime_trace.trace("ocr_cache_release:skip", reason="win_frozen")
+            except Exception:
+                pass
+            return
         if getattr(self, "_ocr_async_job", None):
             self._schedule_ocr_runtime_cache_release()
             return
@@ -899,8 +1322,8 @@ class MainWindowOCRMixin:
             if hasattr(self, "_trace_event"):
                 try:
                     self._trace_event("ocr_cache_release_deferred_busy", retry_ms=retry_ms)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._warn_ocr_suppressed_exception("release_cache:trace_deferred_busy", exc)
             return
         try:
             from ..ocr import ocr_import
@@ -918,11 +1341,19 @@ class MainWindowOCRMixin:
         if hasattr(self, "_trace_event"):
             try:
                 self._trace_event("ocr_cache_released")
-            except Exception:
-                pass
+            except Exception as exc:
+                self._warn_ocr_suppressed_exception("release_cache:trace_released", exc)
 
     def _release_ocr_runtime_cache_for_spin(self) -> None:
         """Optionally release OCR runtime cache on spin start."""
+        if bool(getattr(sys, "frozen", False)) and sys.platform.startswith("win"):
+            try:
+                from ..ocr import ocr_runtime_trace
+
+                ocr_runtime_trace.trace("ocr_cache_release_for_spin:skip", reason="win_frozen")
+            except Exception:
+                pass
+            return
         self._cancel_ocr_runtime_cache_release()
         if getattr(self, "_ocr_async_job", None):
             return
@@ -946,8 +1377,8 @@ class MainWindowOCRMixin:
         if hasattr(self, "_trace_event"):
             try:
                 self._trace_event("ocr_cache_released_for_spin")
-            except Exception:
-                pass
+            except Exception as exc:
+                self._warn_ocr_suppressed_exception("release_cache_for_spin:trace_released", exc)
 
     def _ocr_distribution_role_keys(self) -> tuple[str, ...]:
         return ("tank", "dps", "support")

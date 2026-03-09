@@ -123,11 +123,105 @@ def shutdown_resource_snapshot(mw) -> dict:
 
 def run_shutdown_step(mw, step: str, callback: Callable[[], None]) -> None:
     mw._trace_event("shutdown_step:start", step=step)
+    started = QtCore.QElapsedTimer()
+    started.start()
     try:
         callback()
-        mw._trace_event("shutdown_step:ok", step=step)
+        mw._trace_event("shutdown_step:ok", step=step, duration_ms=int(started.elapsed()))
     except Exception as exc:
         mw._trace_event("shutdown_step:error", step=step, error=repr(exc))
+
+
+def _schedule_app_quit_guard(mw) -> None:
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        return
+    try:
+        app.setQuitOnLastWindowClosed(True)
+    except Exception:
+        pass
+    tracer = getattr(mw, "_trace_event", None)
+    if callable(tracer):
+        try:
+            tracer("shutdown_quit_guard:scheduled")
+        except Exception:
+            pass
+    try:
+        app.quit()
+        if callable(tracer):
+            tracer("shutdown_quit_guard:quit_now")
+    except Exception:
+        pass
+    try:
+        QtCore.QTimer.singleShot(0, app.quit)
+    except Exception:
+        try:
+            app.quit()
+        except Exception:
+            return
+    guard_ms = max(0, int(_cfg(mw, "SHUTDOWN_APP_QUIT_GUARD_MS", 1500)))
+    if guard_ms <= 0:
+        return
+
+    def _guard() -> None:
+        try:
+            for widget in app.topLevelWidgets():
+                if widget is None:
+                    continue
+                if widget.isVisible():
+                    if callable(tracer):
+                        try:
+                            tracer("shutdown_quit_guard:still_visible")
+                        except Exception:
+                            pass
+                    return
+        except Exception:
+            pass
+        try:
+            app.quit()
+            if callable(tracer):
+                try:
+                    tracer("shutdown_quit_guard:guard_quit")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    try:
+        QtCore.QTimer.singleShot(int(guard_ms), _guard)
+    except Exception:
+        pass
+    # Additional guard: force event-loop exit shortly after quit guard.
+    # This helps when all windows are gone but queued callbacks still keep
+    # the loop alive.
+    force_exit_ms = max(0, int(_cfg(mw, "SHUTDOWN_APP_FORCE_EXIT_LOOP_MS", guard_ms + 900)))
+    if force_exit_ms <= 0:
+        return
+
+    def _force_exit_loop() -> None:
+        try:
+            app.quit()
+            if callable(tracer):
+                try:
+                    tracer("shutdown_quit_guard:force_quit")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            app.exit(0)
+            if callable(tracer):
+                try:
+                    tracer("shutdown_quit_guard:force_exit_loop")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    try:
+        QtCore.QTimer.singleShot(int(force_exit_ms), _force_exit_loop)
+    except Exception:
+        pass
 
 
 def handle_close_event(mw, event: QtGui.QCloseEvent) -> None:
@@ -170,6 +264,26 @@ def handle_close_event(mw, event: QtGui.QCloseEvent) -> None:
         if app:
             app.removeEventFilter(mw)
 
+    def _close_aux_windows() -> None:
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return
+        closed = 0
+        for widget in list(app.topLevelWidgets()):
+            if widget is None or widget is mw:
+                continue
+            try:
+                if not bool(widget.isVisible()):
+                    continue
+            except Exception:
+                continue
+            try:
+                widget.close()
+                closed += 1
+            except Exception:
+                continue
+        mw._trace_event("shutdown_aux_windows_close", closed=int(closed))
+
     run_shutdown_step(mw, "stop_wheels", _stop_wheels)
     run_shutdown_step(mw, "map_ui", _shutdown_map_ui)
     run_shutdown_step(mw, "player_list_panel", _shutdown_player_panel)
@@ -178,11 +292,37 @@ def handle_close_event(mw, event: QtGui.QCloseEvent) -> None:
     run_shutdown_step(mw, "state_sync", _shutdown_state_sync)
     run_shutdown_step(mw, "sound", _shutdown_sound)
     run_shutdown_step(mw, "remove_event_filter", _remove_app_filter)
+    run_shutdown_step(mw, "close_aux_windows", _close_aux_windows)
 
     if bool(_cfg(mw, "TRACE_SHUTDOWN", False)):
         mw._trace_event("shutdown_snapshot", stage="pre_super", **shutdown_resource_snapshot(mw))
 
+    # Keep-visible behavior is handled in MainWindowShutdownMixin by deferring
+    # close while background work is still running. At this point shutdown work
+    # is done and we finish close by accepting the Qt close event.
+    keep_window_visible = bool(_cfg(mw, "SHUTDOWN_KEEP_WINDOW_VISIBLE_UNTIL_EXIT", False))
+    if keep_window_visible:
+        mw._trace_event("shutdown_qt_closeevent:keep_visible_mode", active=True)
+
     # After MainWindow was split into mixins, `super(type(mw), mw)` resolves
     # back to MainWindowShutdownMixin.closeEvent and recurses.
     # Call the Qt base implementation directly to finish close safely.
+    mw._trace_event("shutdown_qt_closeevent:before")
     QtWidgets.QMainWindow.closeEvent(mw, event)
+    accepted = True
+    try:
+        accepted = bool(event.isAccepted())
+    except Exception:
+        accepted = True
+    mw._trace_event("shutdown_qt_closeevent:after", accepted=bool(accepted))
+    if not accepted:
+        # Some Qt plugin paths can ignore close while auxiliary popups/tool windows
+        # are still around. During explicit app shutdown we force acceptance.
+        try:
+            event.accept()
+            accepted = bool(event.isAccepted())
+        except Exception:
+            accepted = False
+        mw._trace_event("shutdown_qt_closeevent:forced_accept", accepted=bool(accepted))
+    if accepted:
+        _schedule_app_quit_guard(mw)

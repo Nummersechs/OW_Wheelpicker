@@ -611,13 +611,12 @@ def _candidate_stats_from_runs(
                 return True
             return False
 
-        first = options[0]
-        if not _looks_like_noise(first):
-            return first
-        for candidate in options[1:]:
+        # Keep parser order by default; only demote obvious noise candidates.
+        # This preserves parser ranking semantics and still avoids trivial junk.
+        for candidate in options:
             if not _looks_like_noise(candidate):
                 return candidate
-        return first
+        return options[0]
 
     def _pick_candidate_for_run(candidates: list[str], seen_keys: set[str]) -> tuple[str, str]:
         options = [str(raw or "").strip() for raw in list(candidates or []) if str(raw or "").strip()]
@@ -702,8 +701,8 @@ def _candidate_stats_from_runs(
         short_token_penalty = 1 if letters <= 2 else 0
         conf_known = 1 if line_conf >= 0.0 else 0
         best_choice = 1 if str(selection_reason or "") == "best" else 0
-        # Prefer cleaner candidate text over raw confidence to avoid
-        # promoting short/noisy variants from the same visual row slot.
+        # Slot ranking should keep stable primary/retry winners over row-pass
+        # overrides and avoid short/noisy variants winning solely by confidence.
         return (
             pass_priority,
             best_choice,
@@ -712,9 +711,9 @@ def _candidate_stats_from_runs(
             -int(digit_count),
             int(letters),
             int(alnum_len),
+            -int(quality[2]),
             conf_known,
             float(line_conf),
-            -int(quality[2]),
             -int(run_index),
         )
 

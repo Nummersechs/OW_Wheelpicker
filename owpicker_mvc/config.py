@@ -3,6 +3,8 @@ Zentrale Konfiguration für das Overwatch-Tool.
 Hier kannst du das Verhalten und die Startdaten des Programms anpassen.
 """
 
+import sys
+
 # ---------- Runtime / Logging ----------
 DEBUG = False
 # Relative paths are created inside the writable app state directory.
@@ -14,6 +16,9 @@ LOG_OUTPUT_DIR = "logs"
 # - deaktiviert zusätzlich alle internen Debug-/Trace-Logs
 # - Save-State bleibt davon unberührt
 QUIET = False
+# Prevent duplicate starts on Windows (e.g. fast double-click on the EXE).
+WINDOWS_SINGLE_INSTANCE = True
+WINDOWS_SINGLE_INSTANCE_LOCK_NAME = "ow_wheelpicker_instance"
 
 
 def _disable_flags_if_quiet(*flag_names: str) -> None:
@@ -36,6 +41,7 @@ TRACE_CLEAR_ON_START = False
 # Bei Bedarf für tiefe Analysen temporär aktivieren.
 TRACE_STARTUP_VISUAL_FINALIZE_DEFER = False
 TRACE_OCR_PRELOAD_VERBOSE = False
+TRACE_OCR_RUNTIME = True
 TRACE_SHUTDOWN_STEP_VERBOSE = False
 FOCUS_TRACE_DURATION_S = 12.0
 FOCUS_TRACE_MAX_EVENTS = 800
@@ -79,9 +85,31 @@ SHUTDOWN_OCR_ASYNC_TERMINATE_WAIT_MS = 700
 # Background OCR preload thread:
 SHUTDOWN_OCR_PRELOAD_GRACEFUL_WAIT_MS = 1400
 SHUTDOWN_OCR_PRELOAD_TERMINATE_WAIT_MS = 350
+# On Windows, force-stop OCR preload immediately on close to avoid lingering
+# background processes when the window is closed during preload warmup.
+SHUTDOWN_OCR_PRELOAD_FORCE_STOP_ON_CLOSE = True
+# Fallback profile for other QThreads found during close.
+SHUTDOWN_CHILD_THREAD_GRACEFUL_WAIT_MS = 350
+SHUTDOWN_CHILD_THREAD_TERMINATE_WAIT_MS = 250
 # Maximum cumulative defer time while waiting for OCR/background threads during
 # close. After this timeout, shutdown falls back to orphaned-thread cleanup.
 SHUTDOWN_THREAD_MAX_DEFER_MS = 2500
+# Additional wait window for non-daemon Python threads discovered during close.
+SHUTDOWN_PYTHON_THREAD_MAX_DEFER_MS = 1800
+# Additional guard: request app.quit() again shortly after close accepted.
+SHUTDOWN_APP_QUIT_GUARD_MS = 1500
+# Last in-event-loop fallback: force QApplication.exit(0) after close.
+SHUTDOWN_APP_FORCE_EXIT_LOOP_MS = 2400
+# Keep main window visible while shutdown is still in progress. This prevents
+# the "window is gone but process still runs" impression on Windows.
+SHUTDOWN_KEEP_WINDOW_VISIBLE_UNTIL_EXIT = bool(sys.platform.startswith("win"))
+# Process-level fallback for stuck shutdowns (e.g. orphaned OCR worker threads).
+# Enabled by default on Windows, where background lingering was reported.
+SHUTDOWN_FORCE_EXIT_WATCHDOG_ENABLED = bool(sys.platform.startswith("win"))
+# Hard-exit deadline after first close request. Set 0 to disable.
+SHUTDOWN_FORCE_EXIT_WATCHDOG_MS = 12000
+# If shutdown had to orphan a still-running thread, shorten hard-exit deadline.
+SHUTDOWN_FORCE_EXIT_ON_ORPHAN_MS = 2200
 # Keep OCR runtime cache release out of shutdown by default.
 # Cache release can be expensive (gc/torch) and app exit already frees memory.
 SHUTDOWN_RELEASE_OCR_CACHE = False
@@ -106,6 +134,7 @@ _disable_flags_if_quiet(
     "TRACE_CLEAR_ON_START",
     "TRACE_STARTUP_VISUAL_FINALIZE_DEFER",
     "TRACE_OCR_PRELOAD_VERBOSE",
+    "TRACE_OCR_RUNTIME",
     "TRACE_SHUTDOWN_STEP_VERBOSE",
 )
 
@@ -174,6 +203,15 @@ OCR_BACKGROUND_PRELOAD_BUSY_RETRY_MS = 1800
 # Timeout for the OCR background-preload subprocess. If exceeded, preload is
 # aborted so shutdown can stay responsive.
 OCR_PRELOAD_SUBPROCESS_TIMEOUT_S = 60.0
+# Use a helper subprocess for preload probe. In frozen Windows builds this can
+# spawn an extra app process, so runtime defaults switch to in-process probe.
+OCR_PRELOAD_USE_SUBPROCESS_PROBE = True
+# Frozen Windows override for preload probe subprocess usage.
+OCR_PRELOAD_USE_SUBPROCESS_PROBE_WIN_FROZEN = False
+# After subprocess readiness probe, also warm EasyOCR reader cache in-process.
+# This makes the first real OCR click much faster because reader init/import
+# already happened in the app runtime (not only in a helper subprocess).
+OCR_PRELOAD_INPROCESS_CACHE_WARMUP = True
 # Keep an already running preload thread alive during spin/background pause by
 # default. This improves preload reliability and avoids repeated cold starts.
 # Enable only if spin smoothness on very weak systems is more important.
@@ -419,6 +457,10 @@ OCR_CAPTURE_PREPARE_DELAY_MS_WINDOWS = 70
 # UX: in Qt selector, confirm on mouse release instead of requiring Enter.
 OCR_QT_SELECTOR_AUTO_ACCEPT_ON_RELEASE = True
 OCR_CAPTURE_TIMEOUT_S = 45.0
+# Separate OCR runtime trace for import/thread diagnostics.
+OCR_RUNTIME_TRACE_FILE = "ocr_runtime_trace.log"
+# Best-effort soft cap for trace file size (bytes). Older content is trimmed.
+OCR_RUNTIME_TRACE_MAX_BYTES = 2_000_000
 
 # ---------- Sprache ----------
 # Voreingestellte Sprache, wenn keine Auswahl gespeichert wurde

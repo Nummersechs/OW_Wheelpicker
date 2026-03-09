@@ -38,16 +38,18 @@ class _AlwaysRunningThread:
         self.terminate_calls += 1
 
 
-class _StopsAfterTerminateThread:
+class _AlreadyFinishedThread:
     def __init__(self) -> None:
-        self._running = True
         self.interrupt_calls = 0
         self.quit_calls = 0
         self.wait_calls = 0
         self.terminate_calls = 0
 
     def isRunning(self) -> bool:
-        return self._running
+        return False
+
+    def isFinished(self) -> bool:
+        return True
 
     def requestInterruption(self) -> None:
         self.interrupt_calls += 1
@@ -57,11 +59,10 @@ class _StopsAfterTerminateThread:
 
     def wait(self, _timeout_ms: int) -> bool:
         self.wait_calls += 1
-        return False
+        return True
 
     def terminate(self) -> None:
         self.terminate_calls += 1
-        self._running = False
 
 
 class _NotRunningNotFinishedThread:
@@ -127,13 +128,13 @@ class TestMainWindowShutdownMixin(unittest.TestCase):
         single_shot.assert_called_once()
         self.assertGreaterEqual(thread.interrupt_calls, 1)
         self.assertGreaterEqual(thread.quit_calls, 1)
-        self.assertGreaterEqual(thread.terminate_calls, 1)
+        self.assertEqual(thread.terminate_calls, 0)
         self.assertIsNotNone(mw._ocr_preload_job)
         handle_close.assert_not_called()
 
     def test_close_event_continues_shutdown_after_ocr_preload_thread_stops(self):
         mw = self._make_window()
-        thread = _StopsAfterTerminateThread()
+        thread = _AlreadyFinishedThread()
         mw._ocr_preload_job = {"thread": thread}
         event = _FakeCloseEvent()
 
@@ -146,9 +147,9 @@ class TestMainWindowShutdownMixin(unittest.TestCase):
 
         self.assertFalse(event.ignored)
         self.assertIsNone(mw._ocr_preload_job)
-        self.assertGreaterEqual(thread.interrupt_calls, 1)
-        self.assertGreaterEqual(thread.quit_calls, 1)
-        self.assertGreaterEqual(thread.terminate_calls, 1)
+        self.assertEqual(thread.interrupt_calls, 0)
+        self.assertEqual(thread.quit_calls, 0)
+        self.assertEqual(thread.terminate_calls, 0)
         handle_close.assert_called_once()
 
     def test_close_event_uses_configured_wait_profile(self):
@@ -173,9 +174,9 @@ class TestMainWindowShutdownMixin(unittest.TestCase):
         single_shot.assert_called_once()
         self.assertGreaterEqual(thread.interrupt_calls, 1)
         self.assertGreaterEqual(thread.quit_calls, 1)
-        self.assertGreaterEqual(thread.terminate_calls, 1)
-        # Uses configured values, but applies shutdown safety cap.
-        self.assertEqual(thread.wait_timeouts, [100, 42])
+        self.assertEqual(thread.terminate_calls, 0)
+        # Close path is now non-blocking and does not wait in each pass.
+        self.assertEqual(thread.wait_timeouts, [])
         self.assertIsNotNone(mw._ocr_preload_job)
         handle_close.assert_not_called()
 
@@ -200,7 +201,7 @@ class TestMainWindowShutdownMixin(unittest.TestCase):
 
         self.assertTrue(event.ignored)
         single_shot.assert_called_once()
-        self.assertIsNone(mw._ocr_preload_job)
+        self.assertIsNotNone(mw._ocr_preload_job)
         handle_close.assert_not_called()
 
     def test_close_event_defers_for_not_running_but_not_finished_thread(self):

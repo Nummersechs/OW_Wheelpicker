@@ -7,6 +7,7 @@ import re
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -22,6 +23,7 @@ from . import (
     ocr_import as _ocr_import,
     ocr_ordering_utils as _ocr_ordering_utils,
     ocr_postprocess_utils as _ocr_postprocess_utils,
+    ocr_runtime_trace as _ocr_runtime_trace,
     ocr_row_pass_utils as _ocr_row_pass_utils,
 )
 
@@ -138,6 +140,92 @@ def _mark_ocr_runtime_activated(mw) -> None:
         pass
 
 
+def _restore_main_window_after_capture(
+    mw,
+    *,
+    was_visible: bool,
+    was_minimized: bool,
+) -> None:
+    def _is_closing_or_gone() -> bool:
+        try:
+            return bool(getattr(mw, "_closing", False))
+        except Exception:
+            return True
+
+    if not was_visible:
+        return
+    if _is_closing_or_gone():
+        return
+
+    def _restore_once(*, force_normal: bool = False) -> None:
+        if _is_closing_or_gone():
+            return
+        try:
+            if was_minimized and (not force_normal):
+                mw.showMinimized()
+            else:
+                # Explicitly clear minimized state; on some Windows setups a
+                # plain show() after hidden capture can keep the window minimized.
+                try:
+                    state = QtCore.Qt.WindowStates(mw.windowState())
+                    if bool(state & QtCore.Qt.WindowMinimized):
+                        state = QtCore.Qt.WindowStates(state & ~QtCore.Qt.WindowMinimized)
+                        state = QtCore.Qt.WindowStates(state | QtCore.Qt.WindowActive)
+                        mw.setWindowState(state)
+                except Exception:
+                    pass
+                restored = False
+                try:
+                    mw.showNormal()
+                    restored = True
+                except Exception:
+                    mw.show()
+                    restored = True
+                if not restored:
+                    mw.show()
+                qt_runtime.safe_raise(mw)
+                qt_runtime.safe_activate_window(mw)
+            QtWidgets.QApplication.processEvents()
+        except Exception:
+            pass
+
+    _restore_once(force_normal=False)
+    if not was_minimized:
+        # Retry once/twice on the next ticks for focus/window-state race cases.
+        QtCore.QTimer.singleShot(0, lambda: _restore_once(force_normal=True))
+        QtCore.QTimer.singleShot(120, lambda: _restore_once(force_normal=True))
+
+
+@contextmanager
+def _suspend_quit_on_last_window_closed(*, active: bool):
+    app = QtWidgets.QApplication.instance()
+    if (not active) or app is None:
+        yield
+        return
+
+    previous = None
+    try:
+        previous = bool(app.quitOnLastWindowClosed())
+    except Exception:
+        previous = None
+    try:
+        if previous:
+            app.setQuitOnLastWindowClosed(False)
+            _ocr_runtime_trace.trace("ocr_capture:quit_guard_on")
+    except Exception:
+        previous = None
+
+    try:
+        yield
+    finally:
+        if previous is not None:
+            try:
+                app.setQuitOnLastWindowClosed(previous)
+                _ocr_runtime_trace.trace("ocr_capture:quit_guard_off", restored=bool(previous))
+            except Exception:
+                pass
+
+
 def _capture_region_with_qt_selector(mw) -> tuple[QtGui.QPixmap | None, str | None]:
     hide_for_capture = bool(mw._cfg("OCR_HIDE_MAIN_WINDOW_FOR_CAPTURE", True))
     if sys.platform == "win32":
@@ -156,27 +244,26 @@ def _capture_region_with_qt_selector(mw) -> tuple[QtGui.QPixmap | None, str | No
     was_visible = mw.isVisible()
     was_minimized = mw.isMinimized()
 
-    if hide_for_capture and was_visible:
-        mw.hide()
-        QtWidgets.QApplication.processEvents()
-        if prepare_delay_ms > 0:
-            time.sleep(max(0, prepare_delay_ms) / 1000.0)
-
-    try:
-        return select_region_from_primary_screen(
-            hint_text=i18n.t("ocr.select_hint"),
-            auto_accept_on_release=auto_accept_on_release,
-            parent=None if (hide_for_capture and was_visible) else mw,
-        )
-    finally:
-        if hide_for_capture and was_visible and not getattr(mw, "_closing", False):
-            if was_minimized:
-                mw.showMinimized()
-            else:
-                mw.show()
-                qt_runtime.safe_raise(mw)
-                qt_runtime.safe_activate_window(mw)
+    with _suspend_quit_on_last_window_closed(active=bool(hide_for_capture and was_visible)):
+        if hide_for_capture and was_visible:
+            mw.hide()
             QtWidgets.QApplication.processEvents()
+            if prepare_delay_ms > 0:
+                time.sleep(max(0, prepare_delay_ms) / 1000.0)
+
+        try:
+            return select_region_from_primary_screen(
+                hint_text=i18n.t("ocr.select_hint"),
+                auto_accept_on_release=auto_accept_on_release,
+                parent=None if (hide_for_capture and was_visible) else mw,
+            )
+        finally:
+            if hide_for_capture:
+                _restore_main_window_after_capture(
+                    mw,
+                    was_visible=was_visible,
+                    was_minimized=was_minimized,
+                )
 
 
 def capture_region_for_ocr(mw) -> tuple[QtGui.QPixmap | None, str | None]:
@@ -190,37 +277,42 @@ def capture_region_for_ocr(mw) -> tuple[QtGui.QPixmap | None, str | None]:
         i18n.t("ocr.capture_prepare_hint"),
     )
 
+    hide_for_capture = bool(mw._cfg("OCR_HIDE_MAIN_WINDOW_FOR_CAPTURE", True))
     was_visible = mw.isVisible()
     was_minimized = mw.isMinimized()
-    if was_visible:
-        mw.hide()
-        QtWidgets.QApplication.processEvents()
-
-    delay_ms = max(0, int(mw._cfg("OCR_CAPTURE_PREPARE_DELAY_MS", 120)))
-    if delay_ms > 0:
-        time.sleep(delay_ms / 1000.0)
-
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        capture_path = Path(tmp.name)
-
-    try:
-        selected_pixmap, select_error = select_region_with_macos_screencapture(
-            capture_path,
-            timeout_s=float(mw._cfg("OCR_CAPTURE_TIMEOUT_S", 45.0)),
-        )
-    finally:
-        try:
-            capture_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-        if was_visible and not getattr(mw, "_closing", False):
-            if was_minimized:
+    with _suspend_quit_on_last_window_closed(active=bool(hide_for_capture and was_visible)):
+        if hide_for_capture and was_visible:
+            # On macOS, explicitly minimizing first makes the transition into the
+            # native screenshot tool more reliable than only hiding the window.
+            if not was_minimized:
                 mw.showMinimized()
-            else:
-                mw.show()
-                qt_runtime.safe_raise(mw)
-                qt_runtime.safe_activate_window(mw)
+                QtWidgets.QApplication.processEvents()
+            mw.hide()
             QtWidgets.QApplication.processEvents()
+
+        delay_ms = max(0, int(mw._cfg("OCR_CAPTURE_PREPARE_DELAY_MS", 120)))
+        if delay_ms > 0:
+            time.sleep(delay_ms / 1000.0)
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            capture_path = Path(tmp.name)
+
+        try:
+            selected_pixmap, select_error = select_region_with_macos_screencapture(
+                capture_path,
+                timeout_s=float(mw._cfg("OCR_CAPTURE_TIMEOUT_S", 45.0)),
+            )
+        finally:
+            try:
+                capture_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            if hide_for_capture:
+                _restore_main_window_after_capture(
+                    mw,
+                    was_visible=was_visible,
+                    was_minimized=was_minimized,
+                )
 
     if selected_pixmap is None and select_error == "screencapture-not-found":
         return _capture_region_with_qt_selector(mw)
@@ -1834,6 +1926,7 @@ def _extract_names_from_ocr_files(
     *,
     ocr_cmd: str = "",
     cfg: dict,
+    cancel_check=None,
 ) -> tuple[list[str], str, str | None]:
     ocr_import = _ocr_import_module()
     visual_precount_rows = _estimate_expected_rows_from_paths(paths, cfg)
@@ -1971,8 +2064,15 @@ def _start_ocr_async_import(
 ) -> None:
     temp_paths: list[Path] = []
     async_started = False
+    _ocr_runtime_trace.trace(
+        "ocr_async_import:start",
+        role=str(role or ""),
+        closing=bool(getattr(mw, "_closing", False)),
+        overlay=bool(busy_overlay_shown),
+    )
     try:
         if bool(getattr(mw, "_closing", False)):
+            _ocr_runtime_trace.trace("ocr_async_import:abort_closing")
             _hide_ocr_busy_overlay(mw, active=busy_overlay_shown)
             _restore_override_cursor()
             try:
@@ -1980,28 +2080,61 @@ def _start_ocr_async_import(
             except Exception:
                 pass
             return
+        # Avoid concurrent easyocr/torch imports between background preload
+        # and active OCR capture in onefile runtime.
+        cancel_preload = getattr(mw, "_cancel_ocr_background_preload", None)
+        if callable(cancel_preload):
+            try:
+                cancel_preload()
+            except Exception:
+                pass
+        stop_preload_job = getattr(mw, "_stop_ocr_background_preload_job", None)
+        if callable(stop_preload_job):
+            try:
+                stop_preload_job(reason="active_ocr_capture", wait_ms=1600)
+            except Exception:
+                pass
 
         runtime_cfg = _ocr_runtime_cfg_snapshot(mw)
         ocr_import = _ocr_import_module()
         easyocr_kwargs = _easyocr_resolution_kwargs(runtime_cfg)
-        availability_fn = getattr(ocr_import, "easyocr_available", None)
-        if callable(availability_fn):
-            ready = bool(availability_fn(**easyocr_kwargs))
+        preload_runtime_ready = (
+            str(runtime_cfg.get("engine", "easyocr")).strip().casefold() == "easyocr"
+            and bool(getattr(mw, "_ocr_preload_done", False))
+            and bool(getattr(mw, "_ocr_runtime_activated", False))
+            and bool(mw._cfg("OCR_PRELOAD_INPROCESS_CACHE_WARMUP", True))
+        )
+        if preload_runtime_ready:
+            ready = True
+            _ocr_runtime_trace.trace("ocr_availability_probe:skipped", reason="preload_runtime_ready")
         else:
-            ready = False
+            availability_fn = getattr(ocr_import, "easyocr_available", None)
+            if callable(availability_fn):
+                ready = bool(availability_fn(**easyocr_kwargs))
+            else:
+                ready = False
+        _ocr_runtime_trace.trace("ocr_availability_probe:done", ready=bool(ready))
         if not ready:
             diag_fn = getattr(ocr_import, "easyocr_resolution_diagnostics", None)
             if callable(diag_fn):
                 diag = str(diag_fn(**easyocr_kwargs))
             else:
                 diag = "easyocr-diagnostics-unavailable"
+            diag_l = diag.lower()
+            if "import=failed" in diag_l or "import_error=" in diag_l:
+                reason = "easyocr-import-failed"
+            elif "reader=failed" in diag_l:
+                if "missing " in diag_l and "download" in diag_l and "disabled" in diag_l:
+                    reason = "easyocr-models-missing-offline"
+                else:
+                    reason = "easyocr-reader-failed"
+            else:
+                reason = "easyocr-not-ready"
+            _ocr_runtime_trace.trace("ocr_availability_probe:not_ready", reason=reason, diag=diag)
             QtWidgets.QMessageBox.warning(
                 mw,
                 i18n.t("ocr.error_title"),
-                i18n.t(
-                    "ocr.error_run_failed",
-                    reason="easyocr-not-ready (missing language models / downloads disabled?)",
-                )
+                i18n.t("ocr.error_run_failed", reason=reason)
                 + "\n\n"
                 + diag,
             )
@@ -2011,6 +2144,7 @@ def _start_ocr_async_import(
         temp_paths, prep_errors = _prepare_ocr_variant_files(mw, selected_pixmap, runtime_cfg)
         if not temp_paths:
             reason = "; ".join(prep_errors) if prep_errors else "image-save-failed"
+            _ocr_runtime_trace.trace("ocr_async_import:image_prepare_failed", reason=reason)
             QtWidgets.QMessageBox.warning(
                 mw,
                 i18n.t("ocr.error_title"),
@@ -2020,7 +2154,16 @@ def _start_ocr_async_import(
             return
 
         thread = QtCore.QThread(mw)
+        try:
+            role_suffix = str(role or "").strip().casefold() or "role"
+            thread.setObjectName(f"ocr_async_thread_{role_suffix}")
+        except Exception:
+            pass
         worker = _OCRExtractWorker(temp_paths, runtime_cfg)
+        try:
+            worker.setObjectName("ocr_async_worker")
+        except Exception:
+            pass
         worker.moveToThread(thread)
         relay = _OCRResultRelay(mw)
         job = {
@@ -2031,6 +2174,11 @@ def _start_ocr_async_import(
             "role": role,
         }
         setattr(mw, "_ocr_async_job", job)
+        _ocr_runtime_trace.trace(
+            "ocr_async_import:worker_created",
+            role=str(role or ""),
+            image_count=len(list(temp_paths or [])),
+        )
 
         def _finalize_job() -> None:
             current = getattr(mw, "_ocr_async_job", None)
@@ -2067,6 +2215,13 @@ def _start_ocr_async_import(
 
         def _handle_result(names: list[str], raw_text: str, ocr_error: str | None) -> None:
             _finalize_job()
+            _ocr_runtime_trace.trace(
+                "ocr_async_import:worker_result",
+                role=str(role or ""),
+                names=len(list(names or [])),
+                has_error=bool(ocr_error),
+                error=str(ocr_error or ""),
+            )
             debug_mode = (
                 bool(runtime_cfg.get("debug_show_report", False))
                 or bool(runtime_cfg.get("debug_include_report_text", False))
@@ -2153,6 +2308,11 @@ def _start_ocr_async_import(
 
         def _handle_worker_error(reason: str) -> None:
             _finalize_job()
+            _ocr_runtime_trace.trace(
+                "ocr_async_import:worker_error",
+                role=str(role or ""),
+                reason=str(reason or "worker-error"),
+            )
             QtWidgets.QMessageBox.warning(
                 mw,
                 i18n.t("ocr.error_title"),
@@ -2221,9 +2381,11 @@ def _start_ocr_async_import(
             thread.start(QtCore.QThread.LowPriority)
         except Exception:
             thread.start()
+        _ocr_runtime_trace.trace("ocr_async_import:worker_thread_started", role=str(role or ""))
         async_started = True
         return
     except Exception as exc:
+        _ocr_runtime_trace.trace("ocr_async_import:exception", role=str(role or ""), error=repr(exc))
         _cleanup_temp_paths(temp_paths)
         _hide_ocr_busy_overlay(mw, active=busy_overlay_shown)
         _restore_override_cursor()
@@ -2242,9 +2404,12 @@ def _start_ocr_async_import(
 
 def on_role_ocr_import_clicked(mw, role_key: str) -> None:
     role = str(role_key or "").strip().casefold()
+    _ocr_runtime_trace.trace("ocr_button_clicked", role=role)
     if not mw._role_ocr_import_available(role):
+        _ocr_runtime_trace.trace("ocr_button_click_ignored", role=role, reason="not_available")
         return
     if getattr(mw, "_ocr_async_job", None):
+        _ocr_runtime_trace.trace("ocr_button_click_ignored", role=role, reason="async_job_running")
         return
     _mark_ocr_runtime_activated(mw)
     _cancel_ocr_cache_release(mw)
@@ -2257,6 +2422,7 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
     try:
         selected_pixmap, select_error = capture_region_for_ocr(mw)
         if selected_pixmap is None:
+            _ocr_runtime_trace.trace("ocr_capture_cancelled_or_failed", role=role, reason=str(select_error or "cancelled"))
             _handle_ocr_selection_error(mw, select_error)
             mw._update_role_ocr_buttons_enabled()
             return
@@ -2275,6 +2441,7 @@ def on_role_ocr_import_clicked(mw, role_key: str) -> None:
         )
         async_dispatched = True
     except Exception as exc:
+        _ocr_runtime_trace.trace("ocr_button_handler_exception", role=role, error=repr(exc))
         _restore_override_cursor()
         setattr(mw, "_ocr_async_job", None)
         QtWidgets.QMessageBox.warning(

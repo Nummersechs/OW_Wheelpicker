@@ -7,23 +7,26 @@ This file documents the OCR subsystem end-to-end:
 - expected behavior/output
 - practical checklist for validation and regression tests
 
-Scope: `owpicker_mvc/controller/ocr/*`
+Scope:
+- `owpicker_mvc/controller/ocr/*`
+- `owpicker_mvc/controller/main_window_parts/main_window_ocr.py`
 
 ---
 
 ## OCR Flow (Expected Behavior)
-1. Capture starts via `on_role_ocr_import_clicked` in `ocr_capture_ops.py`.
-2. Region is selected (`Qt selector` or `macOS native screencapture`).
-3. OCR image variants are generated (`build_ocr_pixmap_variants`).
-4. Runtime config snapshot is created (`_ocr_runtime_cfg_snapshot`) from `config.py`.
-5. EasyOCR readiness is checked (`easyocr_available`).
-6. OCR passes run:
+1. Optional background preload warms EasyOCR readiness/cache (`main_window_ocr.py`).
+2. Capture starts via `on_role_ocr_import_clicked` in `ocr_capture_ops.py`.
+3. Region is selected (`Qt selector` or `macOS native screencapture`).
+4. OCR image variants are generated (`build_ocr_pixmap_variants`).
+5. Runtime config snapshot is created (`_ocr_runtime_cfg_snapshot`) from `config.py`.
+6. EasyOCR readiness is checked (`easyocr_available`).
+7. OCR passes run:
 - primary pass
 - optional recall retry pass
 - optional row-segmentation pass
-7. Candidate extraction, merge, dedupe, and ordering are applied.
-8. Final candidates are mapped into role import flow (`ocr_role_import.py`) and shown in picker.
-9. Debug/trace reports and logs are written when enabled.
+8. Candidate extraction, merge, dedupe, and ordering are applied.
+9. Final candidates are mapped into role import flow (`ocr_role_import.py`) and shown in picker.
+10. Debug/trace reports and logs are written when enabled.
 
 Expected result:
 - stable candidate count near expected rows
@@ -34,6 +37,12 @@ Expected result:
 ---
 
 ## Feature Map (by Module)
+## `main_window_ocr.py`
+- OCR preload scheduling/timer/worker-thread orchestration
+- OCR button enable/disable gating waehrend preload
+- OCR loading tooltip behavior waehrend preload block
+- OCR runtime cache release scheduling
+
 ## `ocr_capture_ops.py`
 - capture orchestration, async worker launch, busy overlay
 - variant image generation
@@ -86,6 +95,11 @@ Expected result:
 ---
 
 ## Hidden Logic and Non-Obvious Rules
+## Preload + startup interaction
+- OCR preload runs in a low-priority background thread and uses a subprocess probe plus optional in-process cache warmup.
+- OCR buttons can stay disabled with loading-tooltip until preload state flips to attempted/done.
+- Startup warmup can optionally include OCR preload waiting logic without blocking forever (`STARTUP_OCR_PRELOAD_*` budgets).
+
 ## Language + model behavior
 - CJK languages are split into dedicated EasyOCR groups with English pairing.
 - Multi-group OCR can return partial readiness (`some groups ready, some missing`).
@@ -140,6 +154,7 @@ Expected result:
 ## Import behavior
 - If OCR is not ready, import aborts with user-facing message and diagnostics.
 - If OCR is ready, async extraction starts and overlay state is restored on completion.
+- On first cold runtime, import may still pay torch/easyocr init cost if preload was skipped/failed.
 
 ---
 
@@ -209,6 +224,7 @@ Expected result:
 - [ ] `PYTHONPATH=owpicker_mvc python3 -m unittest owpicker_mvc.tests.test_ocr_import -q`
 - [ ] `PYTHONPATH=owpicker_mvc python3 -m unittest owpicker_mvc.tests.test_ocr_capture_ops -q`
 - [ ] `PYTHONPATH=owpicker_mvc python3 -m unittest owpicker_mvc.tests.test_main_window_ocr_import -q`
+- [ ] `PYTHONPATH=owpicker_mvc python3 -m unittest owpicker_mvc.tests.test_main_window_input_filter -q`
 
 ---
 
@@ -406,4 +422,3 @@ Expected result:
 - class `_OCRExtractWorker`
 - def `_start_ocr_async_import`
 - def `on_role_ocr_import_clicked`
-

@@ -20,6 +20,7 @@ TRANSLATIONS_EN = {
     # Controls
     "controls.spin_all": "🎰 Spin",
     "controls.spin_all_tooltip": "Start a global spin with the selected spin mode.",
+    "controls.spin_all_disabled_tooltip": "Unavailable: No result possible with this combination.",
     "controls.spin_mode_role": "Role",
     "controls.spin_mode_open": "Open {count}",
     "controls.spin_mode_tooltip": "Spin mode: Role uses each selected role wheel with its own list. Open still spins all selected role wheels; the Open value only controls how many total players are drawn from one shared name pool.",
@@ -93,6 +94,7 @@ TRANSLATIONS_EN = {
     "wheel.spin_map": "🔁 Spin map",
     "wheel.spin_single_map": "🔁 Spin this map",
     "wheel.spin_button_tooltip": "Spin this wheel.",
+    "wheel.spin_button_disabled_no_names_tooltip": "Add at least one active name to spin this wheel.",
     "wheel.show_names": "Show names",
     "wheel.show_names_short": "Show",
     "wheel.show_names_tooltip": "Show names: show or hide labels on wheel segments.",

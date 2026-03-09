@@ -46,6 +46,47 @@ _FAST_FILTER_EVENT_TYPES = (
 
 
 class MainWindowInputMixin:
+    def _sync_disabled_spin_all_tooltip(
+        self,
+        global_pos: QtCore.QPoint,
+        *,
+        force_show: bool = False,
+    ) -> bool:
+        btn = getattr(self, "btn_spin_all", None)
+        if btn is None:
+            return False
+        if btn.isEnabled():
+            if getattr(self, "_disabled_spin_all_hover_active", False):
+                QtWidgets.QToolTip.hideText()
+                self._disabled_spin_all_hover_active = False
+            return False
+        tip = str(btn.toolTip() or "").strip()
+        if not tip:
+            tip = i18n.t("controls.spin_all_disabled_tooltip")
+            try:
+                btn.setToolTip(tip)
+            except Exception:
+                pass
+        if not tip:
+            return False
+        try:
+            top_left = btn.mapToGlobal(QtCore.QPoint(0, 0))
+            inside = QtCore.QRect(top_left, btn.size()).contains(global_pos)
+        except Exception:
+            inside = False
+        if not inside:
+            if getattr(self, "_disabled_spin_all_hover_active", False):
+                QtWidgets.QToolTip.hideText()
+                self._disabled_spin_all_hover_active = False
+            return False
+        if force_show or not getattr(self, "_disabled_spin_all_hover_active", False):
+            try:
+                QtWidgets.QToolTip.showText(global_pos, tip, btn, btn.rect())
+            except Exception:
+                return False
+        self._disabled_spin_all_hover_active = True
+        return True
+
     def eventFilter(self, obj, event):
         etype_int = int(event.type())
         hover_forward_enabled = getattr(self, "_hover_forward_mousemove_enabled", None)
@@ -60,6 +101,16 @@ class MainWindowInputMixin:
             and etype_int not in _MOUSE_CLICK_EVENT_TYPES
         ):
             return super().eventFilter(obj, event)
+
+        if etype_int == int(QtCore.QEvent.ToolTip):
+            if isinstance(event, QtGui.QHelpEvent):
+                if self._sync_disabled_spin_all_tooltip(event.globalPos(), force_show=True):
+                    return True
+        elif etype_int == _MOUSE_MOVE_EVENT_TYPE:
+            if isinstance(event, QtGui.QMouseEvent):
+                self._sync_disabled_spin_all_tooltip(event.globalPosition().toPoint())
+            else:
+                self._sync_disabled_spin_all_tooltip(QtGui.QCursor.pos())
 
         if self._should_block_startup_focus_event(etype_int):
             return True

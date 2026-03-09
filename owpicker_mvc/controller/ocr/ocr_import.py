@@ -3,13 +3,17 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
+import importlib
 from pathlib import Path
 from difflib import SequenceMatcher
 import gc
 import re
 import sys
+import threading
+import time
 from typing import Any, Iterable
 from logic.name_normalization import normalize_name_alnum_key, normalize_name_tokens
+from . import ocr_runtime_trace as _ocr_runtime_trace
 
 
 @dataclass
@@ -57,6 +61,88 @@ _EASYOCR_LANG_ALIAS: dict[str, str] = {
     "ch_tra": "ch_tra",
 }
 _EASYOCR_RESTRICTED_LANGS: set[str] = {"ch_sim", "ch_tra", "ja", "ko"}
+_EASYOCR_IMPORT_LOCK = threading.Lock()
+_TORCH_RUNTIME_IMPORT_LOCK = threading.RLock()
+_OCR_CJK_SCRIPT_RE = re.compile(
+    "["
+    "\u3040-\u30ff"  # Hiragana/Katakana
+    "\u3400-\u4dbf"  # CJK Ext A
+    "\u4e00-\u9fff"  # CJK Unified
+    "\uf900-\ufaff"  # CJK Compatibility Ideographs
+    "\uac00-\ud7af"  # Hangul syllables
+    "]"
+)
+
+
+def _looks_like_partial_torch_import_error(exc: Exception) -> bool:
+    text = str(exc or "").strip().lower()
+    if not text:
+        return False
+    if "partially initialized module 'torch'" in text:
+        return True
+    if "cannot import name 'nn' from partially initialized module 'torch'" in text:
+        return True
+    return False
+
+
+def _looks_like_torch_docstring_reimport_error(exc: Exception) -> bool:
+    text = str(exc or "").strip().lower()
+    if not text:
+        return False
+    return "_has_torch_function" in text and "already has a docstring" in text
+
+
+def _contains_cjk_script(text: str) -> bool:
+    token = str(text or "").strip()
+    if not token:
+        return False
+    return bool(_OCR_CJK_SCRIPT_RE.search(token))
+
+
+def _purge_import_modules(prefixes: tuple[str, ...]) -> int:
+    """
+    Best-effort cleanup for broken partial-import states.
+    Used only after transient torch/easyocr import failures.
+    """
+    normalized = tuple(str(prefix or "").strip() for prefix in tuple(prefixes or ()) if str(prefix or "").strip())
+    if not normalized:
+        return 0
+    removed = 0
+    for name in list(sys.modules.keys()):
+        token = str(name or "")
+        for prefix in normalized:
+            if token == prefix or token.startswith(prefix + "."):
+                try:
+                    sys.modules.pop(token, None)
+                    removed += 1
+                except Exception:
+                    pass
+                break
+    try:
+        importlib.invalidate_caches()
+    except Exception:
+        pass
+    return removed
+
+
+def _import_torch_module():
+    with _TORCH_RUNTIME_IMPORT_LOCK:
+        _ocr_runtime_trace.trace(
+            "torch_import:start",
+            frozen=bool(getattr(sys, "frozen", False)),
+            executable=sys.executable,
+        )
+        try:
+            import torch  # type: ignore
+        except Exception as exc:
+            _ocr_runtime_trace.trace("torch_import:error", error=repr(exc))
+            raise
+    _ocr_runtime_trace.trace(
+        "torch_import:ok",
+        torch_file=getattr(torch, "__file__", None),
+        torch_version=getattr(torch, "__version__", None),
+    )
+    return torch
 
 
 def _parse_ocr_lang_tokens(value: str | None) -> list[str]:
@@ -166,7 +252,7 @@ def _normalize_easyocr_gpu_mode(value: bool | str | None) -> str:
 @lru_cache(maxsize=1)
 def _torch_device_support() -> tuple[bool, bool]:
     try:
-        import torch  # type: ignore
+        torch = _import_torch_module()
     except Exception:
         return (False, False)
     has_cuda = False
@@ -184,9 +270,15 @@ def _torch_device_support() -> tuple[bool, bool]:
 
 def _resolve_easyocr_device(mode: str) -> str:
     normalized = _normalize_easyocr_gpu_mode(mode)
-    has_cuda, has_mps = _torch_device_support()
     if normalized == "cpu":
         return "cpu"
+    has_cuda = False
+    has_mps = False
+    # In frozen onefile builds, probing torch before the first real OCR import
+    # can trigger unstable partial-import states on some Windows setups.
+    # Keep auto mode conservative there; explicit "cuda"/"mps" still probes.
+    if normalized in {"cuda", "mps"} or not bool(getattr(sys, "frozen", False)):
+        has_cuda, has_mps = _torch_device_support()
     if normalized == "cuda":
         return "cuda" if has_cuda else "cpu"
     if normalized == "mps":
@@ -209,7 +301,7 @@ def _patch_dataloader_pin_memory(enable: bool):
         yield
         return
     try:
-        import torch  # type: ignore
+        torch = _import_torch_module()
     except Exception:
         yield
         return
@@ -294,11 +386,87 @@ def _discover_easyocr_model_dir() -> str | None:
 
 
 def _import_easyocr_module() -> tuple[Any | None, str | None]:
-    try:
-        import easyocr  # type: ignore
-    except Exception as exc:
-        return None, f"easyocr-import-error:{exc}"
-    return easyocr, None
+    # Serialize easyocr/torch imports to avoid transient partial-init states in
+    # packaged Windows runs where OCR may warm up while user triggers OCR.
+    with _EASYOCR_IMPORT_LOCK:
+        is_win_frozen = bool(getattr(sys, "frozen", False)) and sys.platform.startswith("win")
+        attempts = 2 if is_win_frozen else 4
+        delay_s = 0.15
+        last_exc: Exception | None = None
+        previous_transient = False
+        _ocr_runtime_trace.trace(
+            "easyocr_import:start",
+            attempts=attempts,
+            frozen=bool(getattr(sys, "frozen", False)),
+            optimize=getattr(sys.flags, "optimize", 0),
+            executable=sys.executable,
+        )
+        for attempt in range(attempts):
+            if previous_transient and (not is_win_frozen):
+                purged = _purge_import_modules(("easyocr", "torch", "torchvision"))
+                _ocr_runtime_trace.trace(
+                    "easyocr_import:purge_modules",
+                    attempt=int(attempt + 1),
+                    removed=int(purged),
+                )
+                try:
+                    gc.collect()
+                except Exception:
+                    pass
+            existing = sys.modules.get("easyocr")
+            if existing is not None:
+                try:
+                    if getattr(existing, "Reader", None) is not None:
+                        _ocr_runtime_trace.trace("easyocr_import:reuse_existing", attempt=int(attempt + 1))
+                        return existing, None
+                except Exception:
+                    pass
+                try:
+                    sys.modules.pop("easyocr", None)
+                    _ocr_runtime_trace.trace("easyocr_import:drop_stale_module", attempt=int(attempt + 1))
+                except Exception:
+                    pass
+            try:
+                _ocr_runtime_trace.trace("easyocr_import:attempt", attempt=int(attempt + 1))
+                with _TORCH_RUNTIME_IMPORT_LOCK:
+                    # Import torch first; this avoids easyocr triggering a
+                    # nested/partial torch init in some frozen Windows runs.
+                    _import_torch_module()
+                    easyocr = importlib.import_module("easyocr")  # type: ignore
+                if getattr(easyocr, "Reader", None) is None:
+                    raise RuntimeError("easyocr module loaded without Reader")
+                _ocr_runtime_trace.trace(
+                    "easyocr_import:ok",
+                    attempt=int(attempt + 1),
+                    easyocr_file=getattr(easyocr, "__file__", None),
+                )
+                return easyocr, None
+            except Exception as exc:
+                last_exc = exc
+                transient = (
+                    _looks_like_partial_torch_import_error(exc)
+                    or _looks_like_torch_docstring_reimport_error(exc)
+                )
+                previous_transient = bool(transient)
+                _ocr_runtime_trace.trace(
+                    "easyocr_import:error",
+                    attempt=int(attempt + 1),
+                    transient=bool(transient),
+                    error=repr(exc),
+                )
+                # In frozen Windows builds, repeating torch re-import attempts
+                # can enter a persistent docstring/circular state. Fail fast and
+                # let the next app run start from a clean interpreter.
+                if transient and is_win_frozen:
+                    return None, f"easyocr-import-error:{exc}"
+                if (not transient) or attempt >= (attempts - 1):
+                    return None, f"easyocr-import-error:{exc}"
+                try:
+                    time.sleep(delay_s * float(attempt + 1))
+                except Exception:
+                    pass
+        _ocr_runtime_trace.trace("easyocr_import:failed", error=repr(last_exc))
+        return None, f"easyocr-import-error:{last_exc}"
 
 
 def _runtime_search_roots() -> list[Path]:
@@ -495,6 +663,7 @@ def easyocr_resolution_diagnostics(
     easyocr_mod, import_error = _import_easyocr_module()
     lines = [
         f"engine=easyocr",
+        f"python_optimize={getattr(sys.flags, 'optimize', 0)}",
         f"requested_lang={requested_lang}",
         f"normalized_langs={'+'.join(parsed_langs)}",
         "lang_groups=" + ";".join("+".join(group) for group in lang_groups),
@@ -611,13 +780,18 @@ def clear_ocr_runtime_caches(
     collect_garbage: bool = True,
 ) -> None:
     """Release cached OCR runtime resources after idle periods."""
+    _ocr_runtime_trace.trace(
+        "ocr_cache_clear:start",
+        release_gpu=bool(release_gpu),
+        collect_garbage=bool(collect_garbage),
+    )
     try:
         _cached_easyocr_reader.cache_clear()
     except Exception:
         pass
     if release_gpu:
         try:
-            import torch  # type: ignore
+            torch = _import_torch_module()
 
             if bool(getattr(torch, "cuda", None)) and torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -628,6 +802,7 @@ def clear_ocr_runtime_caches(
             gc.collect()
         except Exception:
             pass
+    _ocr_runtime_trace.trace("ocr_cache_clear:done")
 
 
 def _easyocr_sort_key(detection: Any) -> tuple[float, float]:
@@ -759,6 +934,10 @@ def _easyocr_should_replace_overlapping_token(
     existing: dict[str, float | str],
     candidate: dict[str, float | str],
 ) -> bool:
+    existing_text = str(existing.get("text", "") or "").strip()
+    candidate_text = str(candidate.get("text", "") or "").strip()
+    existing_has_cjk = _contains_cjk_script(existing_text)
+    candidate_has_cjk = _contains_cjk_script(candidate_text)
     try:
         existing_group = int(float(existing.get("group_index", 0.0)))
     except Exception:
@@ -778,10 +957,16 @@ def _easyocr_should_replace_overlapping_token(
         candidate_conf = -1.0
 
     if existing_group == 0 and candidate_group > 0:
+        if candidate_has_cjk and not existing_has_cjk:
+            # Keep script-specific OCR (ja/ko/ch_*) when primary latin reader
+            # produced an overlapping non-CJK fallback token.
+            return candidate_conf >= max(45.0, existing_conf - 8.0)
         # Keep primary-group text unless it is very weak and the secondary
         # candidate is clearly stronger at the same position.
         return existing_conf < 30.0 and candidate_conf >= (existing_conf + 18.0)
     if existing_group > 0 and candidate_group == 0:
+        if existing_has_cjk and not candidate_has_cjk:
+            return candidate_conf >= (existing_conf + 25.0)
         # Prefer primary group whenever it is not significantly worse.
         return candidate_conf >= (existing_conf - 5.0)
 

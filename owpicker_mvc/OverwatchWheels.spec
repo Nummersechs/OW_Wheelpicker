@@ -5,7 +5,6 @@ from pathlib import Path
 from PyInstaller.utils.hooks import (
     collect_data_files,
     collect_dynamic_libs,
-    collect_submodules,
 )
 
 
@@ -46,8 +45,9 @@ STRIP_BINARIES = _env_flag("OW_STRIP", (RELEASE_BUILD or MIN_SIZE_BUILD) and os.
 if STRIP_BINARIES and shutil.which("strip") is None:
     print("[spec] strip requested but no 'strip' tool was found; disabling strip.")
     STRIP_BINARIES = False
-# UPX helps size but slows startup due decompression; prefer fast startup for onedir builds.
-ENABLE_UPX = _env_flag("OW_UPX", DIST_MODE == "onefile")
+# UPX can cause runtime instability with large torch/cv2 bundles in onefile builds.
+# Keep it opt-in via OW_UPX=1.
+ENABLE_UPX = _env_flag("OW_UPX", False)
 INCLUDE_QT_MULTIMEDIA = not MIN_SIZE_BUILD
 # Requests is optional (online sync only). Disable by default to keep runtime lean.
 INCLUDE_REQUESTS = _env_flag("OW_INCLUDE_REQUESTS", False)
@@ -59,26 +59,27 @@ if OCR_ENGINE != "easyocr":
     print(f"[spec] Unsupported OW_OCR_ENGINE={OCR_ENGINE!r}; forcing 'easyocr'.")
     OCR_ENGINE = "easyocr"
 INCLUDE_EASYOCR = _env_flag("OW_INCLUDE_EASYOCR", True)
-if _env_flag("OW_INCLUDE_OCR_BUNDLE", False):
-    print("[spec] OW_INCLUDE_OCR_BUNDLE is ignored; OCR bundle mode is disabled.")
-INCLUDE_OCR_BUNDLE = False
-OCR_BUNDLE_MODE = (os.environ.get("OW_OCR_BUNDLE_MODE") or "minimal").strip().lower()
-if OCR_BUNDLE_MODE not in {"minimal", "full"}:
-    raise SystemExit(
-        "OW_OCR_BUNDLE_MODE must be one of: minimal, full "
-        f"(got: {OCR_BUNDLE_MODE!r})"
+LEGACY_OCR_BUNDLE_REQUESTED = _env_flag("OW_INCLUDE_OCR_BUNDLE", False)
+if LEGACY_OCR_BUNDLE_REQUESTED:
+    print("[spec] OW_INCLUDE_OCR_BUNDLE is obsolete and ignored (EasyOCR-only build).")
+try:
+    PY_OPTIMIZE_LEVEL = int(str(os.environ.get("OW_PY_OPTIMIZE", "0")).strip())
+except Exception:
+    PY_OPTIMIZE_LEVEL = 0
+if PY_OPTIMIZE_LEVEL < 0:
+    PY_OPTIMIZE_LEVEL = 0
+if PY_OPTIMIZE_LEVEL > 2:
+    PY_OPTIMIZE_LEVEL = 2
+# Torch/EasyOCR can break under optimized bytecode in frozen builds
+# (e.g. docstring/circular import issues). Force safe mode.
+if INCLUDE_EASYOCR and PY_OPTIMIZE_LEVEL > 0:
+    print(
+        f"[spec] OW_PY_OPTIMIZE={PY_OPTIMIZE_LEVEL} is unsafe with EasyOCR/torch; "
+        "forcing 0."
     )
-OCR_BUNDLE_LANGS = str(os.environ.get("OW_OCR_LANGS", "deu+eng")).strip()
-OCR_BUNDLE_INCLUDE_OSD = _env_flag("OW_OCR_INCLUDE_OSD", True)
+    PY_OPTIMIZE_LEVEL = 0
 
 _AUDIO_EXTENSIONS = {".wav", ".ogg", ".mp3"}
-_OCR_FOLDER_NAMES = ("OCR", "ocr", "Tesseract-OCR", "Tesseract", "tesseract")
-_OCR_EXECUTABLE_NAMES = ("tesseract.exe", "tesseract")
-_OCR_EXTERNAL_DIR_ENV_VARS = ("OW_TESSERACT_DIR", "TESSERACT_ROOT")
-_WINDOWS_TESSERACT_DIR_CANDIDATES = (
-    Path("C:/Program Files/Tesseract-OCR"),
-    Path("C:/Program Files (x86)/Tesseract-OCR"),
-)
 _EASYOCR_MODEL_HINTS = (
     Path("EasyOCR/model"),
     Path("easyocr/model"),
@@ -102,33 +103,6 @@ def _audio_datas(folder_name: str, target_name: str) -> list[tuple[str, str]]:
     return [(str(p), target_name) for p in files]
 
 
-def _external_ocr_candidate_dirs() -> list[Path]:
-    candidates: list[Path] = []
-    for env_name in _OCR_EXTERNAL_DIR_ENV_VARS:
-        value = str(os.environ.get(env_name, "")).strip()
-        if value:
-            candidates.append(Path(value).expanduser())
-    if os.name == "nt":
-        candidates.extend(_WINDOWS_TESSERACT_DIR_CANDIDATES)
-
-    unique: list[Path] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        try:
-            key = str(candidate.resolve()).lower()
-        except Exception:
-            key = str(candidate).lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(candidate)
-    return unique
-
-
-def _existing_external_ocr_dirs() -> list[Path]:
-    return [candidate for candidate in _external_ocr_candidate_dirs() if candidate.exists() and candidate.is_dir()]
-
-
 def _unique_paths(paths: list[Path]) -> list[Path]:
     unique: list[Path] = []
     seen: set[str] = set()
@@ -142,82 +116,6 @@ def _unique_paths(paths: list[Path]) -> list[Path]:
         seen.add(key)
         unique.append(path)
     return unique
-
-
-def _local_ocr_candidate_dirs() -> list[Path]:
-    candidates: list[Path] = []
-    for root in (project_root, project_root.parent):
-        for folder_name in _OCR_FOLDER_NAMES:
-            folder = root / folder_name
-            if folder.exists() and folder.is_dir():
-                candidates.append(folder)
-    return _unique_paths(candidates)
-
-
-def _candidate_ocr_source_dirs() -> list[Path]:
-    return _unique_paths(_local_ocr_candidate_dirs() + _existing_external_ocr_dirs())
-
-
-def _find_tesseract_executable(folder: Path) -> Path | None:
-    candidates: list[Path] = []
-    for name in _OCR_EXECUTABLE_NAMES:
-        try:
-            candidates.extend(path for path in folder.rglob(name) if path.is_file())
-        except Exception:
-            continue
-    if not candidates:
-        return None
-
-    def _rank(path: Path) -> tuple[int, int, int]:
-        try:
-            rel = path.relative_to(folder)
-            depth = len(rel.parts)
-        except Exception:
-            depth = 999
-        preferred_name = 0 if path.name.lower() == "tesseract.exe" else 1
-        return (depth, preferred_name, len(str(path)))
-
-    candidates.sort(key=_rank)
-    return candidates[0]
-
-
-def _pick_ocr_source_dir() -> Path | None:
-    for candidate in _candidate_ocr_source_dirs():
-        if _find_tesseract_executable(candidate) is not None:
-            return candidate
-    return None
-
-
-def _parse_ocr_langs(raw_value: str) -> list[str]:
-    text = str(raw_value or "")
-    normalized = text.replace(",", "+").replace(";", "+").replace(" ", "+")
-    langs: list[str] = []
-    for token in normalized.split("+"):
-        value = token.strip().lower()
-        if value and value not in langs:
-            langs.append(value)
-    return langs
-
-
-def _requested_ocr_langs() -> list[str]:
-    langs = _parse_ocr_langs(OCR_BUNDLE_LANGS)
-    if not langs:
-        langs = ["eng"]
-    if OCR_BUNDLE_INCLUDE_OSD and "osd" not in langs:
-        langs.append("osd")
-    return langs
-
-
-def _first_tessdata_dir(candidates: list[Path]) -> Path | None:
-    for candidate in _unique_paths(candidates):
-        if not candidate.exists() or not candidate.is_dir():
-            continue
-        try:
-            if any(p.is_file() and p.suffix.lower() == ".traineddata" for p in candidate.iterdir()):
-                return candidate
-        except Exception:
-            continue
-    return None
 
 
 def _target_dir_for_relative(base_dir: Path, file_path: Path, root_target: str) -> str:
@@ -318,98 +216,6 @@ def _append_unique_strings(target: list[str], entries: list[str]) -> None:
         target.append(value)
 
 
-def _ocr_bundle_stats_from_files(files: list[Path]) -> tuple[int, int, list[str]]:
-    file_count = 0
-    total_bytes = 0
-    traineddata_files: list[str] = []
-    for path in files:
-        if not path.is_file():
-            continue
-        file_count += 1
-        try:
-            total_bytes += int(path.stat().st_size)
-        except Exception:
-            pass
-        if path.suffix.lower() == ".traineddata":
-            traineddata_files.append(path.name)
-    return file_count, total_bytes, sorted(set(traineddata_files))
-
-
-def _collect_minimal_ocr_datas(
-    source_dir: Path,
-    requested_langs: list[str],
-) -> tuple[list[tuple[str, str]], list[Path], Path, Path]:
-    exe_path = _find_tesseract_executable(source_dir)
-    if exe_path is None:
-        raise SystemExit(
-            "OW_OCR_BUNDLE_MODE=minimal but no tesseract executable was found.\n"
-            f"Source dir: {source_dir}"
-        )
-    runtime_dir = exe_path.parent
-    tessdata_dir = _first_tessdata_dir(
-        [
-            runtime_dir / "tessdata",
-            runtime_dir.parent / "tessdata",
-            source_dir / "tessdata",
-        ]
-    )
-    if tessdata_dir is None:
-        raise SystemExit(
-            "OW_OCR_BUNDLE_MODE=minimal but no tessdata folder with *.traineddata was found.\n"
-            f"Source dir: {source_dir}"
-        )
-
-    datas_local: list[tuple[str, str]] = []
-    included_files: list[Path] = []
-    seen_sources: set[str] = set()
-
-    def _add_file(path: Path, target_dir: str) -> None:
-        if not path.exists() or not path.is_file():
-            return
-        try:
-            key = str(path.resolve()).lower()
-        except Exception:
-            key = str(path).lower()
-        if key in seen_sources:
-            return
-        seen_sources.add(key)
-        datas_local.append((str(path), target_dir))
-        included_files.append(path)
-
-    _add_file(exe_path, "OCR")
-    if os.name == "nt":
-        # Include all runtime DLLs from the full OCR source tree and flatten
-        # them next to tesseract.exe. On some Windows bundles, dependent DLLs
-        # can live outside the exe folder (e.g. sibling lib dirs) and would
-        # otherwise fail at process start with WinError 2.
-        for dll in sorted(source_dir.rglob("*.dll")):
-            if "tessdata" in {part.lower() for part in dll.parts}:
-                continue
-            _add_file(dll, "OCR")
-    else:
-        for pattern in ("*.so", "*.so.*", "*.dylib"):
-            for lib in sorted(runtime_dir.rglob(pattern)):
-                _add_file(lib, _target_dir_for_relative(runtime_dir, lib, "OCR"))
-
-    missing_langs: list[str] = []
-    for lang in requested_langs:
-        traineddata_file = tessdata_dir / f"{lang}.traineddata"
-        if traineddata_file.exists() and traineddata_file.is_file():
-            _add_file(traineddata_file, "OCR/tessdata")
-            continue
-        missing_langs.append(lang)
-    if missing_langs:
-        available = sorted(path.stem for path in tessdata_dir.glob("*.traineddata"))
-        raise SystemExit(
-            "OW_OCR_BUNDLE_MODE=minimal is missing required OCR language packs.\n"
-            f"Missing: {missing_langs}\n"
-            f"Requested (OW_OCR_LANGS): {requested_langs}\n"
-            f"Available in {tessdata_dir}: {available}"
-        )
-
-    return datas_local, included_files, exe_path, tessdata_dir
-
-
 datas = []
 datas.extend(_audio_datas("Spin", "Spin"))
 datas.extend(_audio_datas("Ding", "Ding"))
@@ -420,6 +226,16 @@ if INCLUDE_EASYOCR:
     print("[spec] EasyOCR bundle enabled.")
     easyocr_imports = [
         "easyocr",
+        "easyocr.cli",
+        "easyocr.config",
+        "easyocr.craft_utils",
+        "easyocr.detection",
+        "easyocr.export",
+        "easyocr.imgproc",
+        "easyocr.model.model",
+        "easyocr.model.vgg_model",
+        "easyocr.recognition",
+        "easyocr.utils",
         "torch",
         "torchvision",
         "cv2",
@@ -428,10 +244,6 @@ if INCLUDE_EASYOCR:
         "scipy",
         "skimage",
     ]
-    try:
-        easyocr_imports.extend(collect_submodules("easyocr"))
-    except Exception as exc:
-        print(f"[spec] WARNING: failed to collect easyocr submodules: {exc}")
     _append_unique_strings(extra_hiddenimports, easyocr_imports)
 
     for module_name in ("torch", "torchvision"):
@@ -460,64 +272,16 @@ if INCLUDE_EASYOCR:
             "Set OW_EASYOCR_MODEL_DIR to bundle offline models."
         )
 
-if INCLUDE_OCR_BUNDLE:
-    ocr_source_dir = _pick_ocr_source_dir()
-    if ocr_source_dir is None:
-        roots = [str(project_root), str(project_root.parent)]
-        external_candidates = [str(p) for p in _external_ocr_candidate_dirs()]
-        expected = ", ".join(_OCR_FOLDER_NAMES)
-        raise SystemExit(
-            "OW_INCLUDE_OCR_BUNDLE=1 but no OCR bundle folder was found.\n"
-            f"Searched roots: {roots}\n"
-            f"Searched external dirs: {external_candidates}\n"
-            f"Expected one of: {expected}"
-        )
-    if OCR_BUNDLE_MODE == "full":
-        if _find_tesseract_executable(ocr_source_dir) is None:
-            raise SystemExit(
-                "OW_OCR_BUNDLE_MODE=full but no tesseract executable was found.\n"
-                f"Source dir: {ocr_source_dir}"
-            )
-        bundle_files = [path for path in ocr_source_dir.rglob("*") if path.is_file()]
-        file_count, total_bytes, traineddata_files = _ocr_bundle_stats_from_files(bundle_files)
-        if not traineddata_files:
-            raise SystemExit(
-                "OW_OCR_BUNDLE_MODE=full but no tessdata (*.traineddata) was found.\n"
-                f"Source dir: {ocr_source_dir}"
-            )
-        datas.append((str(ocr_source_dir), "OCR"))
-        print(f"[spec] OCR bundle enabled (mode=full). Source dir: {ocr_source_dir}")
-    else:
-        requested_langs = _requested_ocr_langs()
-        ocr_datas, included_files, exe_path, tessdata_dir = _collect_minimal_ocr_datas(
-            ocr_source_dir,
-            requested_langs,
-        )
-        datas.extend(ocr_datas)
-        file_count, total_bytes, traineddata_files = _ocr_bundle_stats_from_files(included_files)
-        print(f"[spec] OCR bundle enabled (mode=minimal). Source dir: {ocr_source_dir}")
-        print(f"[spec] OCR executable: {exe_path}")
-        print(f"[spec] OCR tessdata dir: {tessdata_dir}")
-        print(f"[spec] OCR requested langs: {', '.join(requested_langs)}")
-
-    size_mb = total_bytes / (1024 * 1024)
-    print(f"[spec] OCR bundle files: {file_count} (total ~{size_mb:.1f} MB)")
-    if traineddata_files:
-        print(f"[spec] OCR languages: {', '.join(traineddata_files)}")
-else:
-    print("[spec] OCR bundle disabled (OW_INCLUDE_OCR_BUNDLE=0)")
-
 print(
     "[spec] Build profile="
     f"{BUILD_PROFILE} | dist_mode={DIST_MODE} | strip={STRIP_BINARIES} | upx={ENABLE_UPX} | "
     f"qt_multimedia={INCLUDE_QT_MULTIMEDIA} | requests={INCLUDE_REQUESTS} | "
-    f"ocr_engine={OCR_ENGINE} | include_easyocr={INCLUDE_EASYOCR} | include_ocr_bundle={INCLUDE_OCR_BUNDLE}"
+    f"ocr_engine={OCR_ENGINE} | include_easyocr={INCLUDE_EASYOCR} | py_optimize={PY_OPTIMIZE_LEVEL}"
 )
 
 hiddenimports = [
-    "controller.ocr_import",
+    "controller.ocr.ocr_import",
     "view.screen_region_selector",
-    "view.screen_redion_selector",
     *(
         [
             "PySide6.QtMultimedia",
@@ -600,14 +364,7 @@ excludes = [
     "tensorboard",
     "tensorflow",
     "tensorflow_estimator",
-    "scipy.special._cdflib",
-    "torch.testing",
-    "torch.testing._internal",
     "fsspec.conftest",
-    "numpy.testing",
-    "scipy._lib._testutils",
-    "sympy.testing",
-    "skimage._shared.tester",
     "tkinter",
     "_tkinter",
 ]
@@ -668,7 +425,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     excludes=excludes,
     noarchive=False,
-    optimize=2,
+    optimize=PY_OPTIMIZE_LEVEL,
 )
 if PRUNE_QT_RUNTIME:
     a.binaries[:] = [entry for entry in a.binaries if _keep_toc_entry(entry)]

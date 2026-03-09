@@ -12,6 +12,20 @@ from .. import spin_service
 
 
 class MainWindowSpinMixin:
+    def _apply_spin_all_tooltip_state(self) -> None:
+        btn = getattr(self, "btn_spin_all", None)
+        if btn is None:
+            return
+        is_enabled_fn = getattr(btn, "isEnabled", None)
+        if callable(is_enabled_fn):
+            enabled = bool(is_enabled_fn())
+        else:
+            enabled = bool(getattr(btn, "enabled", True))
+        set_tooltip = getattr(btn, "setToolTip", None)
+        if callable(set_tooltip):
+            key = "controls.spin_all_tooltip" if enabled else "controls.spin_all_disabled_tooltip"
+            set_tooltip(i18n.t(key))
+
     def _on_open_count_changed(self, value: int) -> None:
         self._sync_open_queue_player_count(value, sync_slider=True)
         if hasattr(self, "open_queue") and self.open_queue.is_mode_active():
@@ -97,6 +111,7 @@ class MainWindowSpinMixin:
             # Nur aktiv, wenn allgemein erlaubt UND mindestens ein Rad ausgewählt
             enabled = bool(self.role_mode.can_spin_all())
         self.btn_spin_all.setEnabled(enabled)
+        self._apply_spin_all_tooltip_state()
         self._update_spin_mode_ui()
         if hasattr(self, "player_list_panel"):
             self.player_list_panel.update_button()
@@ -156,6 +171,7 @@ class MainWindowSpinMixin:
         else:
             self._pause_background_ui_services()
             self.btn_spin_all.setEnabled(False)
+            self._apply_spin_all_tooltip_state()
             if hasattr(self, "spin_mode_toggle"):
                 self.spin_mode_toggle.setEnabled(False)
             if hasattr(self, "btn_all_players"):

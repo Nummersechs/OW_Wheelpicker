@@ -121,16 +121,22 @@ def _names_list_style(theme: theme_util.Theme) -> str:
         return cached
     name_edit_border = theme.frame_border if theme.key == "dark" else theme.border
     name_edit_focus_border = theme.border if theme.key == "dark" else theme.primary_hover
+    list_radius = 10
+    viewport_radius = max(0, list_radius - 1)
+    edit_radius = 8
     cached = (
         "QListWidget {"
         f" background:{theme.base}; color:{theme.text};"
-        f" border:1px solid {theme.border}; border-radius:6px; padding:0px; "
+        f" border:1px solid {theme.border}; border-radius:{list_radius}px; padding:0px; "
+        "}"
+        "QListWidget::viewport {"
+        f" background:{theme.base}; border-radius:{viewport_radius}px;"
         "}"
         f"QListWidget::item {{ color:{theme.text}; margin:0px; padding:0px; border:0px; }}"
         f"QListWidget::item:selected {{ background:{theme.alt_base}; color:{theme.text}; }}"
         "QListWidget QLineEdit {"
         f" background:{theme.base}; color:{theme.text};"
-        f" border:1px solid {name_edit_border}; border-radius:4px; padding:0 4px;"
+        f" border:1px solid {name_edit_border}; border-radius:{edit_radius}px; padding:0 6px;"
         f" selection-background-color:{theme.primary}; selection-color:{theme.button_text};"
         "}"
         "QListWidget QLineEdit:focus {"

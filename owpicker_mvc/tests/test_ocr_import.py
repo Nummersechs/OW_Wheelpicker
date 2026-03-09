@@ -675,6 +675,44 @@ class TestOCRImport(unittest.TestCase):
         self.assertIsNone(result.error)
         self.assertEqual(result.text, "ミカ")
 
+    def test_run_easyocr_prefers_secondary_cjk_when_primary_overlap_is_non_cjk(self):
+        class _Reader:
+            def __init__(self, detections):
+                self.device = "cpu"
+                self._detections = list(detections)
+
+            def readtext(self, *_args, **_kwargs):
+                return list(self._detections)
+
+        primary_detection = (
+            [(10, 10), (120, 10), (120, 30), (10, 30)],
+            "Mik4",
+            0.62,
+        )
+        secondary_detection = (
+            [(11, 11), (121, 11), (121, 31), (11, 31)],
+            "ミカ",
+            0.74,
+        )
+
+        def _fake_resolve_reader(*, lang, model_dir, user_network_dir, gpu, download_enabled, quiet):
+            _ = (model_dir, user_network_dir, gpu, download_enabled, quiet)
+            key = str(lang or "")
+            if key == "en,de":
+                return _Reader([primary_detection]), None
+            if key == "ja,en":
+                return _Reader([secondary_detection]), None
+            return _Reader([]), None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "sample.png"
+            image_path.write_bytes(b"stub")
+            with patch("controller.ocr.ocr_import._resolve_easyocr_reader", side_effect=_fake_resolve_reader):
+                result = run_easyocr(image_path, lang="en,de,ja")
+
+        self.assertIsNone(result.error)
+        self.assertEqual(result.text, "ミカ")
+
     def test_run_easyocr_disables_pin_memory_patch_for_non_cuda_device(self):
         class _Reader:
             device = "mps"

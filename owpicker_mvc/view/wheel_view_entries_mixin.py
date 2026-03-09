@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import List, Optional, Union
 
 from PySide6 import QtCore, QtWidgets
@@ -73,14 +74,65 @@ class WheelViewEntriesMixin:
         name = str(name or "").strip()
         if not name:
             return False
+        has_non_empty = False
+        first_empty_item: QtWidgets.QListWidgetItem | None = None
         for i in range(self.names.count()):
             item = self.names.item(i)
             if item is None:
                 continue
-            if self._item_text(item) == name:
+            item_text = self._item_text(item)
+            if item_text:
+                has_non_empty = True
+            elif first_empty_item is None:
+                first_empty_item = item
+            if item_text == name:
                 if active:
                     return self.set_names_active({name}, True)
                 return False
+        # If the list is effectively empty (only placeholder rows), reuse the
+        # first empty row instead of appending another row.
+        if (not has_non_empty) and first_empty_item is not None:
+            normalized_subroles: list[str] = []
+            seen_subroles: set[str] = set()
+            for raw_subrole in list(subroles or []):
+                value = str(raw_subrole or "").strip()
+                if not value:
+                    continue
+                key = value.casefold()
+                if key in seen_subroles:
+                    continue
+                seen_subroles.add(key)
+                normalized_subroles.append(value)
+            with self._suspend_list_signals() as prev:
+                row_widget = self.names.itemWidget(first_empty_item)
+                if isinstance(row_widget, NameRowWidget):
+                    row_widget.edit.setText(name)
+                    first_empty_item.setData(self.names.SUBROLE_ROLE, list(normalized_subroles))
+                    if row_widget.subrole_checks:
+                        selected_subroles = set(normalized_subroles)
+                        for checkbox in row_widget.subrole_checks:
+                            blocker = QtCore.QSignalBlocker(checkbox)
+                            checkbox.setChecked(checkbox.text() in selected_subroles)
+                            del blocker
+                    target_checked = bool(active)
+                    self.names.set_item_state(
+                        first_empty_item,
+                        QtCore.Qt.Checked if target_checked else QtCore.Qt.Unchecked,
+                    )
+                    active_blocker = QtCore.QSignalBlocker(row_widget.chk_active)
+                    row_widget.chk_active.setChecked(target_checked)
+                    del active_blocker
+                else:
+                    first_empty_item.setText(name)
+                    first_empty_item.setData(self.names.SUBROLE_ROLE, list(normalized_subroles))
+                    self.names.set_item_state(
+                        first_empty_item,
+                        QtCore.Qt.Checked if active else QtCore.Qt.Unchecked,
+                    )
+                self._apply_names_list_changes()
+            if not prev:
+                self.stateChanged.emit()
+            return True
         with self._suspend_list_signals() as prev:
             self.names.add_name(name, subroles=subroles or [], active=active)
             self._apply_names_list_changes()
@@ -291,6 +343,7 @@ class WheelViewEntriesMixin:
             return
         old_names = list(self._wheel_state.last_wheel_names)
         active_entries = list(self._entries_cache.get("active_entries", [])) if self._entries_cache else []
+        self._ensure_pair_mode_has_candidates(active_entries)
         new_names = self._effective_names_from(active_entries, include_disabled=True)
         # Rad mit aktiven Namen aktualisieren
         if getattr(self, "_suppress_wheel_render", False):
@@ -406,15 +459,74 @@ class WheelViewEntriesMixin:
         if hasattr(self, "btn_reset_segments"):
             self.btn_reset_segments.setEnabled(bool(self._wheel_state.disabled_indices))
 
+    def _set_pair_mode_internal(self, enabled: bool) -> bool:
+        """Set pair mode atomically without re-entering toggle signal handlers."""
+        target = bool(enabled)
+        changed = bool(self.pair_mode != target)
+        self.pair_mode = target
+        self._wheel_state.pair_mode = target
+
+        toggle = getattr(self, "toggle", None)
+        if toggle is not None and bool(toggle.isChecked()) != target:
+            blocker = QtCore.QSignalBlocker(toggle)
+            toggle.setChecked(target)
+            del blocker
+
+        if not target:
+            chk_subroles = getattr(self, "chk_subroles", None)
+            if chk_subroles is not None and chk_subroles.isChecked():
+                blocker = QtCore.QSignalBlocker(chk_subroles)
+                chk_subroles.setChecked(False)
+                del blocker
+            self.use_subrole_filter = False
+            self._wheel_state.use_subrole_filter = False
+
+        return changed
+
+    def _ensure_pair_mode_has_candidates(self, entries: Optional[List[dict]] = None) -> bool:
+        """
+        Keep pair-mode consistent: never stay in pair/sub-filter mode when it would
+        produce no wheel entries.
+        Returns True when state was auto-adjusted.
+        """
+        if not self.pair_mode:
+            return False
+
+        source_entries = list(entries) if entries is not None else list(self._entries_for_spin())
+        pair_names = self._effective_names_from(source_entries, include_disabled=True)
+        if pair_names:
+            return False
+
+        changed = False
+
+        # First fallback: keep pair-mode, but disable subrole filtering.
+        if self.use_subrole_filter:
+            changed = True
+            chk_subroles = getattr(self, "chk_subroles", None)
+            if chk_subroles is not None and chk_subroles.isChecked():
+                blocker = QtCore.QSignalBlocker(chk_subroles)
+                chk_subroles.setChecked(False)
+                del blocker
+            self.use_subrole_filter = False
+            self._wheel_state.use_subrole_filter = False
+            pair_names = self._effective_names_from(source_entries, include_disabled=True)
+
+        if pair_names:
+            return changed
+
+        # Final fallback: disable pair-mode so the wheel can render singles.
+        if self._set_pair_mode_internal(False):
+            changed = True
+        return changed
+
     def _on_names_changed(self):
         # Kompatibilitäts-Methode, falls sie anderswo noch aufgerufen wird
         self._apply_names_list_changes()
 
     def _on_toggle_pair_mode(self, _state: int):
-        self.pair_mode = bool(self.toggle.isChecked())
-        self._wheel_state.pair_mode = self.pair_mode
-        if not self.pair_mode and self.chk_subroles:
-            self.chk_subroles.setChecked(False)
+        requested = bool(self.toggle.isChecked())
+        self._set_pair_mode_internal(requested)
+        self._ensure_pair_mode_has_candidates()
         # Wechsel des Modus -> Disabled-Segmente zurücksetzen
         self._wheel_state.reset_disabled()
         self._update_subrole_toggle_state()
@@ -503,24 +615,24 @@ class WheelViewEntriesMixin:
 
         # --- Single-Rad drehen ---
         # Wenn kein Name da ist, deaktivieren
-        if not self._force_spin_enabled:
-            self.btn_local_spin.setEnabled(count > 0)
+        spin_enabled = bool(self._force_spin_enabled or count > 0)
+        self.btn_local_spin.setEnabled(spin_enabled)
+        if spin_enabled:
+            self.btn_local_spin.setToolTip(i18n.t("wheel.spin_button_tooltip"))
         else:
-            self.btn_local_spin.setEnabled(True)
+            self.btn_local_spin.setToolTip(i18n.t("wheel.spin_button_disabled_no_names_tooltip"))
 
         # --- Paare-Toggle ---
         if getattr(self, "allow_pair_toggle", False) and getattr(self, "toggle", None) is not None:
             if count < 2:
-                # Wenn nur noch ein Name steht und Paare aktiviert ist, deaktiviere dann.
-                if self.toggle.isChecked():
-                    self.toggle.setChecked(False)
+                # Mit <2 Basenamen darf Pair-Mode nicht aktiv bleiben.
+                self._set_pair_mode_internal(False)
                 self.toggle.setEnabled(False)
-                self.pair_mode = False
-                self._wheel_state.pair_mode = False
                 self._apply_placeholder()
             else:
                 # Ab 2 Namen wieder aktivierbar
                 self.toggle.setEnabled(True)
+                self._ensure_pair_mode_has_candidates()
 
         # --- "Bei Drehen"-Toggle ---
         if hasattr(self, "btn_include_in_all"):
@@ -642,15 +754,18 @@ class WheelViewEntriesMixin:
             QtCore.QSignalBlocker(self.names.model()),
         ]
         try:
-            self.names.clear()
-            for entry in normalized:
-                self.names.add_name(
-                    entry.get("name", ""),
-                    subroles=entry.get("subroles", []),
-                    active=entry.get("active", True),
-                )
-            if not normalized:
-                self.names.add_name("")
+            batch_update = getattr(self.names, "batch_update", None)
+            batch_ctx = batch_update() if callable(batch_update) else nullcontext()
+            with batch_ctx:
+                self.names.clear()
+                for entry in normalized:
+                    self.names.add_name(
+                        entry.get("name", ""),
+                        subroles=entry.get("subroles", []),
+                        active=entry.get("active", True),
+                    )
+                if not normalized:
+                    self.names.add_name("")
         finally:
             del blockers
 

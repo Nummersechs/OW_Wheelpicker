@@ -278,13 +278,17 @@ def _extract_names_from_texts(ocr_import, texts: list[str], cfg: dict) -> list[s
                 return True
             return False
 
-        first = options[0]
-        if not _looks_like_noise(first):
-            return first
-        for candidate in options[1:]:
-            if not _looks_like_noise(candidate):
-                return candidate
-        return first
+        ranked = sorted(
+            options,
+            key=lambda value: (
+                _looks_like_noise(value),
+                sum(1 for ch in str(value or "") if (not ch.isalpha()) and (not ch.isspace())),
+                sum(1 for ch in str(value or "") if not ch.isalnum()),
+                -sum(1 for ch in str(value or "") if ch.isalpha()),
+                -len(str(value or "").strip()),
+            ),
+        )
+        return ranked[0]
 
     extractor = getattr(ocr_import, "extract_candidate_names_multi", None)
     if callable(extractor):

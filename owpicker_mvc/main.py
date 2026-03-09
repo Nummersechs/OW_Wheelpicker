@@ -1,8 +1,10 @@
 import os
 import sys
+from pathlib import Path
 import config
 
 _QUIET_QT_MESSAGE_HANDLER = None
+_SINGLE_INSTANCE_LOCK = None
 
 
 def _apply_quiet_mode():
@@ -47,6 +49,36 @@ def _install_quiet_qt_handler(QtCore):
         pass
 
 
+def _acquire_single_instance_lock(QtCore) -> bool:
+    """Prevent duplicate app launches on Windows double-click."""
+    if not sys.platform.startswith("win"):
+        return True
+    if not bool(getattr(config, "WINDOWS_SINGLE_INSTANCE", True)):
+        return True
+    lock_name = str(getattr(config, "WINDOWS_SINGLE_INSTANCE_LOCK_NAME", "ow_wheelpicker_instance")).strip()
+    if not lock_name:
+        lock_name = "ow_wheelpicker_instance"
+    try:
+        temp_dir = QtCore.QDir.tempPath() or "."
+    except Exception:
+        temp_dir = "."
+    lock_path = str(Path(str(temp_dir)).resolve() / f"{lock_name}.lock")
+    lock = QtCore.QLockFile(lock_path)
+    # Keep stale timeout short so stale locks from crashes do not block restarts.
+    lock.setStaleLockTime(10_000)
+    if not lock.tryLock(0):
+        try:
+            if lock.removeStaleLockFile() and lock.tryLock(0):
+                pass
+            else:
+                return False
+        except Exception:
+            return False
+    global _SINGLE_INSTANCE_LOCK
+    _SINGLE_INSTANCE_LOCK = lock
+    return True
+
+
 def main():
     # Quiet-Modus so früh wie möglich aktivieren (vor Qt-Imports)
     _apply_quiet_mode()
@@ -54,8 +86,11 @@ def main():
     from PySide6 import QtCore, QtGui, QtWidgets  # nach Quiet-Setup laden
     from utils.qt_runtime import apply_preferred_app_font
     _install_quiet_qt_handler(QtCore)
+    if not _acquire_single_instance_lock(QtCore):
+        return
 
     app = QtWidgets.QApplication([])
+    app.setQuitOnLastWindowClosed(True)
     apply_preferred_app_font(app)
 
     splash = None

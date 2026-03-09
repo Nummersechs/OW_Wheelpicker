@@ -20,6 +20,7 @@ TRANSLATIONS_DE = {
     # Controls
     "controls.spin_all": "🎰 Drehen",
     "controls.spin_all_tooltip": "Globalen Spin mit dem gewählten Spin-Modus starten.",
+    "controls.spin_all_disabled_tooltip": "Nicht verfügbar: Kein Ergebnis mit dieser Kombination möglich.",
     "controls.spin_mode_role": "Role",
     "controls.spin_mode_open": "Open {count}",
     "controls.spin_mode_tooltip": "Spin-Modus: Role nutzt pro Rollenrad dessen eigene Liste. Open dreht weiterhin alle ausgewählten Rollenräder; der Open-Wert bestimmt nur, wie viele Spieler insgesamt aus einem gemeinsamen Namenspool gezogen werden.",
@@ -93,6 +94,7 @@ TRANSLATIONS_DE = {
     "wheel.spin_map": "🔁 Karte drehen",
     "wheel.spin_single_map": "🔁 Diese Map drehen",
     "wheel.spin_button_tooltip": "Dieses Rad drehen.",
+    "wheel.spin_button_disabled_no_names_tooltip": "Mindestens einen aktiven Namen hinzufügen, um dieses Rad zu drehen.",
     "wheel.show_names": "Namen anzeigen",
     "wheel.show_names_short": "Anz.",
     "wheel.show_names_tooltip": "Namen anzeigen: Namen auf den Segmenten ein- oder ausblenden.",

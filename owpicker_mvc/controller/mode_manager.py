@@ -12,6 +12,32 @@ import i18n
 def set_hero_ban_visuals(mw, active: bool):
     """Stellt die UI entsprechend Hero-Ban an/aus."""
     mw.hero_ban_active = active
+
+    def _disable_pair_controls(wheel) -> None:
+        set_pair_mode = getattr(wheel, "_set_pair_mode_internal", None)
+        if callable(set_pair_mode):
+            set_pair_mode(False)
+        elif getattr(wheel, "toggle", None):
+            blocker = QtCore.QSignalBlocker(wheel.toggle)
+            wheel.toggle.setChecked(False)
+            del blocker
+            wheel.pair_mode = False
+            wheel_state = getattr(wheel, "_wheel_state", None)
+            if wheel_state is not None:
+                wheel_state.pair_mode = False
+        if getattr(wheel, "toggle", None):
+            wheel.toggle.setEnabled(False)
+        if getattr(wheel, "chk_subroles", None):
+            blocker = QtCore.QSignalBlocker(wheel.chk_subroles)
+            wheel.chk_subroles.setChecked(False)
+            del blocker
+            wheel.chk_subroles.setEnabled(False)
+        if hasattr(wheel, "use_subrole_filter"):
+            wheel.use_subrole_filter = False
+            wheel_state = getattr(wheel, "_wheel_state", None)
+            if wheel_state is not None:
+                wheel_state.use_subrole_filter = False
+
     for role, wheel in role_wheels(mw):
         effect = QtWidgets.QGraphicsOpacityEffect(wheel.view) if active else None
         if active:
@@ -36,18 +62,7 @@ def set_hero_ban_visuals(mw, active: bool):
                 wheel.btn_include_in_all.setEnabled(True)
                 wheel.names.setEnabled(True)
                 wheel.set_interactive_enabled(True)
-                if wheel.toggle:
-                    wheel.toggle.setEnabled(False)
-                    wheel.toggle.setChecked(False)
-                if wheel.chk_subroles:
-                    wheel.chk_subroles.setEnabled(False)
-                    wheel.chk_subroles.setChecked(False)
-            if wheel.toggle:
-                wheel.toggle.setEnabled(False)
-                wheel.toggle.setChecked(False)
-            if wheel.chk_subroles:
-                wheel.chk_subroles.setEnabled(False)
-                wheel.chk_subroles.setChecked(False)
+            _disable_pair_controls(wheel)
             wheel.set_header_controls_visible(False)
             wheel.set_subrole_controls_visible(False)
             if wheel is not mw.dps:
@@ -58,10 +73,6 @@ def set_hero_ban_visuals(mw, active: bool):
             wheel.view.setGraphicsEffect(None)
             wheel.view.setEnabled(True)
             wheel.set_interactive_enabled(True)
-            if wheel.toggle:
-                wheel.toggle.setEnabled(True)
-            if wheel.chk_subroles:
-                wheel.chk_subroles.setEnabled(True)
             wheel.btn_local_spin.setEnabled(True)
             wheel.set_force_spin_enabled(False)
             wheel.set_show_names_visible(True)

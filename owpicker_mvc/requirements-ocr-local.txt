@@ -3,3 +3,6 @@ easyocr>=1.7
 torch>=2.2
 torchvision>=0.17
 certifi>=2024.2.2
+# Used by torch testing helper imports that PyInstaller may touch while
+# resolving torch metadata/hooks on Windows builds.
+expecttest>=0.2

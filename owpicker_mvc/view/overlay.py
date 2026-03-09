@@ -1,3 +1,5 @@
+from contextlib import nullcontext
+
 from PySide6 import QtCore, QtGui, QtWidgets
 from html import escape
 import i18n
@@ -118,6 +120,7 @@ class ResultOverlay(QtWidgets.QWidget):
             enable_mark_for_delete=False,
         )
         self.ocr_names_panel.set_auto_focus_enabled(False)
+        self.ocr_names_panel.set_fill_parent_width(True)
         self.ocr_names_panel.set_aux_controls_visible(False)
         self.ocr_names_panel.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         self.ocr_names_panel.hide()
@@ -180,6 +183,7 @@ class ResultOverlay(QtWidgets.QWidget):
         self.hide()
         self._last_view: dict | None = None
         self._applied_theme_key: str | None = None
+        self._choice_buttons_loading = False
         # Prefer the currently applied app theme during startup to avoid
         # brief light-theme flashes before MainWindow reapplies persisted theme.
         default_theme = theme_util.app_theme("light")
@@ -340,15 +344,13 @@ class ResultOverlay(QtWidgets.QWidget):
     def _apply_ocr_picker_compact_layout(self) -> None:
         names_list = self.ocr_names_panel.names
         # Keep OCR picker row spacing consistent with the wheel names list.
-        # Width behavior remains compact for the OCR dialog.
+        # Let name fields use available width in OCR dialog (no hard max cap).
         row_height = NAME_LIST_ROW_HEIGHT
         edit_height = NAME_EDIT_HEIGHT
         if names_list.has_subroles:
-            name_max_width: int | None = 152
             min_width_with_subroles = 146
             min_width_without_subroles = 188
         else:
-            name_max_width = None
             min_width_with_subroles = 146
             min_width_without_subroles = 260
         names_list.set_row_visual_profile(
@@ -356,7 +358,7 @@ class ResultOverlay(QtWidgets.QWidget):
             name_edit_height=edit_height,
             name_min_width_with_subroles=min_width_with_subroles,
             name_min_width_without_subroles=min_width_without_subroles,
-            name_max_width=name_max_width,
+            name_max_width=None,
             subrole_group_left_margin=10,
             subrole_group_right_margin=10,
             subrole_check_spacing=10,
@@ -399,10 +401,13 @@ class ResultOverlay(QtWidgets.QWidget):
         names_list = self.ocr_names_panel.names
         blockers = [QtCore.QSignalBlocker(names_list), QtCore.QSignalBlocker(names_list.model())]
         try:
-            names_list.clear()
-            names_list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
-            for name in display_names:
-                names_list.add_name(name, subroles=[], active=True)
+            batch_update = getattr(names_list, "batch_update", None)
+            batch_ctx = batch_update() if callable(batch_update) else nullcontext()
+            with batch_ctx:
+                names_list.clear()
+                names_list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+                for name in display_names:
+                    names_list.add_name(name, subroles=[], active=True)
             self._apply_ocr_picker_compact_layout()
         finally:
             del blockers
@@ -419,30 +424,66 @@ class ResultOverlay(QtWidgets.QWidget):
 
     def set_choice_enabled(self, enabled: bool):
         """Aktiviert/Deaktiviert die Online/Offline-Buttons (z.B. während des Ladens)."""
-        self.btn_online.setEnabled(enabled)
-        self.btn_offline.setEnabled(enabled)
+        enabled_bool = bool(enabled)
+        self._choice_buttons_loading = not enabled_bool
+        self.btn_online.setEnabled(enabled_bool)
+        self.btn_offline.setEnabled(enabled_bool)
+        self._refresh_choice_button_visual_state(self.btn_online)
+        self._refresh_choice_button_visual_state(self.btn_offline)
         self._apply_choice_button_tooltips()
+
+    def _refresh_choice_button_visual_state(self, button: QtWidgets.QPushButton) -> None:
+        if button is None:
+            return
+        style_getter = getattr(button, "style", None)
+        style = style_getter() if callable(style_getter) else None
+        if style is not None:
+            style.unpolish(button)
+            style.polish(button)
+        update = getattr(button, "update", None)
+        if callable(update):
+            update()
+        repaint = getattr(button, "repaint", None)
+        if callable(repaint):
+            repaint()
 
     def _refresh_live_tooltip_for_widget(self, widget: QtWidgets.QWidget, text: str) -> None:
         if widget is None:
             return
         try:
-            if not QtWidgets.QToolTip.isVisible():
+            if not bool(widget.isVisible()):
                 return
         except Exception:
-            return
+            pass
+        try:
+            tooltip_visible = bool(QtWidgets.QToolTip.isVisible())
+        except Exception:
+            tooltip_visible = False
         try:
             global_pos = QtGui.QCursor.pos()
         except Exception:
-            return
+            global_pos = None
+        under_mouse = False
         try:
-            local_pos = widget.mapFromGlobal(global_pos)
-            if not widget.rect().contains(local_pos):
-                return
+            if global_pos is not None:
+                local_pos = widget.mapFromGlobal(global_pos)
+                under_mouse = widget.rect().contains(local_pos)
         except Exception:
             try:
-                if not bool(widget.underMouse()):
-                    return
+                under_mouse = bool(widget.underMouse())
+            except Exception:
+                under_mouse = False
+        if not (tooltip_visible or under_mouse):
+            return
+        try:
+            QtWidgets.QToolTip.hideText()
+        except Exception:
+            pass
+        if not under_mouse:
+            return
+        if global_pos is None:
+            try:
+                global_pos = QtGui.QCursor.pos()
             except Exception:
                 return
         try:
@@ -459,11 +500,12 @@ class ResultOverlay(QtWidgets.QWidget):
 
     def _apply_choice_button_tooltips(self) -> None:
         loading_tip = i18n.t("overlay.choice_loading_tooltip")
+        loading_mode = bool(getattr(self, "_choice_buttons_loading", False))
         online_tip = (
-            loading_tip if not bool(self.btn_online.isEnabled()) else i18n.t("overlay.button_online_tooltip")
+            loading_tip if loading_mode or not bool(self.btn_online.isEnabled()) else i18n.t("overlay.button_online_tooltip")
         )
         offline_tip = (
-            loading_tip if not bool(self.btn_offline.isEnabled()) else i18n.t("overlay.button_offline_tooltip")
+            loading_tip if loading_mode or not bool(self.btn_offline.isEnabled()) else i18n.t("overlay.button_offline_tooltip")
         )
         self._set_button_tooltip(self.btn_online, online_tip)
         self._set_button_tooltip(self.btn_offline, offline_tip)

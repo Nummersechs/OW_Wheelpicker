@@ -31,7 +31,9 @@ def _trace_event_enabled(mw, name: str) -> bool:
     }:
         return debug or bool(_cfg(mw, "TRACE_OCR_PRELOAD_VERBOSE", False))
     if event in {"shutdown_step:start", "shutdown_step:ok"}:
-        return debug or bool(_cfg(mw, "TRACE_SHUTDOWN", False)) or bool(_cfg(mw, "TRACE_SHUTDOWN_STEP_VERBOSE", False))
+        # Keep shutdown-step tracing always on when flow tracing is enabled.
+        # These events are low-frequency and critical for diagnosing close hangs.
+        return True
     return True
 
 

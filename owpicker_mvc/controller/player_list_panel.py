@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from PySide6 import QtCore, QtGui, QtWidgets
 
 import i18n
@@ -221,39 +222,42 @@ class PlayerListPanelController(QtCore.QObject):
             QtCore.QSignalBlocker(names.model()),
         ]
         try:
-            names.clear()
-            if not stats:
-                names.add_name("", subroles=self._role_labels())
-                self._snapshot = {}
-                return
-            for name in sorted(stats.keys(), key=str.casefold):
-                info = stats[name]
-                roles = info.get("roles", set())
-                active_roles = info.get("active_roles", set())
-                role_labels = self._labels_from_roles(roles)
-                total = len(roles)
-                active = len(active_roles)
-                if active <= 0:
-                    state = QtCore.Qt.Unchecked
-                elif active >= total:
-                    state = QtCore.Qt.Checked
-                else:
-                    state = QtCore.Qt.PartiallyChecked
-                names.add_name(name, subroles=role_labels, active=(state == QtCore.Qt.Checked))
-                item = names.item(names.count() - 1)
-                if item is None:
-                    continue
-                names.set_item_state(item, state)
-                widget = names.itemWidget(item)
-                if isinstance(widget, NameRowWidget):
-                    is_partial = state == QtCore.Qt.PartiallyChecked
-                    widget.chk_active.setTristate(is_partial)
-                    if is_partial:
-                        widget.chk_active.setCheckState(QtCore.Qt.PartiallyChecked)
+            batch_update = getattr(names, "batch_update", None)
+            batch_ctx = batch_update() if callable(batch_update) else nullcontext()
+            with batch_ctx:
+                names.clear()
+                if not stats:
+                    names.add_name("", subroles=self._role_labels())
+                    self._snapshot = {}
+                    return
+                for name in sorted(stats.keys(), key=str.casefold):
+                    info = stats[name]
+                    roles = info.get("roles", set())
+                    active_roles = info.get("active_roles", set())
+                    role_labels = self._labels_from_roles(roles)
+                    total = len(roles)
+                    active = len(active_roles)
+                    if active <= 0:
+                        state = QtCore.Qt.Unchecked
+                    elif active >= total:
+                        state = QtCore.Qt.Checked
                     else:
-                        widget.chk_active.setChecked(state == QtCore.Qt.Checked)
-                item.setData(self._ROLE_MEMBERSHIP_ROLE, set(self._roles_from_labels(role_labels)))
-                item.setData(self._ORIGINAL_NAME_ROLE, name)
+                        state = QtCore.Qt.PartiallyChecked
+                    names.add_name(name, subroles=role_labels, active=(state == QtCore.Qt.Checked))
+                    item = names.item(names.count() - 1)
+                    if item is None:
+                        continue
+                    names.set_item_state(item, state)
+                    widget = names.itemWidget(item)
+                    if isinstance(widget, NameRowWidget):
+                        is_partial = state == QtCore.Qt.PartiallyChecked
+                        widget.chk_active.setTristate(is_partial)
+                        if is_partial:
+                            widget.chk_active.setCheckState(QtCore.Qt.PartiallyChecked)
+                        else:
+                            widget.chk_active.setChecked(state == QtCore.Qt.Checked)
+                    item.setData(self._ROLE_MEMBERSHIP_ROLE, set(self._roles_from_labels(role_labels)))
+                    item.setData(self._ORIGINAL_NAME_ROLE, name)
         finally:
             del blockers
         self._snapshot = {name: {"roles": set(info["roles"])} for name, info in stats.items()}

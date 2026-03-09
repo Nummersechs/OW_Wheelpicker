@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 import i18n
 from utils import theme as theme_util, ui_helpers
@@ -32,6 +32,7 @@ class BasePanel(QtWidgets.QWidget):
 
         self.card = QtWidgets.QFrame()
         self.card.setObjectName("card")
+        self._disabled_spin_hover_active = False
 
         outer = QtWidgets.QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -80,6 +81,10 @@ class BasePanel(QtWidgets.QWidget):
 
         self._controls_insert_index = self._inner_layout.count()
         self._inner_layout.addLayout(btn_row)
+        self.setMouseTracking(True)
+        self.card.setMouseTracking(True)
+        self._interaction_filters_installed = False
+        QtCore.QTimer.singleShot(0, self._install_interaction_filters)
 
         hint = names_hint_text
         if hint is None and names_hint_key:
@@ -113,6 +118,13 @@ class BasePanel(QtWidgets.QWidget):
     def _include_label(self) -> str:
         prefix = "☑" if self.btn_include_in_all.isChecked() else "☐"
         return f"{prefix} {i18n.t('wheel.include_prefix')}"
+
+    def _install_interaction_filters(self) -> None:
+        if self._interaction_filters_installed:
+            return
+        self.installEventFilter(self)
+        self.card.installEventFilter(self)
+        self._interaction_filters_installed = True
 
     def _on_include_in_all_toggled(self, _checked: bool) -> None:
         self.btn_include_in_all.setText(self._include_label())
@@ -166,6 +178,53 @@ class BasePanel(QtWidgets.QWidget):
             self.btn_toggle_all_names.setEnabled(enabled)
         if hasattr(self, "names_panel"):
             self.names_panel.set_interactive_enabled(enabled)
+
+    def _sync_disabled_spin_tooltip(
+        self,
+        global_pos: QtCore.QPoint,
+        *,
+        force_show: bool = False,
+    ) -> bool:
+        btn = self.btn_local_spin
+        if btn is None:
+            return False
+        if btn.isEnabled():
+            if self._disabled_spin_hover_active:
+                QtWidgets.QToolTip.hideText()
+                self._disabled_spin_hover_active = False
+            return False
+        tip = str(btn.toolTip() or "").strip()
+        if not tip:
+            return False
+        top_left = btn.mapToGlobal(QtCore.QPoint(0, 0))
+        inside = QtCore.QRect(top_left, btn.size()).contains(global_pos)
+        if not inside:
+            if self._disabled_spin_hover_active:
+                QtWidgets.QToolTip.hideText()
+                self._disabled_spin_hover_active = False
+            return False
+        if force_show or not self._disabled_spin_hover_active:
+            QtWidgets.QToolTip.showText(global_pos, tip, btn, btn.rect())
+        self._disabled_spin_hover_active = True
+        return True
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if obj in (self, self.card):
+            etype = event.type()
+            if etype == QtCore.QEvent.ToolTip:
+                if isinstance(event, QtGui.QHelpEvent):
+                    if self._sync_disabled_spin_tooltip(event.globalPos(), force_show=True):
+                        return True
+            elif etype == QtCore.QEvent.MouseMove:
+                if isinstance(event, QtGui.QMouseEvent):
+                    self._sync_disabled_spin_tooltip(event.globalPosition().toPoint())
+                else:
+                    self._sync_disabled_spin_tooltip(QtGui.QCursor.pos())
+            elif etype in (QtCore.QEvent.Leave, QtCore.QEvent.Hide):
+                if self._disabled_spin_hover_active:
+                    QtWidgets.QToolTip.hideText()
+                    self._disabled_spin_hover_active = False
+        return super().eventFilter(obj, event)
 
     def apply_theme(self, theme: theme_util.Theme) -> None:
         if self._applied_theme_key == theme.key:

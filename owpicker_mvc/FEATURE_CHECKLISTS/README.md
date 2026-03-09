@@ -19,4 +19,5 @@ Zentraler Ordner fuer funktionale Checklisten und Verhaltensdokumentation.
 ## Pflege-Regeln
 - Bei Feature-Aenderungen Checkliste im selben Commit aktualisieren.
 - In jeder Checkliste: Scope, Erwartung, Risiken, Testschritte pflegen.
+- Wenn vorhanden, auch passende automatisierte Testdateien/Commands in der Checkliste referenzieren.
 - Wenn neue Subsysteme entstehen, neue Datei in diesem Ordner anlegen und hier verlinken.
