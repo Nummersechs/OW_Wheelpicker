@@ -173,6 +173,9 @@ SHUTDOWN_CHILD_THREAD_TERMINATE_WAIT_MS = 250
 # Maximum cumulative defer time while waiting for OCR/background threads during
 # close. After this timeout, shutdown falls back to orphaned-thread cleanup.
 SHUTDOWN_THREAD_MAX_DEFER_MS = 2500
+# Minimum interval between repeated blocker snapshots in flow trace while close
+# is waiting on running threads.
+SHUTDOWN_BLOCKER_TRACE_INTERVAL_MS = 250
 # Additional wait window for non-daemon Python threads discovered during close.
 SHUTDOWN_PYTHON_THREAD_MAX_DEFER_MS = 1800
 # Additional guard: request app.quit() again shortly after close accepted.

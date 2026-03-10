@@ -76,6 +76,7 @@ class StartupSettings:
     startup_wheel_cache_warmup: bool = True
     startup_ocr_preload: bool = False
     startup_ocr_preload_max_wait_ms: int = 1800
+    startup_ocr_preload_running_max_wait_ms: int = 14000
     startup_map_prebuild_max_wait_ms: int = 2200
     map_prebuild_on_start: bool = True
 
@@ -84,6 +85,21 @@ class StartupSettings:
 class ShutdownSettings:
     overlay_enabled: bool = True
     overlay_delay_ms: int = 320
+    blocker_trace_interval_ms: int = 250
+    ocr_async_graceful_wait_ms: int = 1200
+    ocr_async_terminate_wait_ms: int = 700
+    ocr_preload_graceful_wait_ms: int = 1400
+    ocr_preload_terminate_wait_ms: int = 350
+    ocr_preload_force_stop_on_close: bool = False
+    child_thread_graceful_wait_ms: int = 350
+    child_thread_terminate_wait_ms: int = 250
+    thread_max_defer_ms: int = 2500
+    ocr_preload_max_defer_ms: int = 1200
+    ocr_async_max_defer_ms: int = 1500
+    child_thread_max_defer_ms: int = 1200
+    python_thread_max_defer_ms: int = 1800
+    app_quit_guard_ms: int = 1500
+    app_force_exit_loop_ms: int = 2400
     keep_window_visible_until_exit: bool = False
     force_exit_watchdog_enabled: bool = False
     force_exit_watchdog_ms: int = 12000
@@ -95,13 +111,26 @@ class ShutdownSettings:
 class OcrSettings:
     engine: str = "easyocr"
     easyocr_lang: str = "en,de,ja,ch_sim,ko"
+    easyocr_model_dir: str = ""
+    easyocr_user_network_dir: str = ""
+    easyocr_gpu: str = "auto"
+    easyocr_download_enabled: bool = False
     timeout_s: float = 8.0
     timeout_s_windows: float = 6.0
     runtime_sleep_until_used: bool = True
     background_preload_enabled: bool = True
     background_preload_delay_ms: int = 2500
     background_preload_min_uptime_ms: int = 8000
+    background_preload_allow_during_startup: bool = True
+    background_preload_busy_retry_ms: int = 1800
     preload_subprocess_timeout_s: float = 60.0
+    preload_use_subprocess_probe: bool = True
+    preload_use_subprocess_probe_win_frozen: bool = False
+    preload_inprocess_cache_warmup: bool = True
+    preload_cancel_running_on_spin: bool = False
+    idle_cache_release_ms: int = 30000
+    idle_cache_release_busy_retry_ms: int = 2500
+    release_cache_on_spin: bool = False
     debug_show_report: bool = False
     debug_log_to_file: bool = True
 
@@ -200,6 +229,10 @@ class AppSettings:
                 0,
                 _coerce_int(values.get("STARTUP_OCR_PRELOAD_MAX_WAIT_MS", 1800), 1800),
             ),
+            startup_ocr_preload_running_max_wait_ms=max(
+                0,
+                _coerce_int(values.get("STARTUP_OCR_PRELOAD_RUNNING_MAX_WAIT_MS", 14000), 14000),
+            ),
             startup_map_prebuild_max_wait_ms=max(
                 0,
                 _coerce_int(values.get("STARTUP_MAP_PREBUILD_MAX_WAIT_MS", 2200), 2200),
@@ -209,6 +242,65 @@ class AppSettings:
         self.shutdown = ShutdownSettings(
             overlay_enabled=_coerce_bool(values.get("SHUTDOWN_OVERLAY_ENABLED", True)),
             overlay_delay_ms=max(0, _coerce_int(values.get("SHUTDOWN_OVERLAY_DELAY_MS", 320), 320)),
+            blocker_trace_interval_ms=max(
+                0,
+                _coerce_int(values.get("SHUTDOWN_BLOCKER_TRACE_INTERVAL_MS", 250), 250),
+            ),
+            ocr_async_graceful_wait_ms=max(
+                0,
+                _coerce_int(values.get("SHUTDOWN_OCR_ASYNC_GRACEFUL_WAIT_MS", 1200), 1200),
+            ),
+            ocr_async_terminate_wait_ms=max(
+                0,
+                _coerce_int(values.get("SHUTDOWN_OCR_ASYNC_TERMINATE_WAIT_MS", 700), 700),
+            ),
+            ocr_preload_graceful_wait_ms=max(
+                0,
+                _coerce_int(values.get("SHUTDOWN_OCR_PRELOAD_GRACEFUL_WAIT_MS", 1400), 1400),
+            ),
+            ocr_preload_terminate_wait_ms=max(
+                0,
+                _coerce_int(values.get("SHUTDOWN_OCR_PRELOAD_TERMINATE_WAIT_MS", 350), 350),
+            ),
+            ocr_preload_force_stop_on_close=_coerce_bool(
+                values.get("SHUTDOWN_OCR_PRELOAD_FORCE_STOP_ON_CLOSE", False)
+            ),
+            child_thread_graceful_wait_ms=max(
+                0,
+                _coerce_int(values.get("SHUTDOWN_CHILD_THREAD_GRACEFUL_WAIT_MS", 350), 350),
+            ),
+            child_thread_terminate_wait_ms=max(
+                0,
+                _coerce_int(values.get("SHUTDOWN_CHILD_THREAD_TERMINATE_WAIT_MS", 250), 250),
+            ),
+            thread_max_defer_ms=max(
+                0,
+                _coerce_int(values.get("SHUTDOWN_THREAD_MAX_DEFER_MS", 2500), 2500),
+            ),
+            ocr_preload_max_defer_ms=max(
+                0,
+                _coerce_int(values.get("SHUTDOWN_OCR_PRELOAD_MAX_DEFER_MS", 1200), 1200),
+            ),
+            ocr_async_max_defer_ms=max(
+                0,
+                _coerce_int(values.get("SHUTDOWN_OCR_ASYNC_MAX_DEFER_MS", 1500), 1500),
+            ),
+            child_thread_max_defer_ms=max(
+                0,
+                _coerce_int(values.get("SHUTDOWN_CHILD_THREAD_MAX_DEFER_MS", 1200), 1200),
+            ),
+            python_thread_max_defer_ms=max(
+                0,
+                _coerce_int(values.get("SHUTDOWN_PYTHON_THREAD_MAX_DEFER_MS", 1800), 1800),
+            ),
+            app_quit_guard_ms=max(
+                0,
+                _coerce_int(values.get("SHUTDOWN_APP_QUIT_GUARD_MS", 1500), 1500),
+            ),
+            app_force_exit_loop_ms=max(
+                0,
+                _coerce_int(values.get("SHUTDOWN_APP_FORCE_EXIT_LOOP_MS", 2400), 2400),
+            ),
             keep_window_visible_until_exit=_coerce_bool(
                 values.get("SHUTDOWN_KEEP_WINDOW_VISIBLE_UNTIL_EXIT", False)
             ),
@@ -231,6 +323,10 @@ class AppSettings:
                 values.get("OCR_EASYOCR_LANG", "en,de,ja,ch_sim,ko"),
                 "en,de,ja,ch_sim,ko",
             ),
+            easyocr_model_dir=_coerce_str(values.get("OCR_EASYOCR_MODEL_DIR", ""), ""),
+            easyocr_user_network_dir=_coerce_str(values.get("OCR_EASYOCR_USER_NETWORK_DIR", ""), ""),
+            easyocr_gpu=_coerce_str(values.get("OCR_EASYOCR_GPU", "auto"), "auto"),
+            easyocr_download_enabled=_coerce_bool(values.get("OCR_EASYOCR_DOWNLOAD_ENABLED", False)),
             timeout_s=max(0.5, _coerce_float(values.get("OCR_TIMEOUT_S", 8.0), 8.0)),
             timeout_s_windows=max(0.5, _coerce_float(values.get("OCR_TIMEOUT_S_WINDOWS", 6.0), 6.0)),
             runtime_sleep_until_used=_coerce_bool(values.get("OCR_RUNTIME_SLEEP_UNTIL_USED", True)),
@@ -243,10 +339,38 @@ class AppSettings:
                 0,
                 _coerce_int(values.get("OCR_BACKGROUND_PRELOAD_MIN_UPTIME_MS", 8000), 8000),
             ),
+            background_preload_allow_during_startup=_coerce_bool(
+                values.get("OCR_BACKGROUND_PRELOAD_ALLOW_DURING_STARTUP", True)
+            ),
+            background_preload_busy_retry_ms=max(
+                0,
+                _coerce_int(values.get("OCR_BACKGROUND_PRELOAD_BUSY_RETRY_MS", 1800), 1800),
+            ),
             preload_subprocess_timeout_s=max(
                 1.0,
                 _coerce_float(values.get("OCR_PRELOAD_SUBPROCESS_TIMEOUT_S", 60.0), 60.0),
             ),
+            preload_use_subprocess_probe=_coerce_bool(
+                values.get("OCR_PRELOAD_USE_SUBPROCESS_PROBE", True)
+            ),
+            preload_use_subprocess_probe_win_frozen=_coerce_bool(
+                values.get("OCR_PRELOAD_USE_SUBPROCESS_PROBE_WIN_FROZEN", False)
+            ),
+            preload_inprocess_cache_warmup=_coerce_bool(
+                values.get("OCR_PRELOAD_INPROCESS_CACHE_WARMUP", True)
+            ),
+            preload_cancel_running_on_spin=_coerce_bool(
+                values.get("OCR_PRELOAD_CANCEL_RUNNING_ON_SPIN", False)
+            ),
+            idle_cache_release_ms=max(
+                0,
+                _coerce_int(values.get("OCR_IDLE_CACHE_RELEASE_MS", 30000), 30000),
+            ),
+            idle_cache_release_busy_retry_ms=max(
+                0,
+                _coerce_int(values.get("OCR_IDLE_CACHE_RELEASE_BUSY_RETRY_MS", 2500), 2500),
+            ),
+            release_cache_on_spin=_coerce_bool(values.get("OCR_RELEASE_CACHE_ON_SPIN", False)),
             debug_show_report=_coerce_bool(values.get("OCR_DEBUG_SHOW_REPORT", False)),
             debug_log_to_file=_coerce_bool(values.get("OCR_DEBUG_LOG_TO_FILE", True)),
         )
@@ -293,10 +417,26 @@ class AppSettings:
             "STARTUP_WHEEL_CACHE_WARMUP": self.startup.startup_wheel_cache_warmup,
             "STARTUP_OCR_PRELOAD": self.startup.startup_ocr_preload,
             "STARTUP_OCR_PRELOAD_MAX_WAIT_MS": self.startup.startup_ocr_preload_max_wait_ms,
+            "STARTUP_OCR_PRELOAD_RUNNING_MAX_WAIT_MS": self.startup.startup_ocr_preload_running_max_wait_ms,
             "STARTUP_MAP_PREBUILD_MAX_WAIT_MS": self.startup.startup_map_prebuild_max_wait_ms,
             "MAP_PREBUILD_ON_START": self.startup.map_prebuild_on_start,
             "SHUTDOWN_OVERLAY_ENABLED": self.shutdown.overlay_enabled,
             "SHUTDOWN_OVERLAY_DELAY_MS": self.shutdown.overlay_delay_ms,
+            "SHUTDOWN_BLOCKER_TRACE_INTERVAL_MS": self.shutdown.blocker_trace_interval_ms,
+            "SHUTDOWN_OCR_ASYNC_GRACEFUL_WAIT_MS": self.shutdown.ocr_async_graceful_wait_ms,
+            "SHUTDOWN_OCR_ASYNC_TERMINATE_WAIT_MS": self.shutdown.ocr_async_terminate_wait_ms,
+            "SHUTDOWN_OCR_PRELOAD_GRACEFUL_WAIT_MS": self.shutdown.ocr_preload_graceful_wait_ms,
+            "SHUTDOWN_OCR_PRELOAD_TERMINATE_WAIT_MS": self.shutdown.ocr_preload_terminate_wait_ms,
+            "SHUTDOWN_OCR_PRELOAD_FORCE_STOP_ON_CLOSE": self.shutdown.ocr_preload_force_stop_on_close,
+            "SHUTDOWN_CHILD_THREAD_GRACEFUL_WAIT_MS": self.shutdown.child_thread_graceful_wait_ms,
+            "SHUTDOWN_CHILD_THREAD_TERMINATE_WAIT_MS": self.shutdown.child_thread_terminate_wait_ms,
+            "SHUTDOWN_THREAD_MAX_DEFER_MS": self.shutdown.thread_max_defer_ms,
+            "SHUTDOWN_OCR_PRELOAD_MAX_DEFER_MS": self.shutdown.ocr_preload_max_defer_ms,
+            "SHUTDOWN_OCR_ASYNC_MAX_DEFER_MS": self.shutdown.ocr_async_max_defer_ms,
+            "SHUTDOWN_CHILD_THREAD_MAX_DEFER_MS": self.shutdown.child_thread_max_defer_ms,
+            "SHUTDOWN_PYTHON_THREAD_MAX_DEFER_MS": self.shutdown.python_thread_max_defer_ms,
+            "SHUTDOWN_APP_QUIT_GUARD_MS": self.shutdown.app_quit_guard_ms,
+            "SHUTDOWN_APP_FORCE_EXIT_LOOP_MS": self.shutdown.app_force_exit_loop_ms,
             "SHUTDOWN_KEEP_WINDOW_VISIBLE_UNTIL_EXIT": self.shutdown.keep_window_visible_until_exit,
             "SHUTDOWN_FORCE_EXIT_WATCHDOG_ENABLED": self.shutdown.force_exit_watchdog_enabled,
             "SHUTDOWN_FORCE_EXIT_WATCHDOG_MS": self.shutdown.force_exit_watchdog_ms,
@@ -304,13 +444,26 @@ class AppSettings:
             "SHUTDOWN_RELEASE_OCR_CACHE": self.shutdown.release_ocr_cache,
             "OCR_ENGINE": self.ocr.engine,
             "OCR_EASYOCR_LANG": self.ocr.easyocr_lang,
+            "OCR_EASYOCR_MODEL_DIR": self.ocr.easyocr_model_dir,
+            "OCR_EASYOCR_USER_NETWORK_DIR": self.ocr.easyocr_user_network_dir,
+            "OCR_EASYOCR_GPU": self.ocr.easyocr_gpu,
+            "OCR_EASYOCR_DOWNLOAD_ENABLED": self.ocr.easyocr_download_enabled,
             "OCR_TIMEOUT_S": self.ocr.timeout_s,
             "OCR_TIMEOUT_S_WINDOWS": self.ocr.timeout_s_windows,
             "OCR_RUNTIME_SLEEP_UNTIL_USED": self.ocr.runtime_sleep_until_used,
             "OCR_BACKGROUND_PRELOAD_ENABLED": self.ocr.background_preload_enabled,
             "OCR_BACKGROUND_PRELOAD_DELAY_MS": self.ocr.background_preload_delay_ms,
             "OCR_BACKGROUND_PRELOAD_MIN_UPTIME_MS": self.ocr.background_preload_min_uptime_ms,
+            "OCR_BACKGROUND_PRELOAD_ALLOW_DURING_STARTUP": self.ocr.background_preload_allow_during_startup,
+            "OCR_BACKGROUND_PRELOAD_BUSY_RETRY_MS": self.ocr.background_preload_busy_retry_ms,
             "OCR_PRELOAD_SUBPROCESS_TIMEOUT_S": self.ocr.preload_subprocess_timeout_s,
+            "OCR_PRELOAD_USE_SUBPROCESS_PROBE": self.ocr.preload_use_subprocess_probe,
+            "OCR_PRELOAD_USE_SUBPROCESS_PROBE_WIN_FROZEN": self.ocr.preload_use_subprocess_probe_win_frozen,
+            "OCR_PRELOAD_INPROCESS_CACHE_WARMUP": self.ocr.preload_inprocess_cache_warmup,
+            "OCR_PRELOAD_CANCEL_RUNNING_ON_SPIN": self.ocr.preload_cancel_running_on_spin,
+            "OCR_IDLE_CACHE_RELEASE_MS": self.ocr.idle_cache_release_ms,
+            "OCR_IDLE_CACHE_RELEASE_BUSY_RETRY_MS": self.ocr.idle_cache_release_busy_retry_ms,
+            "OCR_RELEASE_CACHE_ON_SPIN": self.ocr.release_cache_on_spin,
             "OCR_DEBUG_SHOW_REPORT": self.ocr.debug_show_report,
             "OCR_DEBUG_LOG_TO_FILE": self.ocr.debug_log_to_file,
             "MIN_DURATION_MS": self.spin_ui.min_duration_ms,

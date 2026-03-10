@@ -64,6 +64,42 @@ class TestAppSettings(unittest.TestCase):
         self.assertEqual(settings.runtime.quiet, True)
         self.assertEqual(settings.ocr.engine, "EASYOCR")
 
+    def test_shutdown_section_exposes_thread_and_defer_controls(self):
+        settings = AppSettings(
+            values={
+                "SHUTDOWN_OCR_PRELOAD_GRACEFUL_WAIT_MS": "1600",
+                "SHUTDOWN_OCR_PRELOAD_TERMINATE_WAIT_MS": "250",
+                "SHUTDOWN_THREAD_MAX_DEFER_MS": "3300",
+                "SHUTDOWN_OCR_PRELOAD_FORCE_STOP_ON_CLOSE": "1",
+                "SHUTDOWN_APP_FORCE_EXIT_LOOP_MS": "1900",
+            }
+        )
+
+        self.assertEqual(settings.shutdown.ocr_preload_graceful_wait_ms, 1600)
+        self.assertEqual(settings.shutdown.ocr_preload_terminate_wait_ms, 250)
+        self.assertEqual(settings.shutdown.thread_max_defer_ms, 3300)
+        self.assertEqual(settings.shutdown.ocr_preload_force_stop_on_close, True)
+        self.assertEqual(settings.shutdown.app_force_exit_loop_ms, 1900)
+        self.assertEqual(settings.resolve("SHUTDOWN_THREAD_MAX_DEFER_MS", 0), 3300)
+
+    def test_ocr_section_exposes_preload_and_cache_controls(self):
+        settings = AppSettings(
+            values={
+                "OCR_EASYOCR_GPU": "cpu",
+                "OCR_PRELOAD_INPROCESS_CACHE_WARMUP": "0",
+                "OCR_BACKGROUND_PRELOAD_BUSY_RETRY_MS": "2100",
+                "OCR_IDLE_CACHE_RELEASE_MS": "12000",
+                "OCR_RELEASE_CACHE_ON_SPIN": "true",
+            }
+        )
+
+        self.assertEqual(settings.ocr.easyocr_gpu, "cpu")
+        self.assertEqual(settings.ocr.preload_inprocess_cache_warmup, False)
+        self.assertEqual(settings.ocr.background_preload_busy_retry_ms, 2100)
+        self.assertEqual(settings.ocr.idle_cache_release_ms, 12000)
+        self.assertEqual(settings.ocr.release_cache_on_spin, True)
+        self.assertEqual(settings.resolve("OCR_IDLE_CACHE_RELEASE_MS", 0), 12000)
+
 
 if __name__ == "__main__":
     unittest.main()

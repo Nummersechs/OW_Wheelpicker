@@ -18,6 +18,7 @@ from ..ocr.ocr_role_import import (
     normalize_name_key as normalize_ocr_name_key,
     resolve_selected_candidates as resolve_selected_ocr_candidates,
 )
+from ..ocr.ocr_preload_coordinator import OCRPreloadCoordinator
 from utils import ui_helpers
 
 
@@ -851,43 +852,29 @@ class MainWindowOCRMixin:
             except Exception as exc:
                 self._warn_ocr_suppressed_exception("mark_runtime_activated:cancel_preload", exc)
 
+    def _ocr_preload_coordinator(self) -> OCRPreloadCoordinator:
+        coordinator = getattr(self, "_ocr_preload_coordinator_obj", None)
+        if isinstance(coordinator, OCRPreloadCoordinator):
+            return coordinator
+        coordinator = OCRPreloadCoordinator(
+            self,
+            worker_cls=_OCRPreloadWorker,
+            relay_cls=_OCRPreloadRelay,
+        )
+        self._ocr_preload_coordinator_obj = coordinator
+        return coordinator
+
     def _ocr_background_preload_enabled(self) -> bool:
-        return bool(self._cfg("OCR_BACKGROUND_PRELOAD_ENABLED", True))
+        return self._ocr_preload_coordinator().background_preload_enabled()
 
     def _easyocr_resolution_kwargs(self) -> dict[str, object]:
-        def _optional_str(key: str) -> str | None:
-            value = str(self._cfg(key, "") or "").strip()
-            return value or None
-
-        return {
-            "lang": _optional_str("OCR_EASYOCR_LANG"),
-            "model_dir": _optional_str("OCR_EASYOCR_MODEL_DIR"),
-            "user_network_dir": _optional_str("OCR_EASYOCR_USER_NETWORK_DIR"),
-            "gpu": self._cfg("OCR_EASYOCR_GPU", "auto"),
-            "download_enabled": bool(self._cfg("OCR_EASYOCR_DOWNLOAD_ENABLED", False)),
-            "quiet": bool(self._cfg("QUIET", False)),
-        }
+        return self._ocr_preload_coordinator().easyocr_resolution_kwargs()
 
     def _ensure_ocr_background_preload_timer(self) -> QtCore.QTimer:
-        timer = getattr(self, "_ocr_preload_timer", None)
-        if timer is not None:
-            return timer
-        timer = QtCore.QTimer(self)
-        timer.setSingleShot(True)
-        timer.timeout.connect(self._run_ocr_background_preload)
-        if hasattr(self, "_timers"):
-            self._timers.register(timer)
-        self._ocr_preload_timer = timer
-        return timer
+        return self._ocr_preload_coordinator().ensure_background_preload_timer()
 
     def _cancel_ocr_background_preload(self) -> None:
-        timer = getattr(self, "_ocr_preload_timer", None)
-        if timer is None:
-            return
-        try:
-            timer.stop()
-        except Exception as exc:
-            self._warn_ocr_suppressed_exception("cancel_preload_timer:stop", exc)
+        self._ocr_preload_coordinator().cancel_background_preload()
 
     def _stop_ocr_background_preload_job(
         self,
@@ -895,58 +882,10 @@ class MainWindowOCRMixin:
         reason: str = "",
         wait_ms: int = 0,
     ) -> None:
-        job = getattr(self, "_ocr_preload_job", None)
-        if not isinstance(job, dict):
-            self._ocr_preload_job = None
-            return
-        thread = job.get("thread")
-        worker = job.get("worker")
-        cancel_slot = getattr(worker, "cancel", None)
-        if callable(cancel_slot):
-            try:
-                cancel_slot()
-            except Exception as exc:
-                self._warn_ocr_suppressed_exception("stop_preload_job:worker_cancel", exc)
-        was_running = False
-        if thread is not None:
-            try:
-                was_running = bool(thread.isRunning())
-            except Exception:
-                was_running = False
-        if was_running:
-            try:
-                thread.requestInterruption()
-            except Exception as exc:
-                self._warn_ocr_suppressed_exception("stop_preload_job:request_interruption", exc)
-            try:
-                thread.quit()
-            except Exception as exc:
-                self._warn_ocr_suppressed_exception("stop_preload_job:quit", exc)
-        waited = False
-        if was_running and int(wait_ms) > 0 and thread is not None:
-            try:
-                waited = bool(thread.wait(int(wait_ms)))
-            except Exception:
-                waited = False
-        if was_running and not waited and thread is not None and hasattr(thread, "terminate"):
-            try:
-                thread.terminate()
-            except Exception as exc:
-                self._warn_ocr_suppressed_exception("stop_preload_job:terminate", exc)
-        keep_job = bool(was_running and not waited)
-        if not keep_job:
-            self._ocr_preload_job = None
-        if hasattr(self, "_trace_event"):
-            try:
-                self._trace_event(
-                    "ocr_preload_cancelled",
-                    reason=str(reason or "unspecified"),
-                    was_running=bool(was_running),
-                    waited=bool(waited),
-                    keep_job=bool(keep_job),
-                )
-            except Exception as exc:
-                self._warn_ocr_suppressed_exception("stop_preload_job:trace_cancelled", exc)
+        self._ocr_preload_coordinator().stop_background_preload_job(
+            reason=reason,
+            wait_ms=wait_ms,
+        )
 
     def _schedule_ocr_background_preload(
         self,
@@ -954,431 +893,35 @@ class MainWindowOCRMixin:
         delay_ms: int | None = None,
         reason: str = "",
     ) -> None:
-        if getattr(self, "_closing", False):
-            return
-        if not self._ocr_background_preload_enabled():
-            return
-        if bool(getattr(self, "_ocr_preload_done", False)):
-            return
-        if bool(getattr(self, "_ocr_preload_attempted", False)):
-            return
-        if bool(getattr(self, "_ocr_runtime_activated", False)):
-            self._ocr_preload_done = True
-            self._ocr_preload_attempted = True
-            return
-        if getattr(self, "_ocr_async_job", None) or getattr(self, "_ocr_preload_job", None):
-            return
-        if delay_ms is None:
-            delay_ms = int(self._cfg("OCR_BACKGROUND_PRELOAD_DELAY_MS", 2500))
-        timer = self._ensure_ocr_background_preload_timer()
-        delay = max(0, int(delay_ms))
-        timer.start(delay)
-        if hasattr(self, "_trace_event"):
-            try:
-                self._trace_event(
-                    "ocr_preload_scheduled",
-                    delay_ms=delay,
-                    reason=str(reason or "unspecified"),
-                )
-            except Exception as exc:
-                self._warn_ocr_suppressed_exception("schedule_preload:trace_scheduled", exc)
+        self._ocr_preload_coordinator().schedule_background_preload(
+            delay_ms=delay_ms,
+            reason=reason,
+        )
 
     def _ocr_background_preload_block_reason(self) -> str | None:
-        startup_warmup = bool(getattr(self, "_startup_warmup_running", False))
-        allow_during_startup = bool(self._cfg("OCR_BACKGROUND_PRELOAD_ALLOW_DURING_STARTUP", True))
-        if getattr(self, "_closing", False):
-            return "closing"
-        if self._overlay_choice_active() and not (startup_warmup and allow_during_startup):
-            return "overlay_choice"
-        min_uptime_ms = max(0, int(self._cfg("OCR_BACKGROUND_PRELOAD_MIN_UPTIME_MS", 8000)))
-        if min_uptime_ms > 0 and not (startup_warmup and allow_during_startup):
-            shown_at = getattr(self, "_choice_shown_at", None)
-            if shown_at is not None:
-                try:
-                    elapsed_ms = int((time.monotonic() - float(shown_at)) * 1000.0)
-                except Exception:
-                    elapsed_ms = min_uptime_ms
-                if elapsed_ms < min_uptime_ms:
-                    return "startup_cooldown"
-        if bool(getattr(self, "_background_services_paused", False)) and not (
-            startup_warmup and allow_during_startup
-        ):
-            return "background_services_paused"
-        try:
-            if int(getattr(self, "pending", 0) or 0) > 0:
-                return "spin_pending"
-        except Exception as exc:
-            self._warn_ocr_suppressed_exception("preload_block_reason:pending", exc)
-        has_spin_anim = getattr(self, "_has_active_spin_animations", None)
-        if callable(has_spin_anim):
-            try:
-                if bool(has_spin_anim(include_internal_flags=True)):
-                    return "spin_anim_running"
-            except Exception as exc:
-                self._warn_ocr_suppressed_exception("preload_block_reason:spin_anim", exc)
-        return None
+        return self._ocr_preload_coordinator().background_preload_block_reason()
 
     def _run_ocr_background_preload(self) -> None:
-        if getattr(self, "_closing", False):
-            return
-        if not self._ocr_background_preload_enabled():
-            return
-        if bool(getattr(self, "_ocr_preload_done", False)):
-            return
-        if bool(getattr(self, "_ocr_preload_attempted", False)):
-            return
-        if bool(getattr(self, "_ocr_runtime_activated", False)):
-            self._ocr_preload_done = True
-            self._ocr_preload_attempted = True
-            return
-        if getattr(self, "_ocr_async_job", None) or getattr(self, "_ocr_preload_job", None):
-            return
-
-        block_reason = self._ocr_background_preload_block_reason()
-        if block_reason:
-            retry_ms = max(250, int(self._cfg("OCR_BACKGROUND_PRELOAD_BUSY_RETRY_MS", 1800)))
-            self._schedule_ocr_background_preload(delay_ms=retry_ms, reason="busy")
-            if hasattr(self, "_trace_event"):
-                try:
-                    self._trace_event(
-                        "ocr_preload_deferred",
-                        reason=block_reason,
-                        retry_ms=retry_ms,
-                    )
-                except Exception as exc:
-                    self._warn_ocr_suppressed_exception("run_preload:trace_deferred", exc)
-            return
-
-        kwargs = self._easyocr_resolution_kwargs()
-        preload_project_root = str(Path(__file__).resolve().parents[2])
-        preload_timeout_s = float(self._cfg("OCR_PRELOAD_SUBPROCESS_TIMEOUT_S", 60.0))
-        use_subprocess_probe = bool(self._cfg("OCR_PRELOAD_USE_SUBPROCESS_PROBE", True))
-        if bool(getattr(sys, "frozen", False)) and sys.platform.startswith("win"):
-            use_subprocess_probe = bool(
-                self._cfg("OCR_PRELOAD_USE_SUBPROCESS_PROBE_WIN_FROZEN", False)
-            )
-        inprocess_cache_warmup = bool(self._cfg("OCR_PRELOAD_INPROCESS_CACHE_WARMUP", True))
-        thread = QtCore.QThread(self)
-        try:
-            thread.setObjectName("ocr_preload_thread")
-        except Exception:
-            pass
-        worker = _OCRPreloadWorker(
-            easyocr_kwargs=kwargs,
-            project_root=preload_project_root,
-            subprocess_timeout_s=preload_timeout_s,
-            use_subprocess_probe=use_subprocess_probe,
-            inprocess_cache_warmup=inprocess_cache_warmup,
-        )
-        try:
-            worker.setObjectName("ocr_preload_worker")
-        except Exception:
-            pass
-        worker.moveToThread(thread)
-        relay = _OCRPreloadRelay(self)
-        job = {
-            "thread": thread,
-            "worker": worker,
-            "relay": relay,
-        }
-        self._ocr_preload_job = job
-
-        def _finalize_preload(ok: bool, detail: str) -> None:
-            current = getattr(self, "_ocr_preload_job", None)
-            # Allow finalize delivery even if thread.finished already cleared
-            # the job reference in a race window; only ignore if a *different*
-            # preload job is active.
-            if current is not None and current is not job:
-                return
-            if bool(job.get("_finalized", False)):
-                return
-            job["_finalized"] = True
-            self._ocr_preload_attempted = True
-            if bool(ok):
-                self._ocr_preload_done = True
-                self._ocr_runtime_activated = True
-                self._schedule_ocr_runtime_cache_release()
-            if hasattr(self, "_update_role_ocr_buttons_enabled"):
-                try:
-                    self._update_role_ocr_buttons_enabled()
-                except Exception as exc:
-                    self._warn_ocr_suppressed_exception("run_preload:finalize_update_buttons", exc)
-            if hasattr(self, "_trace_event"):
-                try:
-                    self._trace_event(
-                        "ocr_preload_finished",
-                        ok=bool(ok),
-                        detail=str(detail or ""),
-                    )
-                except Exception as exc:
-                    self._warn_ocr_suppressed_exception("run_preload:finalize_trace_finished", exc)
-            # If the worker thread already stopped, clear the job reference now.
-            if current is job:
-                thread_ref = job.get("thread")
-                running = False
-                if thread_ref is not None and hasattr(thread_ref, "isRunning"):
-                    try:
-                        running = bool(thread_ref.isRunning())
-                    except Exception:
-                        running = False
-                if not running:
-                    self._ocr_preload_job = None
-
-        def _trace_preload_lifecycle(event_name: str, payload: object) -> None:
-            if not hasattr(self, "_trace_event"):
-                return
-            event = str(event_name or "").strip() or "ocr_preload_worker:lifecycle"
-            values = payload if isinstance(payload, dict) else {}
-
-            def _clean(value: object, *, max_len: int = 220) -> str:
-                text = str(value if value is not None else "")
-                if len(text) > max_len:
-                    return text[: max_len - 1] + "…"
-                return text
-
-            trace_payload: dict[str, object] = {}
-            for key in ("child_pid", "returncode", "runtime_ms", "timeout_s", "where", "mode"):
-                if key in values:
-                    trace_payload[key] = values.get(key)
-            if "message" in values:
-                trace_payload["message"] = _clean(values.get("message"))
-            if "error" in values:
-                trace_payload["error"] = _clean(values.get("error"))
-            try:
-                self._trace_event(event, **trace_payload)
-            except Exception as exc:
-                self._warn_ocr_suppressed_exception("run_preload:lifecycle_trace", exc)
-
-        try:
-            job["worker_done_connection"] = worker.finished.connect(
-                relay.forward_done,
-                QtCore.Qt.QueuedConnection,
-            )
-        except Exception:
-            worker.finished.connect(relay.forward_done, QtCore.Qt.QueuedConnection)
-            job["worker_done_connection"] = None
-        try:
-            job["done_connection"] = relay.done.connect(_finalize_preload)
-        except Exception:
-            relay.done.connect(_finalize_preload)
-            job["done_connection"] = None
-        try:
-            job["worker_quit_connection"] = worker.finished.connect(thread.quit)
-        except Exception:
-            worker.finished.connect(thread.quit)
-            job["worker_quit_connection"] = None
-        try:
-            job["lifecycle_connection"] = worker.lifecycle.connect(
-                _trace_preload_lifecycle,
-                QtCore.Qt.QueuedConnection,
-            )
-        except Exception:
-            worker.lifecycle.connect(_trace_preload_lifecycle, QtCore.Qt.QueuedConnection)
-            job["lifecycle_connection"] = None
-        def _cleanup_cancelled_preload() -> None:
-            current = getattr(self, "_ocr_preload_job", None)
-            if current is job:
-                self._ocr_preload_job = None
-                if hasattr(self, "_trace_event"):
-                    try:
-                        self._trace_event("ocr_preload_thread_finished")
-                    except Exception as exc:
-                        self._warn_ocr_suppressed_exception("run_preload:cleanup_trace_finished", exc)
-        try:
-            job["cleanup_connection"] = thread.finished.connect(_cleanup_cancelled_preload)
-        except Exception:
-            thread.finished.connect(_cleanup_cancelled_preload)
-            job["cleanup_connection"] = None
-        try:
-            job["started_connection"] = thread.started.connect(worker.run)
-        except Exception:
-            thread.started.connect(worker.run)
-            job["started_connection"] = None
-        try:
-            job["worker_delete_connection"] = thread.finished.connect(worker.deleteLater)
-        except Exception:
-            thread.finished.connect(worker.deleteLater)
-            job["worker_delete_connection"] = None
-        try:
-            job["thread_delete_connection"] = thread.finished.connect(thread.deleteLater)
-        except Exception:
-            thread.finished.connect(thread.deleteLater)
-            job["thread_delete_connection"] = None
-        if getattr(self, "_closing", False):
-            # Close was requested while we prepared the preload job.
-            self._ocr_preload_job = None
-            try:
-                worker.deleteLater()
-            except Exception as exc:
-                self._warn_ocr_suppressed_exception("run_preload:closing_delete_worker", exc)
-            try:
-                relay.deleteLater()
-            except Exception as exc:
-                self._warn_ocr_suppressed_exception("run_preload:closing_delete_relay", exc)
-            try:
-                thread.deleteLater()
-            except Exception as exc:
-                self._warn_ocr_suppressed_exception("run_preload:closing_delete_thread", exc)
-            return
-        startup_warmup = bool(getattr(self, "_startup_warmup_running", False))
-        desired_priority = QtCore.QThread.NormalPriority if startup_warmup else QtCore.QThread.LowPriority
-        try:
-            thread.start(desired_priority)
-        except Exception:
-            thread.start()
+        self._ocr_preload_coordinator().run_background_preload()
 
     def _ensure_ocr_cache_release_timer(self) -> QtCore.QTimer:
-        timer = getattr(self, "_ocr_cache_release_timer", None)
-        if timer is not None:
-            return timer
-        timer = QtCore.QTimer(self)
-        timer.setSingleShot(True)
-        timer.timeout.connect(self._release_ocr_runtime_cache)
-        if hasattr(self, "_timers"):
-            self._timers.register(timer)
-        self._ocr_cache_release_timer = timer
-        return timer
+        return self._ocr_preload_coordinator().ensure_cache_release_timer()
 
     def _cancel_ocr_runtime_cache_release(self) -> None:
-        timer = getattr(self, "_ocr_cache_release_timer", None)
-        if timer is None:
-            return
-        try:
-            timer.stop()
-        except Exception as exc:
-            self._warn_ocr_suppressed_exception("cancel_cache_release_timer:stop", exc)
+        self._ocr_preload_coordinator().cancel_cache_release()
 
     def _schedule_ocr_runtime_cache_release(self) -> None:
-        if getattr(self, "_closing", False):
-            return
-        if bool(getattr(sys, "frozen", False)) and sys.platform.startswith("win"):
-            if not bool(getattr(self, "_ocr_cache_release_disabled_trace_logged", False)):
-                try:
-                    from ..ocr import ocr_runtime_trace
-
-                    ocr_runtime_trace.trace("ocr_cache_release:disabled", reason="win_frozen")
-                except Exception:
-                    pass
-                self._ocr_cache_release_disabled_trace_logged = True
-            return
-        if getattr(self, "_ocr_async_job", None):
-            return
-        if self._ocr_runtime_sleep_until_used() and not bool(
-            getattr(self, "_ocr_runtime_activated", False)
-        ):
-            return
-        delay_ms = max(0, int(self._cfg("OCR_IDLE_CACHE_RELEASE_MS", 30000)))
-        if delay_ms <= 0:
-            return
-        timer = self._ensure_ocr_cache_release_timer()
-        timer.start(delay_ms)
-        if hasattr(self, "_trace_event"):
-            try:
-                self._trace_event("ocr_cache_release_scheduled", delay_ms=delay_ms)
-            except Exception as exc:
-                self._warn_ocr_suppressed_exception("schedule_cache_release:trace_scheduled", exc)
+        self._ocr_preload_coordinator().schedule_cache_release()
 
     def _spin_active_for_ocr_cache_release(self) -> bool:
-        try:
-            if int(getattr(self, "pending", 0)) > 0:
-                return True
-        except Exception as exc:
-            self._warn_ocr_suppressed_exception("spin_active_for_cache_release:pending", exc)
-        role_wheels_fn = getattr(self, "_role_wheels", None)
-        if callable(role_wheels_fn):
-            try:
-                for _role, wheel in role_wheels_fn():
-                    try:
-                        if hasattr(wheel, "is_anim_running") and bool(wheel.is_anim_running()):
-                            return True
-                    except Exception:
-                        continue
-            except Exception as exc:
-                self._warn_ocr_suppressed_exception("spin_active_for_cache_release:role_wheels", exc)
-        map_main = getattr(self, "map_main", None)
-        if map_main is not None and hasattr(map_main, "is_anim_running"):
-            try:
-                return bool(map_main.is_anim_running())
-            except Exception as exc:
-                self._warn_ocr_suppressed_exception("spin_active_for_cache_release:map_main", exc)
-        return False
+        return self._ocr_preload_coordinator().spin_active_for_cache_release()
 
     def _release_ocr_runtime_cache(self) -> None:
-        if bool(getattr(sys, "frozen", False)) and sys.platform.startswith("win"):
-            try:
-                from ..ocr import ocr_runtime_trace
-
-                ocr_runtime_trace.trace("ocr_cache_release:skip", reason="win_frozen")
-            except Exception:
-                pass
-            return
-        if getattr(self, "_ocr_async_job", None):
-            self._schedule_ocr_runtime_cache_release()
-            return
-        if self._spin_active_for_ocr_cache_release():
-            retry_ms = max(200, int(self._cfg("OCR_IDLE_CACHE_RELEASE_BUSY_RETRY_MS", 2500)))
-            timer = self._ensure_ocr_cache_release_timer()
-            timer.start(retry_ms)
-            if hasattr(self, "_trace_event"):
-                try:
-                    self._trace_event("ocr_cache_release_deferred_busy", retry_ms=retry_ms)
-                except Exception as exc:
-                    self._warn_ocr_suppressed_exception("release_cache:trace_deferred_busy", exc)
-            return
-        try:
-            from ..ocr import ocr_import
-        except Exception:
-            return
-        release_fn = getattr(ocr_import, "clear_ocr_runtime_caches", None)
-        if not callable(release_fn):
-            return
-        try:
-            gpu_setting = str(self._cfg("OCR_EASYOCR_GPU", "auto")).strip().casefold()
-            release_gpu = gpu_setting not in {"", "0", "false", "off", "no", "cpu", "none"}
-            release_fn(release_gpu=release_gpu)
-        except Exception:
-            return
-        if hasattr(self, "_trace_event"):
-            try:
-                self._trace_event("ocr_cache_released")
-            except Exception as exc:
-                self._warn_ocr_suppressed_exception("release_cache:trace_released", exc)
+        self._ocr_preload_coordinator().release_cache()
 
     def _release_ocr_runtime_cache_for_spin(self) -> None:
         """Optionally release OCR runtime cache on spin start."""
-        if bool(getattr(sys, "frozen", False)) and sys.platform.startswith("win"):
-            try:
-                from ..ocr import ocr_runtime_trace
-
-                ocr_runtime_trace.trace("ocr_cache_release_for_spin:skip", reason="win_frozen")
-            except Exception:
-                pass
-            return
-        self._cancel_ocr_runtime_cache_release()
-        if getattr(self, "_ocr_async_job", None):
-            return
-        if not bool(self._cfg("OCR_RELEASE_CACHE_ON_SPIN", False)):
-            self._schedule_ocr_runtime_cache_release()
-            return
-        try:
-            from ..ocr import ocr_import
-        except Exception:
-            return
-        release_fn = getattr(ocr_import, "clear_ocr_runtime_caches", None)
-        if not callable(release_fn):
-            return
-        try:
-            release_fn(
-                release_gpu=False,
-                collect_garbage=False,
-            )
-        except Exception:
-            return
-        if hasattr(self, "_trace_event"):
-            try:
-                self._trace_event("ocr_cache_released_for_spin")
-            except Exception as exc:
-                self._warn_ocr_suppressed_exception("release_cache_for_spin:trace_released", exc)
+        self._ocr_preload_coordinator().release_cache_for_spin()
 
     def _ocr_distribution_role_keys(self) -> tuple[str, ...]:
         return ("tank", "dps", "support")

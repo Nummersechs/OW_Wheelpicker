@@ -9,34 +9,53 @@ import warnings
 
 from PySide6 import QtCore, QtGui
 
-import i18n
-
 from .. import shutdown_manager
+from ..shutdown_flow_coordinator import ShutdownFlowCoordinator
+from ..shutdown_thread_coordinator import ShutdownThreadCoordinator
 
 _DETACHED_QTHREADS: list[object] = []
 
 
 class MainWindowShutdownMixin:
+    def _shutdown_settings(self):
+        settings = getattr(self, "settings", None)
+        return getattr(settings, "shutdown", None)
+
     def _shutdown_force_exit_watchdog_enabled(self) -> bool:
         default_enabled = bool(sys.platform.startswith("win"))
-        try:
-            return bool(self._cfg("SHUTDOWN_FORCE_EXIT_WATCHDOG_ENABLED", default_enabled))
-        except Exception:
-            return default_enabled
+        section = self._shutdown_settings()
+        if section is not None and hasattr(section, "force_exit_watchdog_enabled"):
+            try:
+                return bool(getattr(section, "force_exit_watchdog_enabled"))
+            except (TypeError, ValueError):
+                pass
+        return bool(self._cfg("SHUTDOWN_FORCE_EXIT_WATCHDOG_ENABLED", default_enabled))
 
     def _shutdown_force_exit_watchdog_timeout_ms(self) -> int:
         default_ms = 12000 if sys.platform.startswith("win") else 0
+        section = self._shutdown_settings()
+        if section is not None and hasattr(section, "force_exit_watchdog_ms"):
+            try:
+                return max(0, int(getattr(section, "force_exit_watchdog_ms")))
+            except (TypeError, ValueError):
+                pass
         try:
             value = int(self._cfg("SHUTDOWN_FORCE_EXIT_WATCHDOG_MS", default_ms))
-        except Exception:
+        except (TypeError, ValueError):
             value = default_ms
         return max(0, int(value))
 
     def _shutdown_force_exit_on_orphan_ms(self) -> int:
         default_ms = 2200 if sys.platform.startswith("win") else 0
+        section = self._shutdown_settings()
+        if section is not None and hasattr(section, "force_exit_on_orphan_ms"):
+            try:
+                return max(0, int(getattr(section, "force_exit_on_orphan_ms")))
+            except (TypeError, ValueError):
+                pass
         try:
             value = int(self._cfg("SHUTDOWN_FORCE_EXIT_ON_ORPHAN_MS", default_ms))
-        except Exception:
+        except (TypeError, ValueError):
             value = default_ms
         return max(0, int(value))
 
@@ -121,10 +140,13 @@ class MainWindowShutdownMixin:
 
     def _shutdown_force_stop_preload_immediate(self) -> bool:
         default_value = bool(sys.platform.startswith("win"))
-        try:
-            return bool(self._cfg("SHUTDOWN_OCR_PRELOAD_FORCE_STOP_ON_CLOSE", default_value))
-        except Exception:
-            return default_value
+        section = self._shutdown_settings()
+        if section is not None and hasattr(section, "ocr_preload_force_stop_on_close"):
+            try:
+                return bool(getattr(section, "ocr_preload_force_stop_on_close"))
+            except (TypeError, ValueError):
+                pass
+        return bool(self._cfg("SHUTDOWN_OCR_PRELOAD_FORCE_STOP_ON_CLOSE", default_value))
 
     def _warn_shutdown_suppressed_exception(self, where: str, exc: Exception) -> None:
         try:
@@ -158,9 +180,23 @@ class MainWindowShutdownMixin:
             except Exception:
                 pass
 
+    def _shutdown_thread_coordinator(self) -> ShutdownThreadCoordinator:
+        coordinator = getattr(self, "_shutdown_thread_coordinator_obj", None)
+        if isinstance(coordinator, ShutdownThreadCoordinator):
+            return coordinator
+        coordinator = ShutdownThreadCoordinator(self)
+        self._shutdown_thread_coordinator_obj = coordinator
+        return coordinator
+
+    def _shutdown_flow_coordinator(self) -> ShutdownFlowCoordinator:
+        coordinator = getattr(self, "_shutdown_flow_coordinator_obj", None)
+        if isinstance(coordinator, ShutdownFlowCoordinator):
+            return coordinator
+        coordinator = ShutdownFlowCoordinator(self)
+        self._shutdown_flow_coordinator_obj = coordinator
+        return coordinator
+
     def _disconnect_connection(self, connection: object | None) -> None:
-        if connection is None:
-            return
         # Only disconnect concrete connection handles. Passing signal objects to
         # QObject.disconnect(...) can emit noisy RuntimeWarnings in PySide.
         try:
@@ -168,23 +204,10 @@ class MainWindowShutdownMixin:
         except Exception as exc:
             self._warn_shutdown_suppressed_exception("disconnect_connection:connection_type", exc)
             connection_type = None
-        if connection_type is not None and not isinstance(connection, connection_type):
-            return
-        try:
-            is_valid = getattr(connection, "isValid", None)
-            if callable(is_valid) and not bool(is_valid()):
-                return
-        except Exception as exc:
-            self._warn_shutdown_suppressed_exception("disconnect_connection:is_valid", exc)
-        try:
-            if not bool(connection):
-                return
-        except Exception as exc:
-            self._warn_shutdown_suppressed_exception("disconnect_connection:truthy", exc)
-        try:
-            QtCore.QObject.disconnect(connection)
-        except Exception as exc:
-            self._warn_shutdown_suppressed_exception("disconnect_connection:disconnect", exc)
+        self._shutdown_thread_coordinator().disconnect_connection(
+            connection,
+            connection_type=connection_type,
+        )
 
     def _disconnect_signal_slots(
         self,
@@ -192,25 +215,9 @@ class MainWindowShutdownMixin:
         signal_name: str,
         *slots: object | None,
     ) -> None:
-        if source is None:
-            return
-        signal = getattr(source, signal_name, None)
-        if signal is None:
-            return
         # Never call bare `signal.disconnect()` here: when no slot is connected,
         # PySide may emit noisy RuntimeWarnings during shutdown.
-        if not slots:
-            return
-        for slot in slots:
-            if slot is None:
-                continue
-            try:
-                signal.disconnect(slot)
-            except Exception as exc:
-                self._warn_shutdown_suppressed_exception(
-                    f"disconnect_signal_slots:{signal_name}",
-                    exc,
-                )
+        self._shutdown_thread_coordinator().disconnect_signal_slots(source, signal_name, *slots)
 
     def _disconnect_thread_worker_start(
         self,
@@ -219,29 +226,12 @@ class MainWindowShutdownMixin:
         started_connection: object | None = None,
     ) -> None:
         """Best effort: prevent delayed `thread.started -> worker.run` execution during shutdown."""
-        if started_connection is not None:
-            try:
-                # Disconnect by connection handle to avoid noisy warnings when
-                # slot-based disconnect does not find a matching connection.
-                QtCore.QObject.disconnect(started_connection)
-                return
-            except Exception as exc:
-                # Fallback to slot-based disconnect if connection-handle
-                # disconnect is not supported by the current binding/runtime.
-                self._warn_shutdown_suppressed_exception(
-                    "disconnect_thread_worker_start:connection",
-                    exc,
-                )
-        if thread is None or worker is None:
-            return
-        started_signal = getattr(thread, "started", None)
-        run_slot = getattr(worker, "run", None)
-        if started_signal is None or run_slot is None:
-            return
-        try:
-            started_signal.disconnect(run_slot)
-        except Exception as exc:
-            self._warn_shutdown_suppressed_exception("disconnect_thread_worker_start:slot", exc)
+        self._shutdown_thread_coordinator().disconnect_thread_worker_start(
+            thread,
+            worker,
+            started_connection,
+            disconnect_connection_fn=self._disconnect_connection,
+        )
 
     def _detach_qthread_for_shutdown(self, thread: object | None, *, reason: str) -> None:
         if thread is None:
@@ -390,102 +380,17 @@ class MainWindowShutdownMixin:
         )
 
     def _stop_qthread_for_close(self, thread: object | None) -> bool:
-        if thread is None:
-            return True
-
-        def _is_running() -> bool:
-            try:
-                return bool(thread.isRunning())
-            except Exception:
-                return False
-
-        def _is_finished() -> bool:
-            try:
-                return bool(thread.isFinished())
-            except Exception:
-                return not _is_running()
-
-        # Treat only a truly finished thread as stopped. A thread can be
-        # temporarily "not running" while startup/teardown is still in flight.
-        if _is_finished():
-            return True
-
-        try:
-            thread.requestInterruption()
-        except Exception as exc:
-            self._warn_shutdown_suppressed_exception("stop_qthread:request_interruption", exc)
-        try:
-            thread.quit()
-        except Exception as exc:
-            self._warn_shutdown_suppressed_exception("stop_qthread:quit", exc)
-        return _is_finished()
+        return self._shutdown_thread_coordinator().stop_qthread_for_close(thread)
 
     def _qthread_wait_profile_ms(self, *, reason: str = "") -> tuple[int, int]:
-        reason_key = str(reason or "").strip().casefold()
-        if reason_key == "ocr_preload_thread":
-            graceful_ms = int(self._cfg("SHUTDOWN_OCR_PRELOAD_GRACEFUL_WAIT_MS", 1400))
-            terminate_ms = int(self._cfg("SHUTDOWN_OCR_PRELOAD_TERMINATE_WAIT_MS", 350))
-            return max(0, graceful_ms), max(0, terminate_ms)
-        if reason_key == "ocr_async_thread":
-            graceful_ms = int(self._cfg("SHUTDOWN_OCR_ASYNC_GRACEFUL_WAIT_MS", 1200))
-            terminate_ms = int(self._cfg("SHUTDOWN_OCR_ASYNC_TERMINATE_WAIT_MS", 700))
-            return max(0, graceful_ms), max(0, terminate_ms)
-        graceful_ms = int(self._cfg("SHUTDOWN_CHILD_THREAD_GRACEFUL_WAIT_MS", 350))
-        terminate_ms = int(self._cfg("SHUTDOWN_CHILD_THREAD_TERMINATE_WAIT_MS", 250))
-        return max(0, graceful_ms), max(0, terminate_ms)
+        return self._shutdown_thread_coordinator().qthread_wait_profile_ms(reason=reason)
 
     def _force_stop_qthread_for_close(self, thread: object | None, *, reason: str = "") -> bool:
-        if thread is None:
-            return True
-
-        def _is_running() -> bool:
-            try:
-                return bool(thread.isRunning())
-            except Exception:
-                return False
-
-        def _is_finished() -> bool:
-            try:
-                return bool(thread.isFinished())
-            except Exception:
-                return not _is_running()
-
-        if _is_finished():
-            return True
-
+        stopped = self._shutdown_thread_coordinator().force_stop_qthread_for_close(
+            thread,
+            reason=reason,
+        )
         graceful_wait_ms, terminate_wait_ms = self._qthread_wait_profile_ms(reason=reason)
-        try:
-            thread.requestInterruption()
-        except Exception as exc:
-            self._warn_shutdown_suppressed_exception("force_stop_qthread:request_interruption", exc)
-        try:
-            thread.quit()
-        except Exception as exc:
-            self._warn_shutdown_suppressed_exception("force_stop_qthread:quit", exc)
-
-        graceful_stopped = False
-        if graceful_wait_ms > 0 and hasattr(thread, "wait"):
-            try:
-                graceful_stopped = bool(thread.wait(int(graceful_wait_ms)))
-            except Exception as exc:
-                self._warn_shutdown_suppressed_exception("force_stop_qthread:wait_graceful", exc)
-        if graceful_stopped or _is_finished():
-            return True
-
-        try:
-            if hasattr(thread, "terminate"):
-                thread.terminate()
-        except Exception as exc:
-            self._warn_shutdown_suppressed_exception("force_stop_qthread:terminate", exc)
-
-        terminated = False
-        if terminate_wait_ms > 0 and hasattr(thread, "wait"):
-            try:
-                terminated = bool(thread.wait(int(terminate_wait_ms)))
-            except Exception as exc:
-                self._warn_shutdown_suppressed_exception("force_stop_qthread:wait_terminate", exc)
-
-        stopped = bool(terminated or _is_finished())
         if hasattr(self, "_trace_event"):
             try:
                 self._trace_event(
@@ -513,16 +418,47 @@ class MainWindowShutdownMixin:
             return 0
 
     def _close_thread_wait_timeout_ms(self, *, reason: str = "") -> int:
-        base_timeout_ms = max(0, int(self._cfg("SHUTDOWN_THREAD_MAX_DEFER_MS", 2500)))
+        section = self._shutdown_settings()
+        base_timeout_ms = 2500
+        if section is not None and hasattr(section, "thread_max_defer_ms"):
+            try:
+                base_timeout_ms = max(0, int(getattr(section, "thread_max_defer_ms")))
+            except (TypeError, ValueError):
+                base_timeout_ms = 2500
+        else:
+            try:
+                base_timeout_ms = max(0, int(self._cfg("SHUTDOWN_THREAD_MAX_DEFER_MS", 2500)))
+            except (TypeError, ValueError):
+                base_timeout_ms = 2500
         reason_key = str(reason or "").strip().casefold()
         if reason_key == "ocr_preload_thread":
             # OCR preload should not block app close for long.
+            if section is not None and hasattr(section, "ocr_preload_max_defer_ms"):
+                try:
+                    return max(0, int(getattr(section, "ocr_preload_max_defer_ms")))
+                except (TypeError, ValueError):
+                    pass
             return max(0, int(self._cfg("SHUTDOWN_OCR_PRELOAD_MAX_DEFER_MS", min(base_timeout_ms, 1200))))
         if reason_key == "ocr_async_thread":
+            if section is not None and hasattr(section, "ocr_async_max_defer_ms"):
+                try:
+                    return max(0, int(getattr(section, "ocr_async_max_defer_ms")))
+                except (TypeError, ValueError):
+                    pass
             return max(0, int(self._cfg("SHUTDOWN_OCR_ASYNC_MAX_DEFER_MS", min(base_timeout_ms, 1500))))
         if reason_key == "child_qthread":
+            if section is not None and hasattr(section, "child_thread_max_defer_ms"):
+                try:
+                    return max(0, int(getattr(section, "child_thread_max_defer_ms")))
+                except (TypeError, ValueError):
+                    pass
             return max(0, int(self._cfg("SHUTDOWN_CHILD_THREAD_MAX_DEFER_MS", min(base_timeout_ms, 1200))))
         if reason_key == "python_thread":
+            if section is not None and hasattr(section, "python_thread_max_defer_ms"):
+                try:
+                    return max(0, int(getattr(section, "python_thread_max_defer_ms")))
+                except (TypeError, ValueError):
+                    pass
             return max(0, int(self._cfg("SHUTDOWN_PYTHON_THREAD_MAX_DEFER_MS", min(base_timeout_ms, 1800))))
         return base_timeout_ms
 
@@ -662,170 +598,27 @@ class MainWindowShutdownMixin:
         return f"name={name},ident={ident},alive={1 if alive else 0},daemon={1 if daemon else 0}"
 
     def _trace_shutdown_blockers(self, *, stage: str, reason: str = "", force: bool = False) -> None:
-        tracer = getattr(self, "_trace_event", None)
-        if not callable(tracer):
-            return
-
-        now = time.monotonic()
-        if not force:
-            try:
-                interval_ms = max(0, int(self._cfg("SHUTDOWN_BLOCKER_TRACE_INTERVAL_MS", 250)))
-            except Exception:
-                interval_ms = 250
-            if interval_ms > 0:
-                last = getattr(self, "_shutdown_blocker_trace_last_at", None)
-                if isinstance(last, (int, float)):
-                    if (now - float(last)) * 1000.0 < float(interval_ms):
-                        return
-        self._set_shutdown_runtime_state(shutdown_blocker_trace_last_at=now)
-
-        async_job = getattr(self, "_ocr_async_job", None)
-        preload_job = getattr(self, "_ocr_preload_job", None)
-        async_thread = async_job.get("thread") if isinstance(async_job, dict) else None
-        preload_thread = preload_job.get("thread") if isinstance(preload_job, dict) else None
-
-        running_children = self._running_child_qthreads(exclude=(async_thread, preload_thread))
-        detached_running: list[object] = []
-        for thread in list(_DETACHED_QTHREADS):
-            try:
-                if thread is not None and bool(thread.isRunning()):
-                    detached_running.append(thread)
-            except Exception:
-                continue
-        py_threads = self._running_non_daemon_python_threads()
-
-        child_preview = "|".join(
-            entry
-            for entry in (
-                self._qthread_preview_entry(thread, label="child")
-                for thread in running_children[:6]
-            )
-            if entry
+        self._shutdown_flow_coordinator().trace_shutdown_blockers(
+            stage=stage,
+            reason=reason,
+            force=force,
+            detached_threads=_DETACHED_QTHREADS,
         )
-        detached_preview = "|".join(
-            entry
-            for entry in (
-                self._qthread_preview_entry(thread, label="detached")
-                for thread in detached_running[:6]
-            )
-            if entry
-        )
-        py_preview = "|".join(
-            entry
-            for entry in (
-                self._python_thread_preview_entry(thread)
-                for thread in py_threads[:8]
-            )
-            if entry
-        )
-        try:
-            tracer(
-                "shutdown_blockers",
-                stage=str(stage or "unknown"),
-                reason=str(reason or ""),
-                ocr_async_job=int(isinstance(async_job, dict)),
-                ocr_preload_job=int(isinstance(preload_job, dict)),
-                ocr_async_thread=self._qthread_preview_entry(async_thread, label="ocr_async"),
-                ocr_preload_thread=self._qthread_preview_entry(preload_thread, label="ocr_preload"),
-                child_qthreads=int(len(running_children)),
-                child_qthreads_preview=str(child_preview),
-                detached_qthreads=int(len(detached_running)),
-                detached_qthreads_preview=str(detached_preview),
-                py_threads=int(len(py_threads)),
-                py_threads_preview=str(py_preview),
-            )
-        except Exception:
-            pass
 
     def _defer_close_for_running_thread(self, event: QtGui.QCloseEvent, *, reason: str) -> None:
-        retry_ms = 80 if str(reason or "") == "ocr_preload_thread" else 120
-        now = time.monotonic()
-        wait_started = getattr(self, "_close_thread_wait_started_at", None)
-        if wait_started is None:
-            self._set_shutdown_runtime_state(close_thread_wait_started_at=now)
-            elapsed_ms = 0
-        else:
-            elapsed_ms = max(0, int((now - float(wait_started)) * 1000.0))
-        if hasattr(self, "_trace_event"):
-            try:
-                self._trace_event(
-                    "shutdown_deferred_for_thread",
-                    reason=str(reason or "thread_running"),
-                    retry_ms=int(retry_ms),
-                    elapsed_ms=int(elapsed_ms),
-                )
-            except Exception:
-                pass
-        self._trace_shutdown_blockers(stage="defer", reason=str(reason or "thread_running"))
-        event.ignore()
-        if not isinstance(self, QtCore.QObject):
-            QtCore.QTimer.singleShot(int(retry_ms), self.close)
-            return
-        timer = getattr(self, "_close_retry_timer", None)
-        if timer is None:
-            try:
-                timer = QtCore.QTimer(self)
-                timer.setSingleShot(True)
-                timer.timeout.connect(self.close)
-                if hasattr(self, "_timers"):
-                    self._timers.register(timer)
-                self._set_shutdown_runtime_state(close_retry_timer=timer)
-            except Exception:
-                timer = None
-        if timer is None:
-            QtCore.QTimer.singleShot(int(retry_ms), self.close)
-            return
-        if not timer.isActive():
-            timer.start(int(retry_ms))
+        self._shutdown_flow_coordinator().defer_close_for_running_thread(
+            event,
+            reason=reason,
+        )
 
     def _ensure_close_overlay_timer(self) -> QtCore.QTimer:
-        timer = getattr(self, "_close_overlay_timer", None)
-        if timer is not None:
-            return timer
-        timer = QtCore.QTimer(self)
-        timer.setSingleShot(True)
-        timer.timeout.connect(self._continue_close_after_overlay)
-        if hasattr(self, "_timers"):
-            self._timers.register(timer)
-        self._set_shutdown_runtime_state(close_overlay_timer=timer)
-        return timer
+        return self._shutdown_flow_coordinator().ensure_close_overlay_timer()
 
     def _continue_close_after_overlay(self) -> None:
-        if not bool(getattr(self, "_close_overlay_active", False)):
-            return
-        self._set_shutdown_runtime_state(
-            close_overlay_active=False,
-            close_overlay_done=True,
-        )
-        self.close()
+        self._shutdown_flow_coordinator().continue_close_after_overlay()
 
     def _show_close_overlay(self) -> bool:
-        if not bool(self._cfg("SHUTDOWN_OVERLAY_ENABLED", True)):
-            return False
-        delay_ms = max(0, int(self._cfg("SHUTDOWN_OVERLAY_DELAY_MS", 320)))
-        if delay_ms <= 0:
-            return False
-        overlay = getattr(self, "overlay", None)
-        if overlay is None:
-            return False
-        try:
-            overlay.show_status_message(
-                i18n.t("overlay.shutdown_title"),
-                [i18n.t("overlay.shutdown_line1"), i18n.t("overlay.shutdown_line2"), ""],
-            )
-            overlay.setEnabled(False)
-        except Exception:
-            return False
-        self._set_shutdown_runtime_state(
-            close_overlay_active=True,
-            close_overlay_done=False,
-            closing=True,
-        )
-        # Mark close intent early so no new background OCR preload can start
-        # while shutdown overlay is shown.
-        timer = self._ensure_close_overlay_timer()
-        timer.start(delay_ms)
-        return True
+        return self._shutdown_flow_coordinator().show_close_overlay()
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         # Arm a process-level fallback immediately on close request.
