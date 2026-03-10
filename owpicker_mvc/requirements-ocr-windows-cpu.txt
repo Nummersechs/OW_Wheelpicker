@@ -1,0 +1,18 @@
+# Windows CPU-only OCR stack for PyInstaller builds.
+# This avoids CUDA-related build/runtime warnings like:
+#   "Library nvcuda.dll required via ctypes not found"
+#
+# Usage (Windows):
+#   py -m pip install -r owpicker_mvc/requirements-ocr-windows-cpu.txt
+#
+# Keep the CPU index as primary so torch/torchvision resolve to +cpu wheels.
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
+
+easyocr>=1.7
+torch>=2.2
+torchvision>=0.17
+scipy<1.14
+onnx>=1.16
+certifi>=2024.2.2
+expecttest>=0.2

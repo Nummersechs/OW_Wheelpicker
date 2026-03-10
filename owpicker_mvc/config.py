@@ -144,9 +144,9 @@ MODE_CHOICE_INPUT_GUARD_MS = 260
 # Keep disabled in this version until online flow is fully released.
 MODE_CHOICE_ONLINE_ENABLED = False
 STARTUP_FINALIZE_DELAY_MS = 60
-# Temporary debug delay so Offline mode choice stays locked for 20s after
-# startup warmup, making startup/warmup timing easier to inspect.
-STARTUP_WARMUP_COOLDOWN_MS = 20000
+# Additional cooldown after startup warmup before controls are re-enabled.
+# Set to 0 for no extra delay.
+STARTUP_WARMUP_COOLDOWN_MS = 0
 STARTUP_INPUT_DRAIN_MS = 0
 # Minimum startup lock duration for global input filtering.
 # Set to 0 to disable this additional lock window.

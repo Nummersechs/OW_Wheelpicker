@@ -203,7 +203,7 @@ class MainWindowStartupMixin:
             startup_phase=StartupPhase.WARMUP_COOLDOWN.value,
             warmup_finalize_scheduled=True,
         )
-        extra_ms = max(0, int(self._cfg("STARTUP_WARMUP_COOLDOWN_MS", 500)))
+        extra_ms = max(0, int(self._cfg("STARTUP_WARMUP_COOLDOWN_MS", 0)))
         remaining_lock_ms = 0
         block_until = getattr(self, "_startup_block_input_until", None)
         if block_until is not None:

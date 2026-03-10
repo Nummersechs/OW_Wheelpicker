@@ -21,6 +21,7 @@ def _spec_root() -> Path:
 
 project_root = _spec_root()
 app_name = "OW_Wheelpicker"
+custom_hookspath = [str(project_root / "hooks")]
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -374,8 +375,32 @@ excludes = [
     "torch._inductor.codecache",
     "torch._dynamo",
     "torch.onnx",
+    "torch.distributed",
+    "torch.distributed._sharding_spec",
+    "torch.distributed._sharded_tensor",
+    "torch.distributed._shard.checkpoint",
+    "torch.distributed.elastic",
+    "torch.testing",
     "triton",
     "onnxruntime",
+    "onnxscript",
+    # Optional ecosystems pulled via conditional imports in scipy/torch stacks.
+    # Excluding them keeps warning output focused on actionable issues.
+    "pandas",
+    "cupy",
+    "cupyx",
+    "matplotlib",
+    "pytest",
+    "psutil",
+    "sphinx",
+    "uarray",
+    "sparse",
+    "scikits",
+    "sksparse",
+    "cffi",
+    "pyparsing",
+    "railroad",
+    "importlib_metadata",
 ]
 if MIN_SIZE_BUILD:
     excludes.append("PySide6.QtMultimedia")
@@ -429,6 +454,7 @@ def _keep_toc_entry(entry) -> bool:
 a = Analysis(
     [str(project_root / "main.py")],
     pathex=[str(project_root)],
+    hookspath=custom_hookspath,
     binaries=extra_binaries,
     datas=datas,
     hiddenimports=hiddenimports,

@@ -106,6 +106,14 @@ python3 scripts/repo_hygiene.py --include-build --include-ocr-models
 
 The Windows EXE uses EasyOCR and does not require users to install Tesseract.
 
+Recommended dependency setup for warning-clean CPU builds:
+
+```cmd
+py -m pip install -r owpicker_mvc\requirements-ocr-windows-cpu.txt
+```
+
+This uses CPU-only torch wheels and avoids CUDA probe warnings (for example `nvcuda.dll`).
+
 1. Download EasyOCR models once during build preparation.
 2. Set `OW_OCR_ENGINE=easyocr` and `OW_INCLUDE_EASYOCR=1`.
 3. Keep `OW_EASYOCR_HIDDENIMPORT_PROFILE=minimal` for lean builds (default).  
