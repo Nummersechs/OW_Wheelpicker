@@ -135,6 +135,19 @@ class TestSoundManager(unittest.TestCase):
         self.assertIsNone(sm._pending_spin_timer)
         self.assertIsNone(sm._pending_spin_effect)
 
+    def test_stop_ding_cancels_pending_ding_start_timer(self):
+        sm = SoundManager(base_dir=Path("."))
+        timer = _FakeSpinTimer()
+        sm._pending_ding_timer = timer
+        sm._pending_ding_effect = object()
+
+        sm.stop_ding()
+
+        self.assertEqual(timer.stop_calls, 1)
+        self.assertEqual(timer.delete_calls, 1)
+        self.assertIsNone(sm._pending_ding_timer)
+        self.assertIsNone(sm._pending_ding_effect)
+
     def test_play_spin_windows_profile_low_uses_20ms_gap(self):
         sm = SoundManager(base_dir=Path("."))
         sm._settings = AppSettings(
@@ -226,6 +239,66 @@ class TestSoundManager(unittest.TestCase):
 
         with patch("services.sound.time.monotonic", return_value=100.0):
             sm.play_spin()
+
+        self.assertEqual(recorded, [20])
+
+    def test_play_ding_stops_existing_effects_before_new_play(self):
+        sm = SoundManager(base_dir=Path("."))
+        p_spin = Path("spin.wav")
+        p_ding = Path("ding.wav")
+        spin_eff = _FakeEffect()
+        ding_eff = _FakeEffect()
+        sm.spin_sources = [p_spin]
+        sm.ding_sources = [p_ding]
+        sm.spin_effects = {p_spin: spin_eff}
+        sm.ding_effects = {p_ding: ding_eff}
+        sm._maybe_start_lazy_warmup = lambda: None
+        recorded: list[int] = []
+        sm._schedule_ding_start = lambda _eff, delay_ms: recorded.append(int(delay_ms))
+
+        sm.play_ding()
+
+        self.assertGreaterEqual(spin_eff.stop_calls, 1)
+        self.assertGreaterEqual(ding_eff.stop_calls, 1)
+        self.assertEqual(len(recorded), 1)
+
+    def test_play_ding_active_effect_uses_audio_stop_guard_delay(self):
+        sm = SoundManager(base_dir=Path("."))
+        p_spin = Path("spin.wav")
+        p_ding = Path("ding.wav")
+        active_spin = _PlayingFakeEffect(playing=True)
+        sm.spin_sources = [p_spin]
+        sm.ding_sources = [p_ding]
+        sm.spin_effects = {p_spin: active_spin}
+        sm.ding_effects = {p_ding: _FakeEffect()}
+        sm._maybe_start_lazy_warmup = lambda: None
+        sm._resolve_spin_restart_gap_ms = lambda: 20
+        sm._resolve_audio_stop_guard_ms = lambda: 80
+        recorded: list[int] = []
+        sm._schedule_ding_start = lambda _eff, delay_ms: recorded.append(int(delay_ms))
+
+        with patch("services.sound.time.monotonic", return_value=100.0):
+            sm.play_ding()
+
+        self.assertEqual(recorded, [80])
+
+    def test_play_ding_inactive_effect_uses_restart_gap_delay(self):
+        sm = SoundManager(base_dir=Path("."))
+        p_spin = Path("spin.wav")
+        p_ding = Path("ding.wav")
+        inactive_spin = _PlayingFakeEffect(playing=False)
+        sm.spin_sources = [p_spin]
+        sm.ding_sources = [p_ding]
+        sm.spin_effects = {p_spin: inactive_spin}
+        sm.ding_effects = {p_ding: _FakeEffect()}
+        sm._maybe_start_lazy_warmup = lambda: None
+        sm._resolve_spin_restart_gap_ms = lambda: 20
+        sm._resolve_audio_stop_guard_ms = lambda: 80
+        recorded: list[int] = []
+        sm._schedule_ding_start = lambda _eff, delay_ms: recorded.append(int(delay_ms))
+
+        with patch("services.sound.time.monotonic", return_value=100.0):
+            sm.play_ding()
 
         self.assertEqual(recorded, [20])
 

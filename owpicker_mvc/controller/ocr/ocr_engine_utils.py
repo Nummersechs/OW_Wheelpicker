@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 
 def _line_extractor_kwargs(cfg: dict) -> dict[str, object]:
@@ -290,10 +291,60 @@ def _extract_names_from_texts(ocr_import, texts: list[str], cfg: dict) -> list[s
         )
         return ranked[0]
 
+    def _extract_dense_line_fallback(line_ctx: _OCRLineParseContext) -> list[str]:
+        max_words = max(1, int(cfg.get("name_max_words", 2)))
+        max_chars = max(1, int(cfg.get("name_max_chars", 24)))
+
+        dense_segments: list[str] = []
+        seen_dense_segments: set[str] = set()
+        for text in list(texts or []):
+            for raw_line in str(text or "").splitlines():
+                line = str(raw_line or "").strip()
+                if not line:
+                    continue
+                words = [token for token in re.split(r"\s+", line) if token]
+                if len(words) <= max_words and len(line) <= max_chars:
+                    continue
+                chunks = [chunk.strip() for chunk in re.split(r"[|¦｜┃│,;•]+", line) if chunk.strip()]
+                if not chunks:
+                    chunks = [line]
+                for chunk in chunks:
+                    chunk_words = [token for token in re.split(r"\s+", chunk) if token]
+                    if len(chunk_words) > max_words or len(chunk) > max_chars:
+                        for token in chunk_words:
+                            dense_key = "".join(ch.lower() for ch in str(token) if ch.isalnum())
+                            if not dense_key or dense_key in seen_dense_segments:
+                                continue
+                            seen_dense_segments.add(dense_key)
+                            dense_segments.append(str(token).strip())
+                    else:
+                        dense_key = "".join(ch.lower() for ch in str(chunk) if ch.isalnum())
+                        if not dense_key or dense_key in seen_dense_segments:
+                            continue
+                        seen_dense_segments.add(dense_key)
+                        dense_segments.append(chunk)
+
+        if not dense_segments:
+            return []
+
+        resolved: list[str] = []
+        resolved_keys: set[str] = set()
+        for segment in dense_segments:
+            parsed = line_ctx.extract_line_candidates(segment)
+            if not parsed:
+                continue
+            candidate = _pick_best_line_candidate(parsed)
+            key = "".join(ch.lower() for ch in str(candidate or "") if ch.isalnum())
+            if not key or key in resolved_keys:
+                continue
+            resolved_keys.add(key)
+            resolved.append(str(candidate).strip())
+        return resolved
+
+    line_ctx = _OCRLineParseContext(ocr_import, cfg)
     extractor = getattr(ocr_import, "extract_candidate_names_multi", None)
     if callable(extractor):
         extracted = list(extractor(texts, **_multi_extractor_kwargs(cfg)) or [])
-        line_ctx = _OCRLineParseContext(ocr_import, cfg)
         ordered_line_candidates: list[str] = []
         line_candidate_keys: set[str] = set()
         for text in list(texts or []):
@@ -332,6 +383,11 @@ def _extract_names_from_texts(ocr_import, texts: list[str], cfg: dict) -> list[s
 
         # Recall assist: if strict multi-line extraction missed one/two lines,
         # enrich with line-level fallback candidates (strict+relaxed parser).
+        if not ordered_line_candidates and not extracted:
+            dense_fallback = _extract_dense_line_fallback(line_ctx)
+            if dense_fallback:
+                return dense_fallback
+            return extracted
         if not ordered_line_candidates:
             return extracted
         if not extracted:
@@ -357,7 +413,6 @@ def _extract_names_from_texts(ocr_import, texts: list[str], cfg: dict) -> list[s
                 break
         return merged
     # Legacy fallback for lightweight test stubs without multi support.
-    line_ctx = _OCRLineParseContext(ocr_import, cfg)
     seen: set[str] = set()
     resolved: list[str] = []
     for text in list(texts or []):

@@ -412,6 +412,25 @@ class MainWindowUIBuilderMixin:
             self._map_initialized = True
             self._trace_event("ensure_map_ui:done")
             self._apply_focus_policy_defaults()
+        except Exception as exc:
+            self._trace_event("ensure_map_ui:error", error=repr(exc))
+            self._map_initialized = False
+            self._map_lists_ready = False
+            map_ui = getattr(self, "map_ui", None)
+            if map_ui is not None:
+                try:
+                    map_ui.shutdown()
+                except Exception:
+                    pass
+                try:
+                    map_ui.deleteLater()
+                except Exception:
+                    pass
+                try:
+                    delattr(self, "map_ui")
+                except Exception:
+                    pass
+            raise
         finally:
             self._map_init_in_progress = False
 

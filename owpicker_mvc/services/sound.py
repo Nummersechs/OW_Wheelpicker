@@ -62,6 +62,8 @@ class SoundManager:
         self._warmup_paused = False
         self._pending_spin_timer: QtCore.QTimer | None = None
         self._pending_spin_effect: Any | None = None
+        self._pending_ding_timer: QtCore.QTimer | None = None
+        self._pending_ding_effect: Any | None = None
         self._last_active_audio_stop_monotonic = 0.0
         self._settings = settings
 
@@ -310,6 +312,21 @@ class SoundManager:
         except _SOUND_GUARD_ERRORS:
             pass
 
+    def _cancel_pending_ding_start(self) -> None:
+        timer = self._pending_ding_timer
+        self._pending_ding_timer = None
+        self._pending_ding_effect = None
+        if timer is None:
+            return
+        try:
+            timer.stop()
+        except _SOUND_GUARD_ERRORS:
+            pass
+        try:
+            timer.deleteLater()
+        except _SOUND_GUARD_ERRORS:
+            pass
+
     def _schedule_spin_start(self, eff: Any, delay_ms: int) -> None:
         self._cancel_pending_spin_start()
         if delay_ms <= 0:
@@ -335,6 +352,37 @@ class SoundManager:
 
         timer.timeout.connect(_on_timeout)
         timer.start(int(delay_ms))
+
+    def _schedule_ding_start(self, eff: Any, delay_ms: int) -> None:
+        self._cancel_pending_ding_start()
+        if delay_ms <= 0:
+            self._play_effect(eff)
+            return
+
+        timer = QtCore.QTimer()
+        timer.setSingleShot(True)
+        self._pending_ding_timer = timer
+        self._pending_ding_effect = eff
+
+        def _on_timeout() -> None:
+            pending_eff = self._pending_ding_effect
+            self._pending_ding_effect = None
+            self._pending_ding_timer = None
+            try:
+                timer.deleteLater()
+            except _SOUND_GUARD_ERRORS:
+                pass
+            if pending_eff is None:
+                return
+            self._play_effect(pending_eff)
+
+        timer.timeout.connect(_on_timeout)
+        timer.start(int(delay_ms))
+
+    def _stop_all_action_audio(self) -> None:
+        self.stop_spin()
+        self.stop_ding()
+        self._stop_preview_effect()
 
     def _resolve_spin_restart_gap_ms(self) -> int:
         try:
@@ -402,6 +450,7 @@ class SoundManager:
         """Stop sounds/timers and release audio resources."""
         self._stop_warmup_timer()
         self._cancel_pending_spin_start()
+        self._cancel_pending_ding_start()
         try:
             self.stop_spin()
             self.stop_ding()
@@ -454,6 +503,7 @@ class SoundManager:
             "preview_tmp_exists": preview_tmp_exists,
             "lazy_warmup_started": bool(self._lazy_warmup_started),
             "pending_spin_timer": bool(self._pending_spin_timer is not None),
+            "pending_ding_timer": bool(self._pending_ding_timer is not None),
         }
 
     # --- Control ---
@@ -462,11 +512,9 @@ class SoundManager:
         """Spielt einen zufälligen Spin-Sound oder Beep, falls nichts geladen."""
         try:
             self._maybe_start_lazy_warmup()
-            # Prevent audible tail overlap from a previously chosen random spin effect.
             self._cancel_pending_spin_start()
-            self.stop_spin()
-            self.stop_ding()
-            self._stop_preview_effect()
+            self._cancel_pending_ding_start()
+            self._stop_all_action_audio()
             if self.spin_sources:
                 path = random.choice(self.spin_sources)
                 eff = self._get_or_create_effect(self.spin_effects, path, self.spin_base_volume)
@@ -506,16 +554,22 @@ class SoundManager:
         """Spielt einen zufälligen Ding-Sound oder Beep, falls nichts geladen."""
         try:
             self._maybe_start_lazy_warmup()
+            self._cancel_pending_spin_start()
+            self._cancel_pending_ding_start()
+            self._stop_all_action_audio()
             if self.ding_sources:
                 path = random.choice(self.ding_sources)
                 eff = self._get_or_create_effect(self.ding_effects, path, self.ding_base_volume)
-                self._play_effect(eff)
+                gap_ms = self._resolve_spin_restart_gap_ms()
+                tail_guard_ms = self._remaining_audio_stop_guard_ms()
+                self._schedule_ding_start(eff, delay_ms=max(gap_ms, tail_guard_ms))
             else:
                 QtWidgets.QApplication.beep()
         except _SOUND_GUARD_ERRORS:
             QtWidgets.QApplication.beep()
 
     def stop_ding(self):
+        self._cancel_pending_ding_start()
         had_active = self._stop_effects(self.ding_effects.values())
         self._mark_active_audio_stop(had_active)
 

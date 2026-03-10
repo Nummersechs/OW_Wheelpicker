@@ -443,6 +443,9 @@ class MainWindowStartupMixin:
         deadline = getattr(self, "_startup_map_prebuild_deadline", None)
         if deadline is not None and time.monotonic() >= float(deadline):
             self._set_startup_runtime_state(waiting_for_map=False, map_prebuild_deadline=None)
+            self._map_prebuild_in_progress = False
+            self._set_map_button_loading(False, reason="prebuild_timeout")
+            self._set_map_button_enabled(True)
             self._trace_event("startup_warmup:map_prebuild_timeout")
             self._startup_task_done("map_prebuild")
             return
@@ -555,7 +558,13 @@ class MainWindowStartupMixin:
             self._map_prebuild_in_progress = False
             return
         self._trace_event("map_prebuild:start")
-        self._ensure_map_ui()
+        try:
+            self._ensure_map_ui()
+        except Exception as exc:
+            self._map_prebuild_in_progress = False
+            self._set_map_button_loading(False, reason="prebuild_error")
+            self._set_map_button_enabled(True)
+            self._trace_event("map_prebuild:error", error=repr(exc))
         # map_lists_ready will flip once listsBuilt fires
 
     def _on_map_lists_ready(self) -> None:
