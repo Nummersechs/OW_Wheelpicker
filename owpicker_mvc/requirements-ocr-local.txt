@@ -2,6 +2,11 @@
 easyocr>=1.7
 torch>=2.2
 torchvision>=0.17
+# Keep SciPy on a range that still exposes internals expected by
+# current PyInstaller scipy hooks in Windows onefile builds.
+scipy<1.14
+# Satisfies optional torch.onnx imports that PyInstaller hook-torch probes.
+onnx>=1.16
 certifi>=2024.2.2
 # Used by torch testing helper imports that PyInstaller may touch while
 # resolving torch metadata/hooks on Windows builds.

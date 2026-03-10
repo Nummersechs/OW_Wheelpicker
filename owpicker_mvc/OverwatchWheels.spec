@@ -4,7 +4,6 @@ import shutil
 from pathlib import Path
 from PyInstaller.utils.hooks import (
     collect_data_files,
-    collect_dynamic_libs,
 )
 
 
@@ -59,6 +58,9 @@ if OCR_ENGINE != "easyocr":
     print(f"[spec] Unsupported OW_OCR_ENGINE={OCR_ENGINE!r}; forcing 'easyocr'.")
     OCR_ENGINE = "easyocr"
 INCLUDE_EASYOCR = _env_flag("OW_INCLUDE_EASYOCR", True)
+EASYOCR_HIDDENIMPORT_PROFILE = (os.environ.get("OW_EASYOCR_HIDDENIMPORT_PROFILE") or "minimal").strip().lower()
+if EASYOCR_HIDDENIMPORT_PROFILE not in {"minimal", "full"}:
+    EASYOCR_HIDDENIMPORT_PROFILE = "minimal"
 LEGACY_OCR_BUNDLE_REQUESTED = _env_flag("OW_INCLUDE_OCR_BUNDLE", False)
 if LEGACY_OCR_BUNDLE_REQUESTED:
     print("[spec] OW_INCLUDE_OCR_BUNDLE is obsolete and ignored (EasyOCR-only build).")
@@ -224,33 +226,33 @@ extra_hiddenimports: list[str] = []
 
 if INCLUDE_EASYOCR:
     print("[spec] EasyOCR bundle enabled.")
-    easyocr_imports = [
-        "easyocr",
-        "easyocr.cli",
-        "easyocr.config",
-        "easyocr.craft_utils",
-        "easyocr.detection",
-        "easyocr.export",
-        "easyocr.imgproc",
-        "easyocr.model.model",
-        "easyocr.model.vgg_model",
-        "easyocr.recognition",
-        "easyocr.utils",
-        "torch",
-        "torchvision",
-        "cv2",
-        "numpy",
-        "PIL",
-        "scipy",
-        "skimage",
-    ]
+    if EASYOCR_HIDDENIMPORT_PROFILE == "full":
+        easyocr_imports = [
+            "easyocr",
+            "easyocr.cli",
+            "easyocr.config",
+            "easyocr.craft_utils",
+            "easyocr.detection",
+            "easyocr.export",
+            "easyocr.imgproc",
+            "easyocr.model.model",
+            "easyocr.model.vgg_model",
+            "easyocr.recognition",
+            "easyocr.utils",
+            "torch",
+            "torchvision",
+            "cv2",
+            "numpy",
+            "PIL",
+            "scipy",
+            "skimage",
+        ]
+    else:
+        # Minimal profile: rely on PyInstaller hooks (easyocr/torch/cv2/scipy).
+        easyocr_imports = [
+            "easyocr",
+        ]
     _append_unique_strings(extra_hiddenimports, easyocr_imports)
-
-    for module_name in ("torch", "torchvision"):
-        try:
-            _append_unique_toc_entries(extra_binaries, list(collect_dynamic_libs(module_name)))
-        except Exception as exc:
-            print(f"[spec] WARNING: failed to collect dynamic libs for {module_name}: {exc}")
 
     try:
         _append_unique_toc_entries(datas, list(collect_data_files("easyocr", include_py_files=False)))
@@ -276,12 +278,11 @@ print(
     "[spec] Build profile="
     f"{BUILD_PROFILE} | dist_mode={DIST_MODE} | strip={STRIP_BINARIES} | upx={ENABLE_UPX} | "
     f"qt_multimedia={INCLUDE_QT_MULTIMEDIA} | requests={INCLUDE_REQUESTS} | "
-    f"ocr_engine={OCR_ENGINE} | include_easyocr={INCLUDE_EASYOCR} | py_optimize={PY_OPTIMIZE_LEVEL}"
+    f"ocr_engine={OCR_ENGINE} | include_easyocr={INCLUDE_EASYOCR} | "
+    f"easyocr_hiddenimports={EASYOCR_HIDDENIMPORT_PROFILE} | py_optimize={PY_OPTIMIZE_LEVEL}"
 )
 
 hiddenimports = [
-    "controller.ocr.ocr_import",
-    "view.screen_region_selector",
     *(
         [
             "PySide6.QtMultimedia",
@@ -367,6 +368,14 @@ excludes = [
     "fsspec.conftest",
     "tkinter",
     "_tkinter",
+    # Torch compile/ONNX stacks are not used by runtime OCR inference here.
+    # Excluding them reduces hook probing noise and avoids unnecessary baggage.
+    "torch._inductor",
+    "torch._inductor.codecache",
+    "torch._dynamo",
+    "torch.onnx",
+    "triton",
+    "onnxruntime",
 ]
 if MIN_SIZE_BUILD:
     excludes.append("PySide6.QtMultimedia")
