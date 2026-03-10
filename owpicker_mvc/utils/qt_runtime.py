@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from PySide6 import QtGui, QtWidgets
 
 
@@ -11,12 +13,15 @@ _HEADLESS_QPA_PLATFORMS = {
     "vnc",
     "webgl",
 }
+_QT_RUNTIME_GUARD_ERRORS = (AttributeError, RuntimeError, TypeError, ValueError, LookupError, OSError)
+_LOG = logging.getLogger(__name__)
 
 
 def qpa_platform_name() -> str:
     try:
         name = QtGui.QGuiApplication.platformName()
-    except Exception:
+    except _QT_RUNTIME_GUARD_ERRORS as exc:
+        _LOG.debug("QPA platform detection failed", exc_info=exc)
         return ""
     return str(name or "").strip().lower()
 
@@ -34,8 +39,8 @@ def safe_raise(widget) -> None:
         return
     try:
         widget.raise_()
-    except Exception:
-        pass
+    except _QT_RUNTIME_GUARD_ERRORS as exc:
+        _LOG.debug("safe_raise failed for %r", widget, exc_info=exc)
 
 
 def safe_activate_window(widget) -> None:
@@ -43,8 +48,8 @@ def safe_activate_window(widget) -> None:
         return
     try:
         widget.activateWindow()
-    except Exception:
-        pass
+    except _QT_RUNTIME_GUARD_ERRORS as exc:
+        _LOG.debug("safe_activate_window failed for %r", widget, exc_info=exc)
 
 
 def apply_preferred_app_font(app: QtWidgets.QApplication | None = None) -> None:
@@ -59,9 +64,13 @@ def apply_preferred_app_font(app: QtWidgets.QApplication | None = None) -> None:
 
     try:
         available_families = QtGui.QFontDatabase.families()
-    except Exception:
-        db = QtGui.QFontDatabase()
-        available_families = db.families()
+    except _QT_RUNTIME_GUARD_ERRORS:
+        try:
+            db = QtGui.QFontDatabase()
+            available_families = db.families()
+        except _QT_RUNTIME_GUARD_ERRORS as exc:
+            _LOG.debug("QFontDatabase family lookup failed", exc_info=exc)
+            return
     families = {str(f).lower(): str(f) for f in available_families}
     preferred = (
         "Arial",

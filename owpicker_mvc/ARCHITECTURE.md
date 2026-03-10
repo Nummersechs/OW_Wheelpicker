@@ -52,13 +52,35 @@
 - `main_window_parts/main_window_*.py`: extracted MainWindow mixins (OCR, input, startup, spin, shutdown, appearance, mode, state, background, sound).
 - `spin_service.py`: spin-all/spin-single/open-queue execution flow.
 - `mode_manager.py`, `role_mode.py`: mode switching and hero-ban/role logic.
-- `map_ui.py`, `map_mode.py`: encapsulated map UI and map mode controller logic.
+- `map/ui.py`, `map_mode.py`: encapsulated map UI and map mode controller logic.
+  - `controller/map/__init__.py` uses lazy export for `MapUI` to keep headless imports Qt-free.
+  - `controller/map/combined_state.py`: pure helpers for combining active map names and override-entry payloads.
+  - `controller/map/editor_flow.py`: map editor show/action/language-update flow around the editor widget controller.
+  - `controller/map/list_flow.py`: map list build/load/capture and map-type apply/toggle flow.
+  - `controller/map/presentation.py`: map-language/theme projection for labels/buttons/wheels/editor.
+  - `controller/map/sizing.py`: dynamic list/canvas sizing and resize-watch handling.
+  - `controller/map/updates.py`: combined-name update orchestration (timer + override push/state emit).
 - `state_sync.py`: state sync orchestrator (save/sync timers, debounce flow).
 - `state_sync_components.py`: extracted components (`StateSnapshotBuilder`, `LocalStatePersistenceQueue`, `RemoteRoleSyncService`, payload helpers).
 - `open_queue.py`: open-queue preview/override during spins.
-- `ocr/ocr_capture_ops.py`, `ocr/ocr_import.py`, `ocr/ocr_role_import.py`: OCR capture, parsing, and merge into role lists (single-role import or all-roles import with optional per-name role/subrole assignment + balanced distribution fallback).
+- OCR migration layout:
+  - `ocr/capture/`, `ocr/pipeline/`, `ocr/preload/`, `ocr/runtime/`: new package paths used for gradual OCR split.
+  - migration is incremental: some modules are already implemented in new package paths, while legacy `ocr_*.py` files are kept as compatibility wrappers for older imports.
+  - migrated core modules:
+    - `ocr/pipeline/importer.py` (legacy alias: `ocr_import.py`)
+    - `ocr/capture/pipeline_helpers.py` (legacy alias: `ocr_capture_pipeline_helpers.py`)
+    - `ocr/capture/async_flow.py` (async OCR import orchestrator)
+    - `ocr/capture/async_import.py` (compat alias to `ocr/capture/async_flow.py`)
+    - `ocr/capture/click_flow.py` (OCR capture click/dispatch orchestration)
+    - `ocr/capture/error_flow.py` (async OCR exception/finally dispatch handling)
+    - `ocr/capture/job_flow.py` (async OCR job finalize/cleanup callbacks)
+    - `ocr/capture/preflight_flow.py` (OCR capture preflight: availability checks + image prepare)
+    - `ocr/capture/result_flow.py` (async OCR result/error UI handling)
+    - `ocr/capture/thread_flow.py` (async OCR thread/job wiring and startup)
+    - `ocr/capture/ops.py` (legacy alias: `ocr_capture_ops.py`)
 - `tooltip_manager.py`, `hover_tooltip_ops.py`, `focus_policy.py`, `runtime_tracing.py`: stability/tracing for hover/focus/tooltips.
 - `shutdown_manager.py`, `timer_registry.py`, `result_state_ops.py`: shutdown robustness, timer lifecycle, result snapshots.
+  - `shutdown_snapshot.py`: pure shutdown snapshot builders (Qt-free), used by `shutdown_manager.py`.
 
 ### `model/`
 

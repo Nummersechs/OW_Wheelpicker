@@ -1,21 +1,32 @@
 from __future__ import annotations
 
-from PySide6 import QtCore
+from typing import Optional, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class TimerLike(Protocol):
+    def isActive(self) -> bool:
+        ...
+
+    def stop(self) -> None:
+        ...
 
 
 class TimerRegistry:
-    """Tracks QTimers to stop them reliably on shutdown."""
+    """Tracks timer-like objects and stops them reliably on shutdown."""
 
     def __init__(self) -> None:
-        self._timers: set[QtCore.QTimer] = set()
+        self._timers: set[TimerLike] = set()
 
-    def register(self, timer: QtCore.QTimer | None) -> QtCore.QTimer | None:
+    def register(self, timer: Optional[TimerLike]) -> Optional[TimerLike]:
         if timer is None:
+            return None
+        if not isinstance(timer, TimerLike):
             return None
         self._timers.add(timer)
         return timer
 
-    def unregister(self, timer: QtCore.QTimer | None) -> None:
+    def unregister(self, timer: Optional[TimerLike]) -> None:
         if timer is None:
             return
         self._timers.discard(timer)

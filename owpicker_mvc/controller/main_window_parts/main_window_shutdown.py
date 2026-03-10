@@ -15,6 +15,15 @@ from ..shutdown_flow_coordinator import ShutdownFlowCoordinator
 from ..shutdown_thread_coordinator import ShutdownThreadCoordinator
 
 _DETACHED_QTHREADS: list[object] = []
+_SHUTDOWN_GUARD_ERRORS = (
+    AttributeError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    LookupError,
+    OSError,
+    ImportError,
+)
 
 
 class MainWindowShutdownMixin:
@@ -102,10 +111,10 @@ class MainWindowShutdownMixin:
                 for th in running_threads[:6]:
                     try:
                         names.append(str(getattr(th, "name", "") or "thread"))
-                    except Exception:
+                    except _SHUTDOWN_GUARD_ERRORS:
                         names.append("thread")
                 py_threads_preview = ",".join(names)
-            except Exception:
+            except _SHUTDOWN_GUARD_ERRORS:
                 py_threads_count = 0
                 py_threads_preview = ""
             if hasattr(self, "_trace_event"):
@@ -117,7 +126,7 @@ class MainWindowShutdownMixin:
                         py_threads=int(py_threads_count),
                         py_threads_preview=str(py_threads_preview),
                     )
-                except Exception:
+                except _SHUTDOWN_GUARD_ERRORS:
                     pass
             # Final guard: process is still alive after close request.
             os._exit(0)
@@ -136,7 +145,7 @@ class MainWindowShutdownMixin:
                     reason=str(reason or "close_request"),
                     timeout_ms=int(timeout),
                 )
-            except Exception:
+            except _SHUTDOWN_GUARD_ERRORS:
                 pass
 
     def _shutdown_force_stop_preload_immediate(self) -> bool:
@@ -169,7 +178,7 @@ class MainWindowShutdownMixin:
                 RuntimeWarning,
                 stacklevel=2,
             )
-        except Exception:
+        except _SHUTDOWN_GUARD_ERRORS:
             pass
         if hasattr(self, "_trace_event"):
             try:
@@ -178,7 +187,7 @@ class MainWindowShutdownMixin:
                     where=str(where or "shutdown"),
                     error=repr(exc),
                 )
-            except Exception:
+            except _SHUTDOWN_GUARD_ERRORS:
                 pass
 
     def _shutdown_thread_coordinator(self) -> ShutdownThreadCoordinator:
@@ -202,7 +211,7 @@ class MainWindowShutdownMixin:
         # QObject.disconnect(...) can emit noisy RuntimeWarnings in PySide.
         try:
             connection_type = QtCore.QMetaObject.Connection
-        except Exception as exc:
+        except _SHUTDOWN_GUARD_ERRORS as exc:
             self._warn_shutdown_suppressed_exception("disconnect_connection:connection_type", exc)
             connection_type = None
         self._shutdown_thread_coordinator().disconnect_connection(
@@ -242,32 +251,32 @@ class MainWindowShutdownMixin:
         try:
             if hasattr(thread, "setParent"):
                 thread.setParent(None)
-        except Exception as exc:
+        except _SHUTDOWN_GUARD_ERRORS as exc:
             self._warn_shutdown_suppressed_exception("detach_qthread:set_parent", exc)
         try:
             thread.requestInterruption()
-        except Exception as exc:
+        except _SHUTDOWN_GUARD_ERRORS as exc:
             self._warn_shutdown_suppressed_exception("detach_qthread:request_interruption", exc)
         try:
             thread.quit()
-        except Exception as exc:
+        except _SHUTDOWN_GUARD_ERRORS as exc:
             self._warn_shutdown_suppressed_exception("detach_qthread:quit", exc)
 
         def _cleanup_detached() -> None:
             try:
                 _DETACHED_QTHREADS.remove(thread)
-            except Exception as exc:
+            except _SHUTDOWN_GUARD_ERRORS as exc:
                 self._warn_shutdown_suppressed_exception("detach_qthread:cleanup_remove", exc)
             try:
                 if hasattr(thread, "deleteLater"):
                     thread.deleteLater()
-            except Exception as exc:
+            except _SHUTDOWN_GUARD_ERRORS as exc:
                 self._warn_shutdown_suppressed_exception("detach_qthread:cleanup_delete_later", exc)
 
         try:
             if hasattr(thread, "finished"):
                 thread.finished.connect(_cleanup_detached)
-        except Exception as exc:
+        except _SHUTDOWN_GUARD_ERRORS as exc:
             self._warn_shutdown_suppressed_exception("detach_qthread:connect_finished", exc)
         _DETACHED_QTHREADS.append(thread)
         if hasattr(self, "_trace_event"):
@@ -276,7 +285,7 @@ class MainWindowShutdownMixin:
                     "shutdown_orphaned_thread",
                     reason=str(reason or "detached_qthread"),
                 )
-            except Exception:
+            except _SHUTDOWN_GUARD_ERRORS:
                 pass
 
     def _orphan_running_ocr_preload_job(
@@ -316,7 +325,7 @@ class MainWindowShutdownMixin:
                     obj.setParent(None)
                 if obj is not None and hasattr(obj, "deleteLater"):
                     obj.deleteLater()
-            except Exception as exc:
+            except _SHUTDOWN_GUARD_ERRORS as exc:
                 self._warn_shutdown_suppressed_exception("orphan_preload:cleanup_obj", exc)
         self._detach_qthread_for_shutdown(thread, reason=reason or "ocr_preload_thread")
         self._ocr_preload_job = None
@@ -363,7 +372,7 @@ class MainWindowShutdownMixin:
         for path in list(job.get("paths") or []):
             try:
                 Path(path).unlink(missing_ok=True)
-            except Exception as exc:
+            except _SHUTDOWN_GUARD_ERRORS as exc:
                 self._warn_shutdown_suppressed_exception("orphan_async:unlink_path", exc)
         for obj in (relay, worker):
             try:
@@ -371,7 +380,7 @@ class MainWindowShutdownMixin:
                     obj.setParent(None)
                 if obj is not None and hasattr(obj, "deleteLater"):
                     obj.deleteLater()
-            except Exception as exc:
+            except _SHUTDOWN_GUARD_ERRORS as exc:
                 self._warn_shutdown_suppressed_exception("orphan_async:cleanup_obj", exc)
         self._detach_qthread_for_shutdown(thread, reason=reason or "ocr_async_thread")
         self._ocr_async_job = None
@@ -401,7 +410,7 @@ class MainWindowShutdownMixin:
                     terminate_wait_ms=int(terminate_wait_ms),
                     stopped=bool(stopped),
                 )
-            except Exception:
+            except _SHUTDOWN_GUARD_ERRORS:
                 pass
         return stopped
 
@@ -415,7 +424,7 @@ class MainWindowShutdownMixin:
             return 0
         try:
             return max(0, int((time.monotonic() - float(started)) * 1000.0))
-        except Exception:
+        except _SHUTDOWN_GUARD_ERRORS:
             return 0
 
     def _close_thread_wait_timeout_ms(self, *, reason: str = "") -> int:
@@ -487,7 +496,7 @@ class MainWindowShutdownMixin:
         current_thread = None
         try:
             current_thread = QtCore.QThread.currentThread()
-        except Exception:
+        except _SHUTDOWN_GUARD_ERRORS:
             current_thread = None
         running: list[QtCore.QThread] = []
         seen: set[int] = set()
@@ -514,7 +523,7 @@ class MainWindowShutdownMixin:
             running = False
             try:
                 running = bool(thread is not None and thread.isRunning())
-            except Exception:
+            except _SHUTDOWN_GUARD_ERRORS:
                 running = False
             if not running:
                 stale.append(thread)
@@ -655,12 +664,12 @@ class MainWindowShutdownMixin:
         if hasattr(self, "_cancel_ocr_background_preload"):
             try:
                 self._cancel_ocr_background_preload()
-            except Exception as exc:
+            except _SHUTDOWN_GUARD_ERRORS as exc:
                 self._warn_shutdown_suppressed_exception("close_event:cancel_ocr_preload_timer", exc)
         if hasattr(self, "_cancel_ocr_runtime_cache_release"):
             try:
                 self._cancel_ocr_runtime_cache_release()
-            except Exception as exc:
+            except _SHUTDOWN_GUARD_ERRORS as exc:
                 self._warn_shutdown_suppressed_exception("close_event:cancel_ocr_cache_release_timer", exc)
 
         job = getattr(self, "_ocr_async_job", None)
@@ -673,7 +682,7 @@ class MainWindowShutdownMixin:
             if callable(cancel_slot):
                 try:
                     cancel_slot()
-                except Exception as exc:
+                except _SHUTDOWN_GUARD_ERRORS as exc:
                     self._warn_shutdown_suppressed_exception("close_event:async_worker_cancel", exc)
             self._disconnect_thread_worker_start(
                 thread,
@@ -683,7 +692,7 @@ class MainWindowShutdownMixin:
             for path in list(job.get("paths") or []):
                 try:
                     Path(path).unlink(missing_ok=True)
-                except Exception as exc:
+                except _SHUTDOWN_GUARD_ERRORS as exc:
                     self._warn_shutdown_suppressed_exception("close_event:async_unlink_path", exc)
             if not self._stop_qthread_for_close(
                 thread,
@@ -702,7 +711,7 @@ class MainWindowShutdownMixin:
                 if current_thread is not None and hasattr(current_thread, "isRunning"):
                     try:
                         current_running = bool(current_thread.isRunning())
-                    except Exception:
+                    except _SHUTDOWN_GUARD_ERRORS:
                         current_running = False
                 if current_running:
                     if self._close_thread_wait_timed_out(reason="ocr_async_thread"):
@@ -725,7 +734,7 @@ class MainWindowShutdownMixin:
             if callable(cancel_slot):
                 try:
                     cancel_slot()
-                except Exception as exc:
+                except _SHUTDOWN_GUARD_ERRORS as exc:
                     self._warn_shutdown_suppressed_exception("close_event:preload_worker_cancel", exc)
             self._disconnect_thread_worker_start(
                 preload_thread,
@@ -754,7 +763,7 @@ class MainWindowShutdownMixin:
                 if current_thread is not None and hasattr(current_thread, "isRunning"):
                     try:
                         current_running = bool(current_thread.isRunning())
-                    except Exception:
+                    except _SHUTDOWN_GUARD_ERRORS:
                         current_running = False
                 if current_running:
                     if force_stop_preload_immediate:
@@ -814,7 +823,7 @@ class MainWindowShutdownMixin:
                         count=int(len(running_py_threads)),
                         preview=str(preview),
                     )
-                except Exception:
+                except _SHUTDOWN_GUARD_ERRORS:
                     pass
             if self._close_thread_wait_timed_out(reason="python_thread"):
                 if hasattr(self, "_trace_event"):
@@ -824,7 +833,7 @@ class MainWindowShutdownMixin:
                             count=int(len(running_py_threads)),
                             preview=str(preview),
                         )
-                    except Exception:
+                    except _SHUTDOWN_GUARD_ERRORS:
                         pass
             else:
                 self._defer_close_for_running_thread(event, reason="python_thread")
@@ -835,7 +844,7 @@ class MainWindowShutdownMixin:
         ):
             try:
                 self._release_ocr_runtime_cache()
-            except Exception as exc:
+            except _SHUTDOWN_GUARD_ERRORS as exc:
                 self._warn_shutdown_suppressed_exception("close_event:release_ocr_runtime_cache", exc)
         self._trace_shutdown_blockers(stage="close_commit", reason="before_handle_close", force=True)
         self._set_app_event_filter_enabled(False)

@@ -1,8 +1,56 @@
 from __future__ import annotations
 
+from typing import Optional, Protocol
+
 from model.mode_keys import is_role_mode
 from model.role_keys import role_wheels
-from view.wheel_view import WheelView
+
+
+class OpenQueueWheel(Protocol):
+    def is_selected_for_global_spin(self) -> bool: ...
+    def set_included_in_global_spin(self, enabled: bool) -> None: ...
+    def get_enabled_names(self) -> list[str]: ...
+    def get_subrole_labels(self) -> list[str]: ...
+    def is_pair_mode_enabled(self) -> bool: ...
+    def set_pair_mode_enabled(self, enabled: bool) -> None: ...
+    def is_subrole_filter_enabled(self) -> bool: ...
+    def set_subrole_filter_enabled(self, enabled: bool) -> None: ...
+    def set_override_entries(self, entries: Optional[list[dict]]) -> None: ...
+    def get_override_entries(self) -> Optional[list[dict]]: ...
+    def get_disabled_indices(self) -> set[int]: ...
+    def restore_disabled_indices(self, indices: Optional[set[int]]) -> None: ...
+
+
+class OpenQueueHost(Protocol):
+    def role_wheels(self) -> list[tuple[str, OpenQueueWheel]]: ...
+    def current_mode(self) -> str: ...
+    def hero_ban_active(self) -> bool: ...
+    def spin_mode_value(self) -> int: ...
+
+
+class MainWindowOpenQueueHost:
+    """Adapter that exposes the minimal Open Queue host interface."""
+
+    def __init__(self, main_window) -> None:
+        self._main_window = main_window
+
+    def role_wheels(self) -> list[tuple[str, OpenQueueWheel]]:
+        return [(role, wheel) for role, wheel in role_wheels(self._main_window)]
+
+    def current_mode(self) -> str:
+        return str(getattr(self._main_window, "current_mode", "") or "")
+
+    def hero_ban_active(self) -> bool:
+        return bool(getattr(self._main_window, "hero_ban_active", False))
+
+    def spin_mode_value(self) -> int:
+        toggle = getattr(self._main_window, "spin_mode_toggle", None)
+        if toggle is None or not hasattr(toggle, "value"):
+            return 0
+        try:
+            return int(toggle.value())
+        except (AttributeError, TypeError, ValueError):
+            return 0
 
 
 class OpenQueueController:
@@ -11,34 +59,46 @@ class OpenQueueController:
     OPEN_MAX_PLAYERS = 6
     _OPEN_FILL_ORDER = ("Tank", "Damage", "Support", "Support", "Damage", "Tank")
 
-    def __init__(self, main_window) -> None:
-        self._mw = main_window
+    def __init__(self, host_or_main_window) -> None:
+        self._host = self._as_host(host_or_main_window)
         self._preview_busy = False
-        self._preview_restore: dict[WheelView, dict] = {}
+        self._preview_restore: dict[OpenQueueWheel, dict] = {}
         self._spin_restore: list[dict] = []
         self._spin_active = False
         self._open_player_count = 3
         self._applying_open_combination = False
 
-    def _all_role_wheels(self) -> list[tuple[str, WheelView]]:
-        return [(role, wheel) for role, wheel in role_wheels(self._mw)]
+    @staticmethod
+    def _as_host(host_or_main_window) -> OpenQueueHost:
+        if (
+            hasattr(host_or_main_window, "role_wheels")
+            and callable(getattr(host_or_main_window, "role_wheels", None))
+            and hasattr(host_or_main_window, "current_mode")
+            and callable(getattr(host_or_main_window, "current_mode", None))
+            and hasattr(host_or_main_window, "hero_ban_active")
+            and callable(getattr(host_or_main_window, "hero_ban_active", None))
+            and hasattr(host_or_main_window, "spin_mode_value")
+            and callable(getattr(host_or_main_window, "spin_mode_value", None))
+        ):
+            return host_or_main_window
+        return MainWindowOpenQueueHost(host_or_main_window)
+
+    def _all_role_wheels(self) -> list[tuple[str, OpenQueueWheel]]:
+        return list(self._host.role_wheels())
 
     def spin_mode_allowed(self) -> bool:
-        return is_role_mode(getattr(self._mw, "current_mode", None)) and not getattr(
-            self._mw, "hero_ban_active", False
-        )
+        return is_role_mode(self._host.current_mode()) and not self._host.hero_ban_active()
 
     def is_mode_active(self) -> bool:
         if not self.spin_mode_allowed():
             return False
-        toggle = getattr(self._mw, "spin_mode_toggle", None)
-        return bool(toggle and toggle.value() == 1)
+        return self._host.spin_mode_value() == 1
 
-    def selected_wheels(self) -> list[WheelView]:
-        return [wheel for _role, wheel in role_wheels(self._mw) if wheel.is_selected_for_global_spin()]
+    def selected_wheels(self) -> list[OpenQueueWheel]:
+        return [wheel for _role, wheel in self._all_role_wheels() if wheel.is_selected_for_global_spin()]
 
-    def all_wheels(self) -> list[WheelView]:
-        return [wheel for _role, wheel in role_wheels(self._mw)]
+    def all_wheels(self) -> list[OpenQueueWheel]:
+        return [wheel for _role, wheel in self._all_role_wheels()]
 
     def is_applying_combination(self) -> bool:
         return bool(self._applying_open_combination)
@@ -48,14 +108,11 @@ class OpenQueueController:
         seen: set[str] = set()
         wheels = self.selected_wheels() if include_selected_only else self.all_wheels()
         for wheel in wheels:
-            disabled_labels = set(getattr(wheel, "_disabled_labels", set()) or set())
-            for entry in wheel._active_entries():
-                name = entry.get("name", "").strip()
-                if not name or name in disabled_labels:
+            for name in wheel.get_enabled_names():
+                if name in seen:
                     continue
-                if name not in seen:
-                    seen.add(name)
-                    names.append(name)
+                seen.add(name)
+                names.append(name)
         return names
 
     def slots(self) -> int:
@@ -65,10 +122,7 @@ class OpenQueueController:
         slots_by_role: dict[str, int] = {}
         for role, wheel in self._all_role_wheels():
             include = bool(wheel.is_selected_for_global_spin())
-            pair_mode = bool(getattr(wheel, "pair_mode", False))
-            toggle = getattr(wheel, "toggle", None)
-            if toggle is not None:
-                pair_mode = bool(toggle.isChecked())
+            pair_mode = bool(wheel.is_pair_mode_enabled())
             slots_by_role[role] = 2 if include and pair_mode else (1 if include else 0)
         return slots_by_role
 
@@ -98,38 +152,25 @@ class OpenQueueController:
             return clamped
         return min(clamped, max(self.OPEN_MIN_PLAYERS, int(max_allowed)))
 
-    def _wheel_subroles(self, wheel: WheelView) -> list[str]:
-        if bool(getattr(wheel, "use_subrole_filter", False)) and len(getattr(wheel, "subrole_labels", [])) >= 2:
-            return list(wheel.subrole_labels[:2])
+    def _wheel_subroles(self, wheel: OpenQueueWheel) -> list[str]:
+        labels = wheel.get_subrole_labels()
+        if bool(wheel.is_subrole_filter_enabled()) and len(labels) >= 2:
+            return list(labels[:2])
         return []
 
-    def _wheel_mode_state(self, wheel: WheelView) -> tuple[bool, bool]:
-        wheel_state = getattr(wheel, "_wheel_state", None)
-        pair_mode = bool(getattr(wheel_state, "pair_mode", getattr(wheel, "pair_mode", False)))
-        use_subroles = bool(
-            getattr(
-                wheel_state,
-                "use_subrole_filter",
-                getattr(wheel, "use_subrole_filter", False),
-            )
-        )
-        return pair_mode, use_subroles
+    @staticmethod
+    def _wheel_mode_state(wheel: OpenQueueWheel) -> tuple[bool, bool]:
+        return bool(wheel.is_pair_mode_enabled()), bool(wheel.is_subrole_filter_enabled())
 
     def _apply_wheel_mode_state(
         self,
-        wheel: WheelView,
+        wheel: OpenQueueWheel,
         *,
         pair_mode: bool,
         use_subroles: bool,
     ) -> None:
-        wheel_state = getattr(wheel, "_wheel_state", None)
-        if wheel_state is not None:
-            wheel_state.pair_mode = bool(pair_mode)
-            wheel_state.use_subrole_filter = bool(use_subroles)
-        if hasattr(wheel, "pair_mode"):
-            wheel.pair_mode = bool(pair_mode)
-        if hasattr(wheel, "use_subrole_filter"):
-            wheel.use_subrole_filter = bool(use_subroles)
+        wheel.set_pair_mode_enabled(bool(pair_mode))
+        wheel.set_subrole_filter_enabled(bool(use_subroles))
 
     def player_count(self, *, max_allowed: int | None = None) -> int:
         return self._clamp_player_count(self._open_player_count, max_allowed=max_allowed)
@@ -145,8 +186,8 @@ class OpenQueueController:
         self,
         *,
         requested: int | None = None,
-        active: list[tuple[str, WheelView]] | None = None,
-    ) -> list[tuple[str, WheelView, int]]:
+        active: list[tuple[str, OpenQueueWheel]] | None = None,
+    ) -> list[tuple[str, OpenQueueWheel, int]]:
         del active  # Open uses a fixed role combination per requested count.
         role_wheels_all = self._all_role_wheels()
         if not role_wheels_all:
@@ -184,23 +225,17 @@ class OpenQueueController:
             for _role, wheel, slots in plan:
                 include = bool(slots > 0)
                 pair_mode = bool(slots >= 2)
-
-                btn_include = getattr(wheel, "btn_include_in_all", None)
-                if btn_include is not None and bool(btn_include.isChecked()) != include:
-                    btn_include.setChecked(include)
-
-                toggle = getattr(wheel, "toggle", None)
-                if toggle is not None and bool(toggle.isChecked()) != pair_mode:
-                    toggle.setChecked(pair_mode)
+                wheel.set_included_in_global_spin(include)
+                wheel.set_pair_mode_enabled(pair_mode)
         finally:
             self._applying_open_combination = False
 
-    def _view_key(self, wheel: WheelView, names: list[str]) -> tuple:
-        use_subroles = bool(getattr(wheel, "use_subrole_filter", False))
+    def _view_key(self, wheel: OpenQueueWheel, names: list[str]) -> tuple:
+        use_subroles = bool(wheel.is_subrole_filter_enabled())
         subroles = tuple(self._wheel_subroles(wheel)) if use_subroles else ()
         return (tuple(names), use_subroles, subroles)
 
-    def _entries_for_wheel(self, wheel: WheelView, names: list[str]) -> list[dict]:
+    def _entries_for_wheel(self, wheel: OpenQueueWheel, names: list[str]) -> list[dict]:
         subroles = self._wheel_subroles(wheel)
         return [{"name": n, "subroles": list(subroles), "active": True} for n in names]
 
@@ -218,14 +253,14 @@ class OpenQueueController:
             entry = self._preview_restore.get(wheel)
             if entry is None:
                 entry = {
-                    "override_entries": getattr(wheel, "_override_entries", None),
-                    "disabled_indices": set(getattr(wheel, "_disabled_indices", set())),
+                    "override_entries": wheel.get_override_entries(),
+                    "disabled_indices": wheel.get_disabled_indices(),
                     "preview_entries": None,
                     "key": None,
                 }
                 self._preview_restore[wheel] = entry
             key = self._view_key(wheel, names)
-            if entry.get("key") == key and getattr(wheel, "_override_entries", None) is not None:
+            if entry.get("key") == key and wheel.get_override_entries() is not None:
                 continue
             preview_entries = self._entries_for_wheel(wheel, names)
             wheel.set_override_entries(preview_entries)
@@ -243,7 +278,7 @@ class OpenQueueController:
         try:
             for wheel, entry in list(self._preview_restore.items()):
                 preview_entries = entry.get("preview_entries")
-                current_override = getattr(wheel, "_override_entries", None)
+                current_override = wheel.get_override_entries()
                 if (
                     not force
                     and preview_entries is not None
@@ -252,17 +287,16 @@ class OpenQueueController:
                 ):
                     continue
                 wheel.set_override_entries(entry.get("override_entries"))
-                wheel._disabled_indices = set(entry.get("disabled_indices", set()))
-                wheel._refresh_disabled_indices()
+                wheel.restore_disabled_indices(set(entry.get("disabled_indices", set())))
             self._preview_restore = {}
         finally:
             self._preview_busy = False
 
     def begin_spin_override(
         self,
-        entries_by_wheel: dict[WheelView, list[dict]],
+        entries_by_wheel: dict[OpenQueueWheel, list[dict]],
         *,
-        mode_overrides: dict[WheelView, dict[str, bool]] | None = None,
+        mode_overrides: dict[OpenQueueWheel, dict[str, bool]] | None = None,
     ) -> None:
         mode_overrides = mode_overrides or {}
         self._spin_restore = []
@@ -271,10 +305,10 @@ class OpenQueueController:
             self._spin_restore.append(
                 {
                     "wheel": wheel,
-                    "override_entries": getattr(wheel, "_override_entries", None),
+                    "override_entries": wheel.get_override_entries(),
                     "pair_mode_state": current_pair_mode,
                     "use_subroles_state": current_use_subroles,
-                    "disabled_indices": set(getattr(wheel, "_disabled_indices", set())),
+                    "disabled_indices": wheel.get_disabled_indices(),
                 }
             )
             override = mode_overrides.get(wheel) or {}
@@ -305,8 +339,7 @@ class OpenQueueController:
                 use_subroles=restored_use_subroles,
             )
             wheel.set_override_entries(entry.get("override_entries"))
-            wheel._disabled_indices = set(entry.get("disabled_indices", set()))
-            wheel._refresh_disabled_indices()
+            wheel.restore_disabled_indices(set(entry.get("disabled_indices", set())))
         self._spin_restore = []
         self._spin_active = False
         # If Open Queue was disabled during spin, ensure we leave preview mode.

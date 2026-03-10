@@ -3,7 +3,7 @@ from __future__ import annotations
 from difflib import SequenceMatcher
 import re
 
-from . import ocr_postprocess_retry_utils as _retry_utils
+from .pipeline import postprocess_retry_utils as _retry_utils
 
 
 def _simple_name_key(value: str) -> str:

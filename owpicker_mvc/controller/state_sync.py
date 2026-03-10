@@ -11,6 +11,7 @@ from PySide6 import QtCore
 
 from controller.state_sync_components import (
     LocalStatePersistenceQueue,
+    MainWindowSnapshotSource,
     RemoteRoleSyncService,
     RoleSyncPayloadBuilder,
     StateFilePersistence,
@@ -57,7 +58,7 @@ class StateSyncController(QtCore.QObject):
         self._mw = main_window
         self._settings = getattr(main_window, "settings", None)
         self._state_file = state_file
-        self._snapshot_builder = StateSnapshotBuilder(main_window)
+        self._snapshot_builder = StateSnapshotBuilder(MainWindowSnapshotSource(main_window))
         self._role_payload_builder = RoleSyncPayloadBuilder()
         self._local_persistence = LocalStatePersistenceQueue(
             state_file=self._state_file,
@@ -104,12 +105,12 @@ class StateSyncController(QtCore.QObject):
         if settings is not None and hasattr(settings, "resolve"):
             try:
                 return settings.resolve(key, default)
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 pass
         if settings is not None and hasattr(settings, "get"):
             try:
                 return settings.get(key, default)
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 pass
         return default
 
@@ -125,7 +126,7 @@ class StateSyncController(QtCore.QObject):
             return
         try:
             print(*args, **kwargs)
-        except Exception:
+        except OSError:
             pass
 
     @staticmethod

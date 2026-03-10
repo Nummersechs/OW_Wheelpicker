@@ -7,14 +7,14 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 import i18n
 from model.main_window_runtime_state import OCRPreloadPhase
-from ..ocr.ocr_role_import import (
+from ..ocr.pipeline.role_import import (
     PendingOCRImport,
     normalize_name_key as normalize_ocr_name_key,
     resolve_selected_candidates as resolve_selected_ocr_candidates,
 )
-from ..ocr import ocr_import_ui_helpers as _ocr_import_ui_helpers
-from ..ocr.ocr_preload_coordinator import OCRPreloadCoordinator
-from ..ocr.ocr_preload_worker import (
+from ..ocr.pipeline import import_ui_helpers as _ocr_import_ui_helpers
+from ..ocr.preload.coordinator import OCRPreloadCoordinator
+from ..ocr.preload.worker import (
     OCRPreloadRelay as _OCRPreloadRelay,
     OCRPreloadWorker as _OCRPreloadWorker,
 )
@@ -386,7 +386,11 @@ class MainWindowOCRMixin:
         if btn is None:
             return
         value = str(text or "")
-        btn.setToolTip(value)
+        try:
+            if str(btn.toolTip() or "") != value:
+                btn.setToolTip(value)
+        except Exception:
+            btn.setToolTip(value)
         self._refresh_live_tooltip_for_widget(btn, value)
 
     def _update_role_ocr_button_enabled(self, role_key: str) -> None:
@@ -405,20 +409,26 @@ class MainWindowOCRMixin:
         self._set_ocr_button_tooltip(btn, self._ocr_button_tooltip_text(tooltip_key))
 
     def _update_role_ocr_buttons_enabled(self) -> None:
-        waiting_preload = self._ocr_preload_ui_block_active()
-        for role_key in tuple(self._role_ocr_buttons.keys()):
-            self._update_role_ocr_button_enabled(role_key)
-        if hasattr(self, "btn_open_q_ocr"):
-            enabled = self._role_ocr_import_available("all")
-            if self._overlay_choice_active():
-                enabled = False
-            if waiting_preload:
-                enabled = False
-            self.btn_open_q_ocr.setEnabled(enabled)
-            self._set_ocr_button_tooltip(
-                self.btn_open_q_ocr,
-                self._ocr_button_tooltip_text("ocr.open_q_button_tooltip"),
-            )
+        if bool(getattr(self, "_updating_role_ocr_buttons", False)):
+            return
+        self._updating_role_ocr_buttons = True
+        try:
+            waiting_preload = self._ocr_preload_ui_block_active()
+            for role_key in tuple(self._role_ocr_buttons.keys()):
+                self._update_role_ocr_button_enabled(role_key)
+            if hasattr(self, "btn_open_q_ocr"):
+                enabled = self._role_ocr_import_available("all")
+                if self._overlay_choice_active():
+                    enabled = False
+                if waiting_preload:
+                    enabled = False
+                self.btn_open_q_ocr.setEnabled(enabled)
+                self._set_ocr_button_tooltip(
+                    self.btn_open_q_ocr,
+                    self._ocr_button_tooltip_text("ocr.open_q_button_tooltip"),
+                )
+        finally:
+            self._updating_role_ocr_buttons = False
 
     def _ocr_runtime_sleep_until_used(self) -> bool:
         return self._ocr_bool("runtime_sleep_until_used", "OCR_RUNTIME_SLEEP_UNTIL_USED", True)

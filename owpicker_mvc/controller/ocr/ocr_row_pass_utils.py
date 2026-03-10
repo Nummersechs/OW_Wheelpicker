@@ -5,7 +5,7 @@ import tempfile
 
 from PySide6 import QtGui
 
-from . import ocr_row_pass_helpers as _row_helpers
+from .pipeline import row_pass_helpers as _row_helpers
 
 
 _detect_text_row_ranges = _row_helpers._detect_text_row_ranges

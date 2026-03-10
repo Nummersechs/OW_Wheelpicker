@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import logging
+
 from services.sound import SoundManager
+
+
+_MAIN_WINDOW_SOUND_GUARD_ERRORS = (AttributeError, RuntimeError, TypeError, ValueError, LookupError, OSError)
+_LOG = logging.getLogger(__name__)
 
 
 class MainWindowSoundMixin:
@@ -21,7 +27,8 @@ class MainWindowSoundMixin:
         try:
             self.sound.warmup_async(self, step_ms=int(step_ms), on_done=on_done)
             return True
-        except Exception:
+        except _MAIN_WINDOW_SOUND_GUARD_ERRORS as exc:
+            _LOG.debug("Sound warmup_async failed", exc_info=exc)
             return False
 
     def _startup_task_sound(self) -> None:
@@ -40,8 +47,8 @@ class MainWindowSoundMixin:
             return
         try:
             sound.pause_background_warmup()
-        except Exception:
-            pass
+        except _MAIN_WINDOW_SOUND_GUARD_ERRORS as exc:
+            _LOG.debug("pause_background_warmup failed", exc_info=exc)
 
     def _resume_sound_background_warmup(self) -> None:
         if not bool(self._cfg("PAUSE_SOUND_WARMUP_DURING_SPIN", True)):
@@ -51,16 +58,16 @@ class MainWindowSoundMixin:
             return
         try:
             sound.resume_background_warmup()
-        except Exception:
-            pass
+        except _MAIN_WINDOW_SOUND_GUARD_ERRORS as exc:
+            _LOG.debug("resume_background_warmup failed", exc_info=exc)
 
     def _on_volume_changed(self, value: int):
         factor = max(0.0, min(1.0, value / 100.0))
         try:
             self.sound.set_master_volume(factor)
-        except Exception:
+        except _MAIN_WINDOW_SOUND_GUARD_ERRORS as exc:
             # Keep UI responsive even if an audio backend call fails.
-            pass
+            _LOG.debug("set_master_volume failed", exc_info=exc)
         self._update_volume_icon(value)
         # Wenn per Slider verändert, aktuell nicht mehr stumm gespeichert
         self._last_volume_before_mute = value if value > 0 else self._last_volume_before_mute

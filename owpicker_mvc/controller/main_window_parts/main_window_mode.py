@@ -151,7 +151,7 @@ class MainWindowModeMixin:
         if hasattr(self, "btn_mode_maps"):
             try:
                 self.btn_mode_maps.setEnabled(bool(enabled))
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError):
                 pass
 
     def _mark_stack_switching(self, delay_ms: int = 140) -> None:

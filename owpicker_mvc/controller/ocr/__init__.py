@@ -6,6 +6,10 @@ from importlib import import_module
 from typing import Any
 
 __all__ = [
+    "capture",
+    "pipeline",
+    "preload",
+    "runtime",
     "ocr_capture_ops",
     "ocr_import",
     "ocr_capture_entry_helpers",

@@ -3,6 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .settings_sections import (
+    MapSettings,
+    NetworkSettings,
+    OcrSettings,
+    RuntimeSettings,
+    ShutdownSettings,
+    SpinUiSettings,
+    StartupSettings,
+    TraceSettings,
+)
+
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
@@ -39,119 +50,24 @@ def _coerce_str(value: Any, default: str = "") -> str:
     return str(default)
 
 
-@dataclass(frozen=True)
-class RuntimeSettings:
-    debug: bool = False
-    quiet: bool = False
-    log_output_dir: str = "logs"
-    default_language: str = "en"
-    windows_single_instance: bool = True
-    windows_single_instance_lock_name: str = "ow_wheelpicker_instance"
-    force_fusion_style: bool = False
-    disable_tooltips: bool = False
-
-
-@dataclass(frozen=True)
-class TraceSettings:
-    flow: bool = False
-    shutdown: bool = False
-    focus: bool = False
-    hover: bool = False
-    spin_perf: bool = False
-    clear_on_start: bool = False
-    ocr_runtime: bool = False
-
-
-@dataclass(frozen=True)
-class StartupSettings:
-    mode_choice_input_guard_ms: int = 220
-    mode_choice_online_enabled: bool = False
-    startup_finalize_delay_ms: int = 60
-    startup_warmup_cooldown_ms: int = 0
-    startup_input_drain_ms: int = 0
-    startup_min_block_input_ms: int = 0
-    startup_drop_choice_pointer_events: bool = True
-    startup_clear_focus_while_blocked: bool = True
-    startup_visual_finalize_deferred: bool = True
-    startup_visual_finalize_delay_ms: int = 280
-    startup_visual_finalize_busy_retry_ms: int = 250
-    startup_wheel_cache_warmup: bool = True
-    startup_ocr_preload: bool = False
-    startup_ocr_preload_max_wait_ms: int = 1800
-    startup_ocr_preload_running_max_wait_ms: int = 14000
-    startup_map_prebuild_max_wait_ms: int = 2200
-    map_prebuild_on_start: bool = True
-
-
-@dataclass(frozen=True)
-class ShutdownSettings:
-    overlay_enabled: bool = True
-    overlay_delay_ms: int = 320
-    blocker_trace_interval_ms: int = 250
-    ocr_async_graceful_wait_ms: int = 1200
-    ocr_async_terminate_wait_ms: int = 700
-    ocr_preload_graceful_wait_ms: int = 1400
-    ocr_preload_terminate_wait_ms: int = 350
-    ocr_preload_force_stop_on_close: bool = False
-    child_thread_graceful_wait_ms: int = 350
-    child_thread_terminate_wait_ms: int = 250
-    thread_max_defer_ms: int = 2500
-    ocr_preload_max_defer_ms: int = 1200
-    ocr_async_max_defer_ms: int = 1500
-    child_thread_max_defer_ms: int = 1200
-    python_thread_max_defer_ms: int = 1800
-    app_quit_guard_ms: int = 1500
-    app_force_exit_loop_ms: int = 2400
-    keep_window_visible_until_exit: bool = False
-    force_exit_watchdog_enabled: bool = False
-    force_exit_watchdog_ms: int = 12000
-    force_exit_on_orphan_ms: int = 2200
-    release_ocr_cache: bool = False
-
-
-@dataclass(frozen=True)
-class OcrSettings:
-    engine: str = "easyocr"
-    easyocr_lang: str = "en,de,ja,ch_sim,ko"
-    easyocr_model_dir: str = ""
-    easyocr_user_network_dir: str = ""
-    easyocr_gpu: str = "auto"
-    easyocr_download_enabled: bool = False
-    timeout_s: float = 8.0
-    timeout_s_windows: float = 6.0
-    runtime_sleep_until_used: bool = True
-    background_preload_enabled: bool = True
-    background_preload_delay_ms: int = 2500
-    background_preload_min_uptime_ms: int = 8000
-    background_preload_allow_during_startup: bool = True
-    background_preload_busy_retry_ms: int = 1800
-    preload_subprocess_timeout_s: float = 60.0
-    preload_use_subprocess_probe: bool = True
-    preload_use_subprocess_probe_win_frozen: bool = False
-    preload_inprocess_cache_warmup: bool = True
-    preload_cancel_running_on_spin: bool = False
-    idle_cache_release_ms: int = 30000
-    idle_cache_release_busy_retry_ms: int = 2500
-    release_cache_on_spin: bool = False
-    debug_show_report: bool = False
-    debug_log_to_file: bool = True
-
-
-@dataclass(frozen=True)
-class SpinUiSettings:
-    min_duration_ms: int = 0
-    max_duration_ms: int = 10000
-    default_duration_ms: int = 3000
-    spin_watchdog_enabled: bool = False
-    spin_lightweight_ui_lock: bool = True
-
-
-@dataclass(frozen=True)
-class NetworkSettings:
-    state_save_debounce_ms: int = 220
-    network_sync_debounce_ms: int = 220
-    network_sync_workers: int = 2
-    api_base_url: str = "http://localhost:5326"
+def _coerce_unique_tokens(value: Any) -> list[str]:
+    if isinstance(value, str):
+        raw = [token.strip() for token in value.split(",")]
+    elif isinstance(value, (list, tuple, set)):
+        raw = [str(token).strip() for token in value]
+    else:
+        raw = []
+    out: list[str] = []
+    seen: set[str] = set()
+    for token in raw:
+        if not token:
+            continue
+        key = token.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(token)
+    return out
 
 
 @dataclass
@@ -164,6 +80,7 @@ class AppSettings:
     ocr: OcrSettings = field(init=False)
     spin_ui: SpinUiSettings = field(init=False)
     network: NetworkSettings = field(init=False)
+    map: MapSettings = field(init=False)
     _typed_index: dict[str, Any] = field(init=False, repr=False, default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -394,6 +311,30 @@ class AppSettings:
             network_sync_workers=max(1, _coerce_int(values.get("NETWORK_SYNC_WORKERS", 2), 2)),
             api_base_url=_coerce_str(values.get("API_BASE_URL", "http://localhost:5326"), "http://localhost:5326"),
         )
+        map_categories = _coerce_unique_tokens(values.get("MAP_CATEGORIES", []))
+        map_include_defaults_raw = _coerce_unique_tokens(values.get("MAP_INCLUDE_DEFAULTS", []))
+        categories_casefold = {token.casefold() for token in map_categories}
+        if categories_casefold:
+            map_include_defaults = [
+                token for token in map_include_defaults_raw if token.casefold() in categories_casefold
+            ]
+        else:
+            map_include_defaults = list(map_include_defaults_raw)
+        map_min_rows = max(1, _coerce_int(values.get("MAP_LIST_NAMES_MIN_VISIBLE_ROWS", 2), 2))
+        map_max_rows = max(
+            map_min_rows,
+            _coerce_int(values.get("MAP_LIST_NAMES_MAX_VISIBLE_ROWS", 6), 6),
+        )
+        self.map = MapSettings(
+            categories=tuple(map_categories),
+            include_defaults=tuple(map_include_defaults),
+            list_names_min_visible_rows=map_min_rows,
+            list_names_max_visible_rows=map_max_rows,
+            list_names_extra_padding_px=max(
+                0,
+                _coerce_int(values.get("MAP_LIST_NAMES_EXTRA_PADDING_PX", 8), 8),
+            ),
+        )
 
         self._typed_index = {
             "DEBUG": self.runtime.debug,
@@ -483,6 +424,11 @@ class AppSettings:
             "NETWORK_SYNC_DEBOUNCE_MS": self.network.network_sync_debounce_ms,
             "NETWORK_SYNC_WORKERS": self.network.network_sync_workers,
             "API_BASE_URL": self.network.api_base_url,
+            "MAP_CATEGORIES": self.map.categories,
+            "MAP_INCLUDE_DEFAULTS": self.map.include_defaults,
+            "MAP_LIST_NAMES_MIN_VISIBLE_ROWS": self.map.list_names_min_visible_rows,
+            "MAP_LIST_NAMES_MAX_VISIBLE_ROWS": self.map.list_names_max_visible_rows,
+            "MAP_LIST_NAMES_EXTRA_PADDING_PX": self.map.list_names_extra_padding_px,
         }
 
     def resolve(self, key: str, default: Any = None) -> Any:

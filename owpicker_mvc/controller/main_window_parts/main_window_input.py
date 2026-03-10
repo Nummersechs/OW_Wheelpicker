@@ -87,6 +87,70 @@ class MainWindowInputMixin:
         self._disabled_spin_all_hover_active = True
         return True
 
+    def _sync_disabled_choice_overlay_tooltip(
+        self,
+        global_pos: QtCore.QPoint,
+        *,
+        force_show: bool = False,
+    ) -> bool:
+        if not self._overlay_choice_active():
+            if getattr(self, "_disabled_choice_hover_active", False):
+                QtWidgets.QToolTip.hideText()
+                self._disabled_choice_hover_active = False
+                self._disabled_choice_hover_button = None
+            return False
+        overlay = getattr(self, "overlay", None)
+        if overlay is None:
+            return False
+        active_button = None
+        for button_name in ("btn_offline", "btn_online"):
+            button = getattr(overlay, button_name, None)
+            if button is None:
+                continue
+            try:
+                if bool(button.isEnabled()):
+                    continue
+            except Exception:
+                continue
+            try:
+                top_left = button.mapToGlobal(QtCore.QPoint(0, 0))
+                inside = QtCore.QRect(top_left, button.size()).contains(global_pos)
+            except Exception:
+                try:
+                    inside = bool(button.underMouse())
+                except Exception:
+                    inside = False
+            if inside:
+                active_button = button
+                break
+        if active_button is None:
+            if getattr(self, "_disabled_choice_hover_active", False):
+                QtWidgets.QToolTip.hideText()
+                self._disabled_choice_hover_active = False
+                self._disabled_choice_hover_button = None
+            return False
+        try:
+            tip = str(active_button.toolTip() or "").strip()
+        except Exception:
+            tip = ""
+        if not tip:
+            tip = i18n.t("overlay.choice_loading_tooltip")
+            try:
+                active_button.setToolTip(tip)
+            except Exception:
+                pass
+        if not tip:
+            return False
+        last_button = getattr(self, "_disabled_choice_hover_button", None)
+        if force_show or (not getattr(self, "_disabled_choice_hover_active", False)) or (last_button is not active_button):
+            try:
+                QtWidgets.QToolTip.showText(global_pos, tip, active_button, active_button.rect())
+            except Exception:
+                return False
+        self._disabled_choice_hover_active = True
+        self._disabled_choice_hover_button = active_button
+        return True
+
     def eventFilter(self, obj, event):
         etype_int = int(event.type())
         hover_forward_enabled = getattr(self, "_hover_forward_mousemove_enabled", None)
@@ -106,11 +170,15 @@ class MainWindowInputMixin:
             if isinstance(event, QtGui.QHelpEvent):
                 if self._sync_disabled_spin_all_tooltip(event.globalPos(), force_show=True):
                     return True
+                if self._sync_disabled_choice_overlay_tooltip(event.globalPos(), force_show=True):
+                    return True
         elif etype_int == _MOUSE_MOVE_EVENT_TYPE:
             if isinstance(event, QtGui.QMouseEvent):
                 self._sync_disabled_spin_all_tooltip(event.globalPosition().toPoint())
+                self._sync_disabled_choice_overlay_tooltip(event.globalPosition().toPoint())
             else:
                 self._sync_disabled_spin_all_tooltip(QtGui.QCursor.pos())
+                self._sync_disabled_choice_overlay_tooltip(QtGui.QCursor.pos())
 
         if self._should_block_startup_focus_event(etype_int):
             return True

@@ -1,5 +1,15 @@
 from __future__ import annotations
 
+_SHUTDOWN_GUARD_ERRORS = (
+    AttributeError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    LookupError,
+    OSError,
+    ImportError,
+)
+
 
 class ShutdownThreadCoordinator:
     def __init__(self, mw: object) -> None:
@@ -44,18 +54,18 @@ class ShutdownThreadCoordinator:
             is_valid = getattr(connection, "isValid", None)
             if callable(is_valid) and not bool(is_valid()):
                 return
-        except Exception as exc:
+        except _SHUTDOWN_GUARD_ERRORS as exc:
             self._warn("disconnect_connection:is_valid", exc)
         try:
             if not bool(connection):
                 return
-        except Exception as exc:
+        except _SHUTDOWN_GUARD_ERRORS as exc:
             self._warn("disconnect_connection:truthy", exc)
         try:
             from PySide6 import QtCore
 
             QtCore.QObject.disconnect(connection)
-        except Exception as exc:
+        except _SHUTDOWN_GUARD_ERRORS as exc:
             self._warn("disconnect_connection:disconnect", exc)
 
     def disconnect_signal_slots(self, source: object | None, signal_name: str, *slots: object | None) -> None:
@@ -69,7 +79,7 @@ class ShutdownThreadCoordinator:
                 continue
             try:
                 signal.disconnect(slot)
-            except Exception as exc:
+            except _SHUTDOWN_GUARD_ERRORS as exc:
                 self._warn(f"disconnect_signal_slots:{signal_name}", exc)
 
     def disconnect_thread_worker_start(
@@ -91,7 +101,7 @@ class ShutdownThreadCoordinator:
             return
         try:
             started_signal.disconnect(run_slot)
-        except Exception as exc:
+        except _SHUTDOWN_GUARD_ERRORS as exc:
             self._warn("disconnect_thread_worker_start:slot", exc)
 
     def stop_qthread_for_close(self, thread: object | None) -> bool:
@@ -101,13 +111,13 @@ class ShutdownThreadCoordinator:
         if hasattr(thread, "isRunning"):
             try:
                 running = bool(thread.isRunning())
-            except Exception:
+            except _SHUTDOWN_GUARD_ERRORS:
                 running = False
         finished = False
         if hasattr(thread, "isFinished"):
             try:
                 finished = bool(thread.isFinished())
-            except Exception:
+            except _SHUTDOWN_GUARD_ERRORS:
                 finished = not running
         else:
             finished = not running
@@ -116,17 +126,17 @@ class ShutdownThreadCoordinator:
         if hasattr(thread, "requestInterruption"):
             try:
                 thread.requestInterruption()
-            except Exception as exc:
+            except _SHUTDOWN_GUARD_ERRORS as exc:
                 self._warn("stop_qthread:request_interruption", exc)
         if hasattr(thread, "quit"):
             try:
                 thread.quit()
-            except Exception as exc:
+            except _SHUTDOWN_GUARD_ERRORS as exc:
                 self._warn("stop_qthread:quit", exc)
         if hasattr(thread, "isFinished"):
             try:
                 return bool(thread.isFinished())
-            except Exception:
+            except _SHUTDOWN_GUARD_ERRORS:
                 return False
         return False
 
@@ -175,7 +185,7 @@ class ShutdownThreadCoordinator:
         if hasattr(thread, "isRunning"):
             try:
                 running = bool(thread.isRunning())
-            except Exception:
+            except _SHUTDOWN_GUARD_ERRORS:
                 running = False
         if not running:
             return True
@@ -183,34 +193,34 @@ class ShutdownThreadCoordinator:
         if hasattr(thread, "requestInterruption"):
             try:
                 thread.requestInterruption()
-            except Exception as exc:
+            except _SHUTDOWN_GUARD_ERRORS as exc:
                 self._warn("force_stop_qthread:request_interruption", exc)
         if hasattr(thread, "quit"):
             try:
                 thread.quit()
-            except Exception as exc:
+            except _SHUTDOWN_GUARD_ERRORS as exc:
                 self._warn("force_stop_qthread:quit", exc)
         if hasattr(thread, "wait") and wait_graceful_ms > 0:
             try:
                 if bool(thread.wait(int(wait_graceful_ms))):
                     return True
-            except Exception as exc:
+            except _SHUTDOWN_GUARD_ERRORS as exc:
                 self._warn("force_stop_qthread:wait_graceful", exc)
         if hasattr(thread, "terminate"):
             try:
                 thread.terminate()
-            except Exception as exc:
+            except _SHUTDOWN_GUARD_ERRORS as exc:
                 self._warn("force_stop_qthread:terminate", exc)
         if hasattr(thread, "wait") and wait_terminate_ms > 0:
             try:
                 if bool(thread.wait(int(wait_terminate_ms))):
                     return True
-            except Exception as exc:
+            except _SHUTDOWN_GUARD_ERRORS as exc:
                 self._warn("force_stop_qthread:wait_terminate", exc)
         running_after = False
         if hasattr(thread, "isRunning"):
             try:
                 running_after = bool(thread.isRunning())
-            except Exception:
+            except _SHUTDOWN_GUARD_ERRORS:
                 running_after = False
         return not running_after

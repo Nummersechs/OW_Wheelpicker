@@ -6,10 +6,20 @@ from PySide6.QtCore import QUrl
 from pathlib import Path
 import random, math, tempfile, wave
 import sys
+import time
 
 AUDIO_EXTENSIONS = {".wav", ".ogg", ".mp3"}
 _QSOUND_EFFECT_UNSET = object()
 _QSOUND_EFFECT_CLASS: Any = _QSOUND_EFFECT_UNSET
+_SOUND_GUARD_ERRORS = (
+    AttributeError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    LookupError,
+    OSError,
+    ImportError,
+)
 
 
 def _resolve_qsoundeffect() -> Any | None:
@@ -18,7 +28,7 @@ def _resolve_qsoundeffect() -> Any | None:
         try:
             from PySide6.QtMultimedia import QSoundEffect as _QSoundEffect  # type: ignore
             _QSOUND_EFFECT_CLASS = _QSoundEffect
-        except Exception:
+        except _SOUND_GUARD_ERRORS:
             _QSOUND_EFFECT_CLASS = None
     return _QSOUND_EFFECT_CLASS
 
@@ -52,6 +62,7 @@ class SoundManager:
         self._warmup_paused = False
         self._pending_spin_timer: QtCore.QTimer | None = None
         self._pending_spin_effect: Any | None = None
+        self._last_active_audio_stop_monotonic = 0.0
         self._settings = settings
 
         spin_dir = base_dir / "Spin"
@@ -65,12 +76,12 @@ class SoundManager:
         if settings is not None and hasattr(settings, "resolve"):
             try:
                 return settings.resolve(key, default)
-            except Exception:
+            except _SOUND_GUARD_ERRORS:
                 pass
         if settings is not None and hasattr(settings, "get"):
             try:
                 return settings.get(key, default)
-            except Exception:
+            except _SOUND_GUARD_ERRORS:
                 pass
         return default
 
@@ -178,7 +189,7 @@ class SoundManager:
         path, cache, base_volume = self._warmup_items.pop(0)
         try:
             self._get_or_create_effect(cache, path, base_volume)
-        except Exception:
+        except _SOUND_GUARD_ERRORS:
             pass
         if not self._warmup_items:
             self._stop_warmup_timer()
@@ -195,7 +206,7 @@ class SoundManager:
         for cb in callbacks:
             try:
                 cb()
-            except Exception:
+            except _SOUND_GUARD_ERRORS:
                 pass
 
     def pause_background_warmup(self) -> None:
@@ -207,7 +218,7 @@ class SoundManager:
                 return
             timer.stop()
             self._warmup_paused = True
-        except Exception:
+        except _SOUND_GUARD_ERRORS:
             pass
 
     def resume_background_warmup(self) -> None:
@@ -224,7 +235,7 @@ class SoundManager:
         try:
             step_ms = int(self._cfg("SOUND_WARMUP_LAZY_STEP_MS", 25))
             timer.start(max(0, step_ms))
-        except Exception:
+        except _SOUND_GUARD_ERRORS:
             pass
 
     def _cleanup_preview_file(self) -> None:
@@ -235,31 +246,54 @@ class SoundManager:
         try:
             if path.exists():
                 path.unlink()
-        except Exception:
+        except _SOUND_GUARD_ERRORS:
             pass
 
     @staticmethod
     def _effects_snapshot(effects) -> list[Any]:
         try:
             return list(effects or [])
-        except Exception:
+        except _SOUND_GUARD_ERRORS:
             return []
 
     @staticmethod
-    def _stop_effects(effects) -> None:
+    def _effect_is_playing(eff: Any) -> bool:
+        checker = getattr(eff, "isPlaying", None)
+        if not callable(checker):
+            return False
+        try:
+            return bool(checker())
+        except _SOUND_GUARD_ERRORS:
+            return False
+
+    @staticmethod
+    def _stop_effects(effects) -> bool:
+        had_active = False
         for eff in SoundManager._effects_snapshot(effects):
+            had_active = had_active or SoundManager._effect_is_playing(eff)
             try:
                 eff.stop()
-            except Exception:
+            except _SOUND_GUARD_ERRORS:
                 pass
+        return had_active
+
+    def _mark_active_audio_stop(self, had_active: bool) -> None:
+        if not had_active:
+            return
+        try:
+            self._last_active_audio_stop_monotonic = float(time.monotonic())
+        except _SOUND_GUARD_ERRORS:
+            self._last_active_audio_stop_monotonic = 0.0
 
     def _stop_preview_effect(self) -> None:
         if not self.preview_effect:
             return
+        had_active = self._effect_is_playing(self.preview_effect)
         try:
             self.preview_effect.stop()
-        except Exception:
+        except _SOUND_GUARD_ERRORS:
             pass
+        self._mark_active_audio_stop(had_active)
 
     def _cancel_pending_spin_start(self) -> None:
         timer = self._pending_spin_timer
@@ -269,11 +303,11 @@ class SoundManager:
             return
         try:
             timer.stop()
-        except Exception:
+        except _SOUND_GUARD_ERRORS:
             pass
         try:
             timer.deleteLater()
-        except Exception:
+        except _SOUND_GUARD_ERRORS:
             pass
 
     def _schedule_spin_start(self, eff: Any, delay_ms: int) -> None:
@@ -293,7 +327,7 @@ class SoundManager:
             self._pending_spin_timer = None
             try:
                 timer.deleteLater()
-            except Exception:
+            except _SOUND_GUARD_ERRORS:
                 pass
             if pending_eff is None:
                 return
@@ -305,7 +339,7 @@ class SoundManager:
     def _resolve_spin_restart_gap_ms(self) -> int:
         try:
             configured_gap_ms = int(self._cfg("SOUND_SPIN_RESTART_GAP_MS", -1))
-        except Exception:
+        except _SOUND_GUARD_ERRORS:
             configured_gap_ms = -1
         if configured_gap_ms >= 0:
             return max(0, configured_gap_ms)
@@ -313,7 +347,7 @@ class SoundManager:
             return 0
         try:
             profile = str(self._cfg("SOUND_SPIN_RESTART_GAP_PROFILE", "balanced") or "balanced").strip().lower()
-        except Exception:
+        except _SOUND_GUARD_ERRORS:
             profile = "balanced"
         profile_gap_ms = {
             "low": 20,
@@ -324,6 +358,46 @@ class SoundManager:
         }
         return int(profile_gap_ms.get(profile, 30))
 
+    def _resolve_audio_stop_guard_ms(self) -> int:
+        try:
+            configured_guard_ms = int(self._cfg("SOUND_AUDIO_STOP_GUARD_MS", -1))
+        except _SOUND_GUARD_ERRORS:
+            configured_guard_ms = -1
+        if configured_guard_ms >= 0:
+            return max(0, configured_guard_ms)
+        if not sys.platform.startswith("win"):
+            return 0
+        try:
+            profile = str(self._cfg("SOUND_SPIN_RESTART_GAP_PROFILE", "balanced") or "balanced").strip().lower()
+        except _SOUND_GUARD_ERRORS:
+            profile = "balanced"
+        profile_guard_ms = {
+            "low": 45,
+            "balanced": 65,
+            "high": 80,
+            "auto": 72,
+            "custom": 72,
+        }
+        return int(profile_guard_ms.get(profile, 65))
+
+    def _remaining_audio_stop_guard_ms(self) -> int:
+        stop_at = float(self._last_active_audio_stop_monotonic or 0.0)
+        if stop_at <= 0.0:
+            return 0
+        guard_ms = self._resolve_audio_stop_guard_ms()
+        if guard_ms <= 0:
+            self._last_active_audio_stop_monotonic = 0.0
+            return 0
+        try:
+            elapsed_ms = int(max(0.0, (time.monotonic() - stop_at) * 1000.0))
+        except _SOUND_GUARD_ERRORS:
+            elapsed_ms = 0
+        remaining_ms = guard_ms - elapsed_ms
+        if remaining_ms <= 0:
+            self._last_active_audio_stop_monotonic = 0.0
+            return 0
+        return int(remaining_ms)
+
     def shutdown(self) -> None:
         """Stop sounds/timers and release audio resources."""
         self._stop_warmup_timer()
@@ -331,23 +405,23 @@ class SoundManager:
         try:
             self.stop_spin()
             self.stop_ding()
-        except Exception:
+        except _SOUND_GUARD_ERRORS:
             pass
         self._stop_preview_effect()
         # Delete cached effects to release audio backend resources
         for eff in self._effects_snapshot(self.spin_effects.values()) + self._effects_snapshot(self.ding_effects.values()):
             try:
                 eff.stop()
-            except Exception:
+            except _SOUND_GUARD_ERRORS:
                 pass
             try:
                 eff.deleteLater()
-            except Exception:
+            except _SOUND_GUARD_ERRORS:
                 pass
         if self.preview_effect:
             try:
                 self.preview_effect.deleteLater()
-            except Exception:
+            except _SOUND_GUARD_ERRORS:
                 pass
         self.spin_effects.clear()
         self.ding_effects.clear()
@@ -359,13 +433,13 @@ class SoundManager:
         if self._warmup_timer is not None:
             try:
                 warmup_active = bool(self._warmup_timer.isActive())
-            except Exception:
+            except _SOUND_GUARD_ERRORS:
                 warmup_active = False
         preview_tmp_exists = False
         if self._preview_tmp_path is not None:
             try:
                 preview_tmp_exists = bool(self._preview_tmp_path.exists())
-            except Exception:
+            except _SOUND_GUARD_ERRORS:
                 preview_tmp_exists = False
         return {
             "qt_multimedia_available": bool(_resolve_qsoundeffect() is not None),
@@ -397,21 +471,23 @@ class SoundManager:
                 path = random.choice(self.spin_sources)
                 eff = self._get_or_create_effect(self.spin_effects, path, self.spin_base_volume)
                 gap_ms = self._resolve_spin_restart_gap_ms()
-                self._schedule_spin_start(eff, delay_ms=gap_ms)
+                tail_guard_ms = self._remaining_audio_stop_guard_ms()
+                self._schedule_spin_start(eff, delay_ms=max(gap_ms, tail_guard_ms))
             else:
                 QtWidgets.QApplication.beep()
-        except Exception:
+        except _SOUND_GUARD_ERRORS:
             QtWidgets.QApplication.beep()
 
     def stop_spin(self):
         self._cancel_pending_spin_start()
-        self._stop_effects(self.spin_effects.values())
+        had_active = self._stop_effects(self.spin_effects.values())
+        self._mark_active_audio_stop(had_active)
 
     def set_master_volume(self, factor: float):
         """Setzt die Master-Lautstärke (0.0–1.0) für alle Effekte."""
         try:
             self.master_volume = max(0.0, min(1.0, float(factor)))
-        except Exception:
+        except _SOUND_GUARD_ERRORS:
             self.master_volume = 1.0
         self._apply_volume(self.spin_effects.values(), self.spin_base_volume)
         self._apply_volume(self.ding_effects.values(), self.ding_base_volume)
@@ -423,7 +499,7 @@ class SoundManager:
         for eff in self._effects_snapshot(effects):
             try:
                 eff.setVolume(vol)
-            except Exception:
+            except _SOUND_GUARD_ERRORS:
                 pass
 
     def play_ding(self):
@@ -436,11 +512,12 @@ class SoundManager:
                 self._play_effect(eff)
             else:
                 QtWidgets.QApplication.beep()
-        except Exception:
+        except _SOUND_GUARD_ERRORS:
             QtWidgets.QApplication.beep()
 
     def stop_ding(self):
-        self._stop_effects(self.ding_effects.values())
+        had_active = self._stop_effects(self.ding_effects.values())
+        self._mark_active_audio_stop(had_active)
 
     def play_preview(self):
         """Kurzer Test-Sound für Lautstärkevorschau."""
@@ -460,14 +537,14 @@ class SoundManager:
                 self._play_effect(eff)
             else:
                 QtWidgets.QApplication.beep()
-        except Exception:
+        except _SOUND_GUARD_ERRORS:
             QtWidgets.QApplication.beep()
 
     def _play_effect(self, eff: Any):
         try:
             eff.stop()
             eff.play()
-        except Exception:
+        except _SOUND_GUARD_ERRORS:
             QtWidgets.QApplication.beep()
 
     def _create_preview_effect(self) -> Any | None:
@@ -506,5 +583,5 @@ class SoundManager:
             eff.setLoopCount(1)
             eff.setVolume(self.preview_base_volume * self.master_volume)
             return eff
-        except Exception:
+        except _SOUND_GUARD_ERRORS:
             return None

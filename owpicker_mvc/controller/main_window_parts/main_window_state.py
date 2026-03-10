@@ -68,3 +68,34 @@ class MainWindowStateMixin:
         self._update_title()
         # Modusabhängige Ergebnisse laden
         self._apply_mode_results(self._mode_key())
+
+    def _mode_for_state_capture(self) -> str:
+        mode_to_capture = str(getattr(self, "current_mode", "players") or "players")
+        if mode_to_capture == "maps":
+            last_mode = str(getattr(self, "last_non_hero_mode", "players") or "players")
+            mode_to_capture = last_mode if last_mode in ("players", "heroes") else "players"
+        return mode_to_capture
+
+    def gather_state_snapshot(self) -> dict:
+        """Build a persistable state snapshot from current wheel/map UI state."""
+        mode_to_capture = self._mode_for_state_capture()
+        hero_ban_active = bool(getattr(self, "hero_ban_active", False)) if mode_to_capture == "heroes" else False
+        role_wheels_map = {role: wheel for role, wheel in self._role_wheels()}
+        self._state_store.capture_mode_from_wheels(
+            mode_to_capture,
+            role_wheels_map,
+            hero_ban_active=hero_ban_active,
+        )
+        if getattr(self, "map_lists", None):
+            self.map_mode.capture_state()
+        volume = 100
+        slider = getattr(self, "volume_slider", None)
+        if slider is not None and hasattr(slider, "value"):
+            try:
+                volume = int(slider.value())
+            except (AttributeError, TypeError, ValueError):
+                volume = 100
+        state = self._state_store.to_saved(volume)
+        state["language"] = str(getattr(self, "language", "en") or "en")
+        state["theme"] = str(getattr(self, "theme", "light") or "light")
+        return state

@@ -15,7 +15,7 @@ def _trace(mw, event: str, **payload) -> None:
         return
     try:
         trace_event(event, **payload)
-    except Exception:
+    except (AttributeError, RuntimeError, TypeError, ValueError):
         pass
 
 
@@ -46,7 +46,7 @@ def _set_heavy_ui_updates_enabled(mw, enabled: bool) -> None:
         return
     try:
         setter(bool(enabled))
-    except Exception:
+    except (AttributeError, RuntimeError, TypeError, ValueError):
         pass
 
 
@@ -75,14 +75,14 @@ def _clear_spin_started(mw) -> None:
 def _pending(mw) -> int:
     try:
         return int(getattr(mw, "pending", 0) or 0)
-    except Exception:
+    except (TypeError, ValueError):
         return 0
 
 
 def _set_pending(mw, value: int) -> None:
     try:
         setattr(mw, "pending", int(value))
-    except Exception:
+    except (AttributeError, RuntimeError, TypeError, ValueError):
         setattr(mw, "pending", 0)
 
 
@@ -170,7 +170,7 @@ def _duration_value(mw) -> int:
     if callable(value_fn):
         try:
             return int(value_fn())
-        except Exception:
+        except (RuntimeError, TypeError, ValueError):
             return 2500
     return 2500
 
@@ -181,7 +181,7 @@ def _open_queue_spin_active(mw) -> bool:
     if callable(spin_active):
         try:
             return bool(spin_active())
-        except Exception:
+        except (RuntimeError, TypeError, ValueError):
             return False
     return False
 
@@ -371,12 +371,25 @@ def _labels_for_entries(
     *,
     include_disabled: bool,
     drop_disabled_labels: bool,
+    pair_mode: bool | None = None,
+    use_subroles: bool | None = None,
 ) -> list[str]:
-    labels = wheel._effective_names_from(entries, include_disabled=include_disabled)
+    labels_fn = getattr(wheel, "get_effective_labels_from_entries", None)
+    if not callable(labels_fn):
+        return []
+    labels = labels_fn(
+        entries,
+        include_disabled=include_disabled,
+        pair_mode=pair_mode,
+        use_subroles=use_subroles,
+    )
     labels = [lbl.strip() for lbl in labels if lbl and lbl.strip()]
     if not drop_disabled_labels:
         return labels
-    disabled_labels = set(getattr(wheel, "_disabled_labels", set()) or set())
+    disabled_labels_fn = getattr(wheel, "get_disabled_labels", None)
+    if not callable(disabled_labels_fn):
+        return labels
+    disabled_labels = set(disabled_labels_fn() or set())
     if disabled_labels:
         labels = [lbl for lbl in labels if lbl not in disabled_labels]
     return labels
@@ -394,6 +407,8 @@ def _build_candidates_for_wheel(
         entries,
         include_disabled=include_disabled,
         drop_disabled_labels=drop_disabled_labels,
+        pair_mode=None,
+        use_subroles=None,
     )
     return _labels_to_candidates(labels)
 
@@ -407,28 +422,15 @@ def _build_candidates_for_wheel_with_mode(
     include_disabled: bool,
     drop_disabled_labels: bool,
 ) -> list[tuple[str, list[str]]]:
-    state = getattr(wheel, "_wheel_state", None)
-    if state is None:
-        return _build_candidates_for_wheel(
-            wheel,
-            entries,
-            include_disabled=include_disabled,
-            drop_disabled_labels=drop_disabled_labels,
-        )
-    prev_pair_mode = bool(getattr(state, "pair_mode", False))
-    prev_use_subroles = bool(getattr(state, "use_subrole_filter", False))
-    try:
-        state.pair_mode = bool(pair_mode)
-        state.use_subrole_filter = bool(use_subroles)
-        return _build_candidates_for_wheel(
-            wheel,
-            entries,
-            include_disabled=include_disabled,
-            drop_disabled_labels=drop_disabled_labels,
-        )
-    finally:
-        state.pair_mode = prev_pair_mode
-        state.use_subrole_filter = prev_use_subroles
+    labels = _labels_for_entries(
+        wheel,
+        entries,
+        include_disabled=include_disabled,
+        drop_disabled_labels=drop_disabled_labels,
+        pair_mode=bool(pair_mode),
+        use_subroles=bool(use_subroles),
+    )
+    return _labels_to_candidates(labels)
 
 
 def _plan_assignments(mw, all_candidates_per_role: list[list[tuple[str, list[str]]]]) -> list[str | None] | None:
@@ -463,7 +465,11 @@ def spin_all(mw):
     all_candidates_per_role = []
     missing_wheels: list[object] = []
     for _role, wheel in active:
-        base_entries = wheel._active_entries()
+        active_entries_fn = getattr(wheel, "get_active_entries", None)
+        if not callable(active_entries_fn):
+            missing_wheels.append(wheel)
+            continue
+        base_entries = list(active_entries_fn())
         candidates = _build_candidates_for_wheel(
             wheel,
             base_entries,
@@ -536,7 +542,11 @@ def spin_open_queue(mw):
         entries = _entries_for_names(wheel, combined_names)
         entries_by_wheel[wheel] = entries
         pair_mode = slots >= 2
-        use_subroles = bool(pair_mode and getattr(wheel, "use_subrole_filter", False))
+        subrole_enabled_fn = getattr(wheel, "is_subrole_filter_enabled", None)
+        if callable(subrole_enabled_fn):
+            use_subroles = bool(pair_mode and subrole_enabled_fn())
+        else:
+            use_subroles = bool(pair_mode and getattr(wheel, "use_subrole_filter", False))
         mode_overrides_by_wheel[wheel] = {
             "pair_mode": pair_mode,
             "use_subroles": use_subroles,
@@ -589,7 +599,7 @@ def spin_single(mw, wheel, mult: float = 1.0, hero_ban_override: bool = True):
     role = None
     try:
         role = role_for_wheel(mw, wheel)
-    except Exception:
+    except (LookupError, AttributeError, TypeError, ValueError):
         pass
     _trace(mw, "spin_single_dispatch", role=role, pending=_pending(mw))
     if _pending(mw) > 0:

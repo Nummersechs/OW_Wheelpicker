@@ -237,25 +237,183 @@ class WheelViewEntriesMixin:
 
     def _apply_placeholder(self):
         tooltip_key = "wheel.tooltip_pairs" if self.pair_mode else "wheel.tooltip_single"
-        self.result.setToolTip(i18n.t(tooltip_key))
+        tooltip_text = i18n.t(tooltip_key)
+        if str(self.result.toolTip() or "") != str(tooltip_text or ""):
+            self.result.setToolTip(tooltip_text)
 
         if self.pair_mode:
             if self.use_subrole_filter and len(self.subrole_labels) >= 2:
-                self.names_hint.setText(
-                    i18n.t(
-                        "wheel.names_hint_pairs_subroles",
-                        a=self.subrole_labels[0],
-                        b=self.subrole_labels[1],
-                    )
+                hint_text = i18n.t(
+                    "wheel.names_hint_pairs_subroles",
+                    a=self.subrole_labels[0],
+                    b=self.subrole_labels[1],
                 )
+                if str(self.names_hint.text() or "") != str(hint_text or ""):
+                    self.names_hint.setText(hint_text)
             else:
-                self.names_hint.setText(i18n.t("wheel.names_hint_pairs"))
+                hint_text = i18n.t("wheel.names_hint_pairs")
+                if str(self.names_hint.text() or "") != str(hint_text or ""):
+                    self.names_hint.setText(hint_text)
         else:
-            self.names_hint.setText(i18n.t("wheel.names_hint_single"))
+            hint_text = i18n.t("wheel.names_hint_single")
+            if str(self.names_hint.text() or "") != str(hint_text or ""):
+                self.names_hint.setText(hint_text)
 
     def get_current_names(self) -> list[str]:
         """Liefert alle aktuell eingetragenen Namen (ohne Leerzeilen)."""
         return self._base_names()
+
+    def get_enabled_names(self) -> list[str]:
+        """
+        Return currently enabled raw names for controller logic (e.g. Open Queue).
+
+        This keeps controller code off private wheel internals.
+        """
+        disabled_labels = set(self._disabled_labels)
+        enabled: list[str] = []
+        seen: set[str] = set()
+        for entry in self._active_entries():
+            name = str(entry.get("name", "")).strip()
+            if not name or name in disabled_labels:
+                continue
+            if name in seen:
+                continue
+            seen.add(name)
+            enabled.append(name)
+        return enabled
+
+    def get_subrole_labels(self) -> list[str]:
+        """Public copy of configured subrole labels for controller logic."""
+        return [str(label) for label in list(getattr(self, "subrole_labels", []))]
+
+    def get_active_entries(self) -> List[dict]:
+        """Public copy of active entries used by spin/controllers."""
+        return [dict(entry) for entry in self._active_entries()]
+
+    def get_disabled_labels(self) -> set[str]:
+        """Public view of disabled labels for controller logic."""
+        return set(self._wheel_state.disabled_labels)
+
+    def get_effective_labels_from_entries(
+        self,
+        entries: List[dict],
+        *,
+        include_disabled: bool = True,
+        pair_mode: Optional[bool] = None,
+        use_subroles: Optional[bool] = None,
+    ) -> List[str]:
+        """
+        Return effective wheel labels from entries with optional temporary mode overrides.
+
+        This keeps candidate generation off internal wheel state mutation in controllers.
+        """
+        state = self._wheel_state
+        prev_state_pair_mode = bool(state.pair_mode)
+        prev_state_use_subroles = bool(state.use_subrole_filter)
+        prev_attr_pair_mode = bool(getattr(self, "pair_mode", False))
+        prev_attr_use_subroles = bool(getattr(self, "use_subrole_filter", False))
+        override_pair_mode = prev_state_pair_mode if pair_mode is None else bool(pair_mode)
+        override_use_subroles = prev_state_use_subroles if use_subroles is None else bool(use_subroles)
+        override_use_subroles = bool(override_use_subroles and override_pair_mode)
+        try:
+            state.pair_mode = override_pair_mode
+            state.use_subrole_filter = override_use_subroles
+            self.pair_mode = override_pair_mode
+            self.use_subrole_filter = override_use_subroles
+            labels = state.effective_names_from(entries, include_disabled=bool(include_disabled))
+            return [str(label) for label in list(labels) if str(label).strip()]
+        finally:
+            state.pair_mode = prev_state_pair_mode
+            state.use_subrole_filter = prev_state_use_subroles
+            self.pair_mode = prev_attr_pair_mode
+            self.use_subrole_filter = prev_attr_use_subroles
+
+    def is_pair_mode_enabled(self) -> bool:
+        toggle = getattr(self, "toggle", None)
+        if toggle is not None:
+            return bool(toggle.isChecked())
+        return bool(getattr(self, "pair_mode", False))
+
+    def is_subrole_filter_enabled(self) -> bool:
+        chk = getattr(self, "chk_subroles", None)
+        if chk is not None:
+            return bool(chk.isChecked())
+        return bool(getattr(self, "use_subrole_filter", False))
+
+    def set_pair_mode_enabled(self, enabled: bool) -> None:
+        target = bool(enabled)
+        toggle = getattr(self, "toggle", None)
+        if toggle is not None:
+            if bool(toggle.isChecked()) != target:
+                toggle.setChecked(target)
+            return
+        if self._set_pair_mode_internal(target):
+            self._ensure_pair_mode_has_candidates()
+            self._update_subrole_toggle_state()
+            self._apply_names_list_changes()
+            if not getattr(self, "_suppress_state_signal", False):
+                self.stateChanged.emit()
+
+    def set_subrole_filter_enabled(self, enabled: bool) -> None:
+        target = bool(enabled)
+        chk = getattr(self, "chk_subroles", None)
+        if chk is not None and chk.isEnabled():
+            if bool(chk.isChecked()) != target:
+                chk.setChecked(target)
+            return
+        resolved = bool(target and self.is_pair_mode_enabled())
+        self.use_subrole_filter = resolved
+        self._wheel_state.use_subrole_filter = resolved
+        self._apply_names_list_changes()
+        if not getattr(self, "_suppress_state_signal", False):
+            self.stateChanged.emit()
+
+    def set_pair_controls_locked(self, locked: bool) -> None:
+        """
+        Lock/unlock pair+subrole controls without direct controller access to internals.
+        """
+        lock = bool(locked)
+        if lock:
+            self.set_pair_mode_enabled(False)
+            self.set_subrole_filter_enabled(False)
+        toggle = getattr(self, "toggle", None)
+        if toggle is not None:
+            toggle.setEnabled(not lock)
+        chk = getattr(self, "chk_subroles", None)
+        if chk is not None:
+            if lock and chk.isChecked():
+                blocker = QtCore.QSignalBlocker(chk)
+                chk.setChecked(False)
+                del blocker
+            if lock:
+                chk.setEnabled(False)
+            else:
+                update_subrole_toggle_state = getattr(self, "_update_subrole_toggle_state", None)
+                if callable(update_subrole_toggle_state):
+                    update_subrole_toggle_state()
+                else:
+                    chk.setEnabled(bool(self.is_pair_mode_enabled()))
+
+    def set_included_in_global_spin(self, enabled: bool) -> None:
+        button = getattr(self, "btn_include_in_all", None)
+        if button is None:
+            return
+        target = bool(enabled)
+        if bool(button.isChecked()) != target:
+            button.setChecked(target)
+
+    def get_override_entries(self) -> Optional[List[dict]]:
+        override = self._wheel_state.override_entries
+        if override is None:
+            return None
+        return [dict(entry) for entry in list(override)]
+
+    def get_disabled_indices(self) -> set[int]:
+        return set(self._wheel_state.disabled_indices)
+
+    def restore_disabled_indices(self, indices: Optional[set[int]]) -> None:
+        self._wheel_state.disabled_indices = set(indices or set())
+        self._refresh_disabled_indices()
 
     def get_current_entries(self) -> list[dict]:
         """
@@ -684,7 +842,10 @@ class WheelViewEntriesMixin:
 
     def set_force_spin_enabled(self, enabled: bool):
         """Erzwingt, dass der lokale Spin-Button aktiv bleibt (Hero-Ban)."""
-        self._force_spin_enabled = bool(enabled)
+        target = bool(enabled)
+        if bool(getattr(self, "_force_spin_enabled", False)) == target:
+            return
+        self._force_spin_enabled = target
         self._update_name_dependent_ui()
 
     def set_show_names_visible(self, visible: bool):

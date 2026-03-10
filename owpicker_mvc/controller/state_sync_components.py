@@ -5,7 +5,7 @@ import importlib
 import json
 from pathlib import Path
 import threading
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Protocol
 
 from model.role_keys import role_wheel_map
 
@@ -44,28 +44,41 @@ class StateFilePersistence:
 
 
 class StateSnapshotBuilder:
-    """Builds saved-state snapshots from MainWindow runtime state."""
+    """Builds saved-state snapshots from an injected snapshot source."""
 
-    def __init__(self, main_window) -> None:
-        self._mw = main_window
+    def __init__(self, source) -> None:
+        if hasattr(source, "gather_state") and callable(getattr(source, "gather_state", None)):
+            self._source = source
+        else:
+            self._source = MainWindowSnapshotSource(source)
 
     def gather_state(self) -> dict:
-        mode_to_capture = self._mw.current_mode
-        if mode_to_capture == "maps":
-            mode_to_capture = getattr(self._mw, "last_non_hero_mode", "players") or "players"
-            if mode_to_capture not in ("players", "heroes"):
-                mode_to_capture = "players"
-        self._mw._state_store.capture_mode_from_wheels(
-            mode_to_capture,
-            role_wheel_map(self._mw),
-            hero_ban_active=self._mw.hero_ban_active if mode_to_capture == "heroes" else False,
-        )
-        if getattr(self._mw, "map_lists", None):
-            self._mw.map_mode.capture_state()
-        state = self._mw._state_store.to_saved(self._mw.volume_slider.value())
-        state["language"] = self._mw.language
-        state["theme"] = self._mw.theme
-        return state
+        return self._source.gather_state()
+
+
+class SnapshotSource(Protocol):
+    def gather_state(self) -> dict:
+        ...
+
+
+class MainWindowSnapshotSource:
+    """Adapter that delegates snapshot capture to MainWindow's public API."""
+
+    def __init__(self, main_window) -> None:
+        self._main_window = main_window
+        provider = getattr(main_window, "gather_state_snapshot", None)
+        if not callable(provider):
+            raise TypeError("snapshot source must expose gather_state_snapshot()")
+        self._provider = provider
+
+    def gather_state(self) -> dict:
+        try:
+            state = self._provider()
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            state = None
+        if isinstance(state, dict):
+            return state
+        return {}
 
 
 class LocalStatePersistenceQueue:
@@ -290,6 +303,16 @@ class RemoteRoleSyncService:
         def _worker() -> None:
             with self._network_threads_lock:
                 self._network_threads_active += 1
+            request_exception = getattr(requests_module, "RequestException", None)
+            known_errors: tuple[type[BaseException], ...] = (
+                OSError,
+                RuntimeError,
+                TimeoutError,
+                TypeError,
+                ValueError,
+            )
+            if isinstance(request_exception, type) and issubclass(request_exception, BaseException):
+                known_errors = (request_exception, *known_errors)
             try:
                 base = str(self._cfg_resolver("API_BASE_URL", "http://localhost:5326"))
                 url = base.rstrip("/") + str(endpoint)
@@ -297,7 +320,7 @@ class RemoteRoleSyncService:
                 resp = requests_module.post(url, json=payload, timeout=3)
                 resp.raise_for_status()
                 self._debug_print(success_log, resp.json())
-            except Exception as e:
+            except known_errors as e:
                 self._debug_print(error_log, e)
             finally:
                 with self._network_threads_lock:

@@ -6,6 +6,15 @@ from PySide6 import QtCore, QtGui
 
 import i18n
 
+_SHUTDOWN_GUARD_ERRORS = (
+    AttributeError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    LookupError,
+    OSError,
+)
+
 
 class ShutdownFlowCoordinator:
     def __init__(self, mw: object) -> None:
@@ -50,7 +59,7 @@ class ShutdownFlowCoordinator:
         if callable(tracer):
             try:
                 tracer(event, **payload)
-            except Exception:
+            except _SHUTDOWN_GUARD_ERRORS:
                 pass
 
     def trace_shutdown_blockers(
@@ -95,7 +104,7 @@ class ShutdownFlowCoordinator:
             try:
                 if thread is not None and bool(thread.isRunning()):
                     detached_running.append(thread)
-            except Exception:
+            except _SHUTDOWN_GUARD_ERRORS:
                 continue
         running_py_threads = getattr(self._mw, "_running_non_daemon_python_threads", None)
         py_threads = running_py_threads() if callable(running_py_threads) else []
@@ -148,7 +157,7 @@ class ShutdownFlowCoordinator:
                 py_threads=int(len(py_threads)),
                 py_threads_preview=str(py_preview),
             )
-        except Exception:
+        except _SHUTDOWN_GUARD_ERRORS:
             pass
 
     def defer_close_for_running_thread(self, event: QtGui.QCloseEvent, *, reason: str) -> None:
@@ -181,7 +190,7 @@ class ShutdownFlowCoordinator:
         if timer is None:
             try:
                 timer = QtCore.QTimer(self._mw)
-            except Exception:
+            except _SHUTDOWN_GUARD_ERRORS:
                 timer = None
             try:
                 if timer is not None:
@@ -192,7 +201,7 @@ class ShutdownFlowCoordinator:
                     set_state = getattr(self._mw, "_set_shutdown_runtime_state", None)
                     if callable(set_state):
                         set_state(close_retry_timer=timer)
-            except Exception:
+            except _SHUTDOWN_GUARD_ERRORS:
                 timer = None
         if timer is None:
             QtCore.QTimer.singleShot(int(retry_ms), getattr(self._mw, "close"))
@@ -242,7 +251,7 @@ class ShutdownFlowCoordinator:
                 [i18n.t("overlay.shutdown_line1"), i18n.t("overlay.shutdown_line2"), ""],
             )
             overlay.setEnabled(False)
-        except Exception:
+        except _SHUTDOWN_GUARD_ERRORS:
             return False
         set_state = getattr(self._mw, "_set_shutdown_runtime_state", None)
         if callable(set_state):

@@ -5,22 +5,25 @@ Keeps the data format compatible with saved_state.json.
 from __future__ import annotations
 
 import copy
-import importlib
+import logging
 from typing import Dict, List, Any
 
 from model.role_keys import ROLE_KEYS, PAIR_MODE_DEFAULTS
+from services.app_settings import AppSettings
+
+
+_STATE_STORE_GUARD_ERRORS = (AttributeError, RuntimeError, TypeError, ValueError, LookupError, OSError)
+_LOG = logging.getLogger(__name__)
 
 
 class ModeStateStore:
     _ROLES = ROLE_KEYS
 
-    @staticmethod
-    def _fallback_config_value(key: str, default=None):
-        try:
-            module = importlib.import_module("config")
-        except Exception:
-            return default
-        return getattr(module, str(key or "").strip(), default)
+    @classmethod
+    def _normalize_settings(cls, settings: Any | None) -> Any:
+        if settings is None:
+            return AppSettings(values={})
+        return settings
 
     @classmethod
     def _resolve_setting(cls, settings: Any, key: str, default=None):
@@ -31,17 +34,17 @@ class ModeStateStore:
         if callable(resolver):
             try:
                 return resolver(key_norm, default)
-            except Exception:
-                pass
+            except _STATE_STORE_GUARD_ERRORS as exc:
+                _LOG.debug("ModeStateStore.resolve failed for key=%s", key_norm, exc_info=exc)
         getter = getattr(settings, "get", None)
         if callable(getter):
             try:
                 return getter(key_norm, default)
-            except Exception:
-                pass
+            except _STATE_STORE_GUARD_ERRORS as exc:
+                _LOG.debug("ModeStateStore.get failed for key=%s", key_norm, exc_info=exc)
         if isinstance(settings, dict):
             return settings.get(key_norm, default)
-        return cls._fallback_config_value(key_norm, default)
+        return default
 
     def __init__(
         self,
@@ -50,7 +53,7 @@ class ModeStateStore:
         active_player_profile_index: int = 0,
         settings: Any | None = None,
     ):
-        self._settings = settings
+        self._settings = self._normalize_settings(settings)
         self._mode_states: Dict[str, Dict[str, dict]] = mode_states or {
             "players": {},
             "heroes": {},
@@ -67,25 +70,27 @@ class ModeStateStore:
 
     @classmethod
     def from_saved(cls, saved: dict, settings: Any | None = None) -> "ModeStateStore":
+        settings_norm = cls._normalize_settings(settings)
         saved = saved or {}
-        profiles, active_index = cls._build_player_profiles(saved, settings=settings)
+        profiles, active_index = cls._build_player_profiles(saved, settings=settings_norm)
         mode_states = cls._build_mode_states(
             saved,
             active_players_state=profiles[active_index]["players"] if profiles else None,
-            settings=settings,
+            settings=settings_norm,
         )
         return cls(
             mode_states=mode_states,
             player_profiles=profiles,
             active_player_profile_index=active_index,
-            settings=settings,
+            settings=settings_norm,
         )
 
     @staticmethod
     def _clone(value):
         try:
             return copy.deepcopy(value)
-        except Exception:
+        except _STATE_STORE_GUARD_ERRORS as exc:
+            _LOG.debug("ModeStateStore deepcopy fallback used", exc_info=exc)
             return value
 
     @staticmethod
@@ -193,7 +198,7 @@ class ModeStateStore:
     def _player_profile_capacity(cls, *, settings: Any | None = None) -> int:
         try:
             cap = int(cls._resolve_setting(settings, "PLAYER_PROFILE_MAX_SLOTS", 6))
-        except Exception:
+        except (TypeError, ValueError):
             cap = 6
         # Keep at least one profile slot to preserve valid state.
         return max(1, cap)
@@ -299,7 +304,7 @@ class ModeStateStore:
         if isinstance(raw_profiles_obj, dict):
             try:
                 active_index = int(raw_profiles_obj.get("active_index", 0))
-            except Exception:
+            except (TypeError, ValueError):
                 active_index = 0
         active_index = max(0, min(cap - 1, active_index))
         return profiles, active_index
@@ -406,7 +411,7 @@ class ModeStateStore:
         n = len(self._player_profiles)
         try:
             indices = [int(v) for v in order]
-        except Exception:
+        except (TypeError, ValueError):
             return False
         if len(indices) != n:
             return False

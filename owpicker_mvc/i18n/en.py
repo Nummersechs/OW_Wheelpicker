@@ -60,7 +60,6 @@ TRANSLATIONS_EN = {
     "ocr.error_no_screen": "No screen was found for capturing.",
     "ocr.error_selection_failed": "Failed to capture the selected screen region.",
     "ocr.error_screen_permission_hint": "If Discord is not visible, allow Screen Recording for this app/Python in macOS Settings > Privacy & Security > Screen Recording.",
-    "ocr.error_image_write_failed": "Failed to prepare the captured image for OCR.",
     "ocr.error_run_failed": "OCR failed: {reason}",
     "ocr.error_unexpected": "Unexpected OCR error: {reason}",
     "ocr.result_title": "OCR import",
@@ -193,8 +192,6 @@ TRANSLATIONS_EN = {
     "theme.toggle.to_dark": "Switch to dark mode",
     "theme.toggle.to_light": "Switch to light mode",
     # Language switcher
-    "language.de": "German",
-    "language.en": "English",
     "language.tooltip.de": "Language: German",
     "language.tooltip.en": "Language: English",
 }

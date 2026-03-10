@@ -29,6 +29,7 @@ ALWAYS_REMOVE_DIR_NAMES = {
     ".hypothesis",
     ".pytype",
     ".pyre",
+    "__MACOSX",
 }
 
 BUILD_DIR_NAMES = {
@@ -94,6 +95,7 @@ def cleanup_tree(
     include_build: bool,
     include_logs: bool,
     include_saved_state: bool,
+    include_ocr_models: bool,
 ) -> CleanupStats:
     stats = CleanupStats()
     root = root.resolve()
@@ -133,6 +135,8 @@ def cleanup_tree(
             elif include_build and rel_current.as_posix().startswith("owpicker_mvc/build"):
                 remove = True
             elif include_build and rel_current.as_posix().startswith("owpicker_mvc/dist"):
+                remove = True
+            elif include_ocr_models and rel_posix.startswith("owpicker_mvc/EasyOCR/"):
                 remove = True
 
             if not remove:
@@ -175,6 +179,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Also remove owpicker_mvc/saved_state.json.",
     )
+    parser.add_argument(
+        "--include-ocr-models",
+        action="store_true",
+        help="Also remove bundled OCR model files in owpicker_mvc/EasyOCR/.",
+    )
     return parser.parse_args()
 
 
@@ -197,6 +206,7 @@ def main() -> int:
         include_build=bool(args.include_build),
         include_logs=bool(args.include_logs),
         include_saved_state=bool(args.include_saved_state),
+        include_ocr_models=bool(args.include_ocr_models),
     )
 
     action = "would remove" if bool(args.dry_run) else "removed"
@@ -208,4 +218,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

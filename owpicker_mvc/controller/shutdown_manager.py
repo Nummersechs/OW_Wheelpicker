@@ -1,35 +1,40 @@
 from __future__ import annotations
 
 from typing import Callable
-
-from PySide6 import QtCore, QtGui, QtWidgets
+import time
 
 from model.main_window_runtime_state import ShutdownPhase
+
+from . import shutdown_snapshot
+
+_SHUTDOWN_MANAGER_GUARD_ERRORS = (
+    AttributeError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    LookupError,
+    OSError,
+    ImportError,
+    ModuleNotFoundError,
+)
+
 
 def _cfg(mw, key: str, default=None):
     getter = getattr(mw, "_cfg", None)
     if callable(getter):
         try:
             return getter(key, default)
-        except Exception:
+        except _SHUTDOWN_MANAGER_GUARD_ERRORS:
             pass
     return default
 
 
 def merge_shutdown_snapshot(prefix: str, payload: dict | None, target: dict) -> None:
-    if not isinstance(payload, dict):
-        return
-    for key, value in payload.items():
-        target[f"{prefix}_{key}"] = value
+    shutdown_snapshot.merge_shutdown_snapshot(prefix, payload, target)
 
 
 def _trace_shutdown_snapshot_error(mw, *, component: str, exc: Exception) -> None:
-    if not bool(_cfg(mw, "TRACE_SHUTDOWN", False)):
-        return
-    tracer = getattr(mw, "_trace_event", None)
-    if not callable(tracer):
-        return
-    tracer("shutdown_snapshot:error", component=component, error=repr(exc))
+    shutdown_snapshot.trace_shutdown_snapshot_error(mw, component=component, exc=exc)
 
 
 def _append_component_snapshot(
@@ -40,120 +45,128 @@ def _append_component_snapshot(
     prefix: str,
     source: object | None,
 ) -> None:
-    if source is None:
-        return
-    snapshot_fn = getattr(source, "resource_snapshot", None)
-    if not callable(snapshot_fn):
-        return
+    shutdown_snapshot.append_component_snapshot(
+        mw,
+        target=target,
+        component=component,
+        prefix=prefix,
+        source=source,
+    )
+
+
+def _resolve_qt_core():
     try:
-        payload = snapshot_fn()
-    except Exception as exc:
-        _trace_shutdown_snapshot_error(mw, component=component, exc=exc)
-        return
-    merge_shutdown_snapshot(prefix, payload, target)
+        from PySide6 import QtCore  # type: ignore
+    except _SHUTDOWN_MANAGER_GUARD_ERRORS:
+        return None
+    return QtCore
+
+
+def _resolve_qt_widgets():
+    try:
+        from PySide6 import QtWidgets  # type: ignore
+    except _SHUTDOWN_MANAGER_GUARD_ERRORS:
+        return None
+    return QtWidgets
+
+
+def _safe_duration_ms(started_monotonic: float, elapsed_timer) -> int:
+    if elapsed_timer is not None:
+        try:
+            return int(elapsed_timer.elapsed())
+        except _SHUTDOWN_MANAGER_GUARD_ERRORS:
+            pass
+    return int((time.monotonic() - started_monotonic) * 1000.0)
+
+
+def _event_is_accepted(event: object, default: bool = True) -> bool:
+    is_accepted_fn = getattr(event, "isAccepted", None)
+    if callable(is_accepted_fn):
+        try:
+            return bool(is_accepted_fn())
+        except _SHUTDOWN_MANAGER_GUARD_ERRORS:
+            pass
+    return bool(default)
 
 
 def shutdown_resource_snapshot(mw) -> dict:
-    snap: dict[str, object] = {}
+    snap: dict[str, object] = shutdown_snapshot.build_component_snapshot(mw)
+    QtCore = _resolve_qt_core()
+    timer_cls = getattr(QtCore, "QTimer", object) if QtCore is not None else object
+    timers: list[object] = []
     try:
-        timers = mw.findChildren(QtCore.QTimer)
-        active = 0
-        for timer in timers:
-            try:
-                if timer.isActive():
-                    active += 1
-            except RuntimeError as exc:
-                _trace_shutdown_snapshot_error(mw, component="qt_timer", exc=exc)
-        snap["qt_timers_total"] = len(timers)
-        snap["qt_timers_active"] = active
-    except Exception as exc:
+        finder = getattr(mw, "findChildren", None)
+        if callable(finder):
+            timers = list(finder(timer_cls))
+    except _SHUTDOWN_MANAGER_GUARD_ERRORS as exc:
         _trace_shutdown_snapshot_error(mw, component="qt_timers_total", exc=exc)
-        snap["qt_timers_total"] = None
-        snap["qt_timers_active"] = None
-
-    _append_component_snapshot(
-        mw,
-        target=snap,
-        component="timer_registry",
-        prefix="registry",
-        source=getattr(mw, "_timers", None),
-    )
-    _append_component_snapshot(
-        mw,
-        target=snap,
-        component="state_sync",
-        prefix="state_sync",
-        source=getattr(mw, "state_sync", None),
-    )
-    _append_component_snapshot(
-        mw,
-        target=snap,
-        component="tooltip_manager",
-        prefix="tooltip",
-        source=getattr(mw, "_tooltip_manager", None),
-    )
-    _append_component_snapshot(
-        mw,
-        target=snap,
-        component="sound",
-        prefix="sound",
-        source=getattr(mw, "sound", None),
-    )
-    _append_component_snapshot(
-        mw,
-        target=snap,
-        component="player_list_panel",
-        prefix="player_panel",
-        source=getattr(mw, "player_list_panel", None),
-    )
-    _append_component_snapshot(
-        mw,
-        target=snap,
-        component="map_ui",
-        prefix="map_ui",
-        source=getattr(mw, "map_ui", None),
-    )
-
+        timers = []
+    active = 0
+    for timer in timers:
+        try:
+            if bool(getattr(timer, "isActive")()):
+                active += 1
+        except _SHUTDOWN_MANAGER_GUARD_ERRORS as exc:
+            _trace_shutdown_snapshot_error(mw, component="qt_timer", exc=exc)
+    snap["qt_timers_total"] = len(timers)
+    snap["qt_timers_active"] = active
     return snap
 
 
 def run_shutdown_step(mw, step: str, callback: Callable[[], None]) -> None:
     mw._trace_event("shutdown_step:start", step=step)
-    started = QtCore.QElapsedTimer()
-    started.start()
+    started_monotonic = time.monotonic()
+    elapsed_timer = None
+    QtCore = _resolve_qt_core()
+    if QtCore is not None:
+        try:
+            elapsed_timer = QtCore.QElapsedTimer()
+            elapsed_timer.start()
+        except _SHUTDOWN_MANAGER_GUARD_ERRORS:
+            elapsed_timer = None
     try:
         callback()
-        mw._trace_event("shutdown_step:ok", step=step, duration_ms=int(started.elapsed()))
-    except Exception as exc:
+        mw._trace_event(
+            "shutdown_step:ok",
+            step=step,
+            duration_ms=_safe_duration_ms(started_monotonic, elapsed_timer),
+        )
+    except _SHUTDOWN_MANAGER_GUARD_ERRORS as exc:
         mw._trace_event("shutdown_step:error", step=step, error=repr(exc))
 
 
 def _schedule_app_quit_guard(mw) -> None:
+    QtWidgets = _resolve_qt_widgets()
+    if QtWidgets is None:
+        return
     app = QtWidgets.QApplication.instance()
     if app is None:
         return
     try:
         app.setQuitOnLastWindowClosed(True)
-    except Exception:
+    except _SHUTDOWN_MANAGER_GUARD_ERRORS:
         pass
     tracer = getattr(mw, "_trace_event", None)
     if callable(tracer):
         try:
             tracer("shutdown_quit_guard:scheduled")
-        except Exception:
+        except _SHUTDOWN_MANAGER_GUARD_ERRORS:
             pass
     try:
         app.quit()
         if callable(tracer):
             tracer("shutdown_quit_guard:quit_now")
-    except Exception:
+    except _SHUTDOWN_MANAGER_GUARD_ERRORS:
         pass
+    QtCore = _resolve_qt_core()
+    if QtCore is None:
+        return
     try:
         QtCore.QTimer.singleShot(0, app.quit)
-    except Exception:
+    except _SHUTDOWN_MANAGER_GUARD_ERRORS:
         try:
             app.quit()
-        except Exception:
+        except _SHUTDOWN_MANAGER_GUARD_ERRORS:
             return
     guard_ms = max(0, int(_cfg(mw, "SHUTDOWN_APP_QUIT_GUARD_MS", 1500)))
     if guard_ms <= 0:
@@ -168,28 +181,26 @@ def _schedule_app_quit_guard(mw) -> None:
                     if callable(tracer):
                         try:
                             tracer("shutdown_quit_guard:still_visible")
-                        except Exception:
+                        except _SHUTDOWN_MANAGER_GUARD_ERRORS:
                             pass
                     return
-        except Exception:
+        except _SHUTDOWN_MANAGER_GUARD_ERRORS:
             pass
         try:
             app.quit()
             if callable(tracer):
                 try:
                     tracer("shutdown_quit_guard:guard_quit")
-                except Exception:
+                except _SHUTDOWN_MANAGER_GUARD_ERRORS:
                     pass
-        except Exception:
+        except _SHUTDOWN_MANAGER_GUARD_ERRORS:
             pass
 
     try:
         QtCore.QTimer.singleShot(int(guard_ms), _guard)
-    except Exception:
+    except _SHUTDOWN_MANAGER_GUARD_ERRORS:
         pass
-    # Additional guard: force event-loop exit shortly after quit guard.
-    # This helps when all windows are gone but queued callbacks still keep
-    # the loop alive.
+
     force_exit_ms = max(0, int(_cfg(mw, "SHUTDOWN_APP_FORCE_EXIT_LOOP_MS", guard_ms + 900)))
     if force_exit_ms <= 0:
         return
@@ -200,27 +211,27 @@ def _schedule_app_quit_guard(mw) -> None:
             if callable(tracer):
                 try:
                     tracer("shutdown_quit_guard:force_quit")
-                except Exception:
+                except _SHUTDOWN_MANAGER_GUARD_ERRORS:
                     pass
-        except Exception:
+        except _SHUTDOWN_MANAGER_GUARD_ERRORS:
             pass
         try:
             app.exit(0)
             if callable(tracer):
                 try:
                     tracer("shutdown_quit_guard:force_exit_loop")
-                except Exception:
+                except _SHUTDOWN_MANAGER_GUARD_ERRORS:
                     pass
-        except Exception:
+        except _SHUTDOWN_MANAGER_GUARD_ERRORS:
             pass
 
     try:
         QtCore.QTimer.singleShot(int(force_exit_ms), _force_exit_loop)
-    except Exception:
+    except _SHUTDOWN_MANAGER_GUARD_ERRORS:
         pass
 
 
-def handle_close_event(mw, event: QtGui.QCloseEvent) -> None:
+def handle_close_event(mw, event: object) -> None:
     set_state = getattr(mw, "_set_shutdown_runtime_state", None)
     if callable(set_state):
         set_state(
@@ -263,11 +274,17 @@ def handle_close_event(mw, event: QtGui.QCloseEvent) -> None:
         mw.sound.shutdown()
 
     def _remove_app_filter() -> None:
+        QtWidgets = _resolve_qt_widgets()
+        if QtWidgets is None:
+            return
         app = QtWidgets.QApplication.instance()
         if app:
             app.removeEventFilter(mw)
 
     def _close_aux_windows() -> None:
+        QtWidgets = _resolve_qt_widgets()
+        if QtWidgets is None:
+            return
         app = QtWidgets.QApplication.instance()
         if app is None:
             return
@@ -278,12 +295,12 @@ def handle_close_event(mw, event: QtGui.QCloseEvent) -> None:
             try:
                 if not bool(widget.isVisible()):
                     continue
-            except Exception:
+            except _SHUTDOWN_MANAGER_GUARD_ERRORS:
                 continue
             try:
                 widget.close()
                 closed += 1
-            except Exception:
+            except _SHUTDOWN_MANAGER_GUARD_ERRORS:
                 continue
         mw._trace_event("shutdown_aux_windows_close", closed=int(closed))
 
@@ -300,34 +317,39 @@ def handle_close_event(mw, event: QtGui.QCloseEvent) -> None:
     if bool(_cfg(mw, "TRACE_SHUTDOWN", False)):
         mw._trace_event("shutdown_snapshot", stage="pre_super", **shutdown_resource_snapshot(mw))
 
-    # Keep-visible behavior is handled in MainWindowShutdownMixin by deferring
-    # close while background work is still running. At this point shutdown work
-    # is done and we finish close by accepting the Qt close event.
     keep_window_visible = bool(_cfg(mw, "SHUTDOWN_KEEP_WINDOW_VISIBLE_UNTIL_EXIT", False))
     if keep_window_visible:
         mw._trace_event("shutdown_qt_closeevent:keep_visible_mode", active=True)
 
-    # After MainWindow was split into mixins, `super(type(mw), mw)` resolves
-    # back to MainWindowShutdownMixin.closeEvent and recurses.
-    # Call the Qt base implementation directly to finish close safely.
+    QtWidgets = _resolve_qt_widgets()
     mw._trace_event("shutdown_qt_closeevent:before")
-    QtWidgets.QMainWindow.closeEvent(mw, event)
-    accepted = True
-    try:
-        accepted = bool(event.isAccepted())
-    except Exception:
-        accepted = True
+    if QtWidgets is not None:
+        try:
+            QtWidgets.QMainWindow.closeEvent(mw, event)
+        except _SHUTDOWN_MANAGER_GUARD_ERRORS as exc:
+            mw._trace_event("shutdown_qt_closeevent:error", error=repr(exc))
+    else:
+        mw._trace_event("shutdown_qt_closeevent:qt_unavailable")
+        accept_fn = getattr(event, "accept", None)
+        if callable(accept_fn):
+            try:
+                accept_fn()
+            except _SHUTDOWN_MANAGER_GUARD_ERRORS:
+                pass
+
+    accepted = _event_is_accepted(event, default=True)
     mw._trace_event("shutdown_qt_closeevent:after", accepted=bool(accepted))
     if not accepted:
-        # Some Qt plugin paths can ignore close while auxiliary popups/tool windows
-        # are still around. During explicit app shutdown we force acceptance.
         try:
-            event.accept()
-            accepted = bool(event.isAccepted())
-        except Exception:
+            accept_fn = getattr(event, "accept", None)
+            if callable(accept_fn):
+                accept_fn()
+            accepted = _event_is_accepted(event, default=False)
+        except _SHUTDOWN_MANAGER_GUARD_ERRORS:
             accepted = False
         mw._trace_event("shutdown_qt_closeevent:forced_accept", accepted=bool(accepted))
     if accepted:
         if callable(set_state):
             set_state(shutdown_phase=ShutdownPhase.CLOSED.value)
         _schedule_app_quit_guard(mw)
+

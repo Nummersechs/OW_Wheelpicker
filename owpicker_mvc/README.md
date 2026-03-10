@@ -43,14 +43,23 @@ python3 main.py
 From the `owpicker_mvc/` directory:
 
 ```bash
+python3 -m unittest discover tests/unit
+python3 -m unittest discover tests/qt
 python3 -m unittest discover tests
 ```
 
 From the repo root:
 
 ```bash
-python3 -m unittest discover owpicker_mvc/tests
+python3 -m unittest discover -s owpicker_mvc/tests/unit -t owpicker_mvc
+python3 -m unittest discover -s owpicker_mvc/tests/qt -t owpicker_mvc
+python3 -m unittest discover -s owpicker_mvc/tests -t owpicker_mvc
 ```
+
+Notes:
+- Test layout is split into `tests/unit` (headless) and `tests/qt` (GUI/Qt-dependent).
+- Qt-dependent modules self-guard via `tests/qt_test_guard.py`.
+- If `PySide6` is missing, those modules are reported as `skipped` instead of failing during test discovery/import.
 
 ## OCR Warmup / First-Click Metrics
 
@@ -85,6 +94,12 @@ Optional cleanup for runtime/debug artifacts:
 
 ```bash
 python3 scripts/repo_hygiene.py --include-build --include-logs --include-saved-state
+```
+
+Optional cleanup for bundled OCR models (large local artifacts):
+
+```bash
+python3 scripts/repo_hygiene.py --include-build --include-ocr-models
 ```
 
 ## Windows EXE OCR (EasyOCR only)
@@ -146,6 +161,8 @@ Notes:
 
 - `main.py`: entry point, quiet mode setup, shared settings bootstrap.
 - `controller/`: MainWindow orchestration, mode handling, spin service, OCR, state sync, shutdown.
+  - `controller/map/`: map mode package (`ui.py`, `editor.py`, `styling.py`, `layout.py`, `categories.py`).
+  - `controller/ocr/capture|pipeline|preload|runtime`: new OCR package paths (compatibility wrappers to legacy `ocr_*.py` modules during migration).
 - `view/`: Qt widgets for wheel/list/overlay/profile UI.
 - `logic/`: UI-free algorithms (`spin_engine`, `spin_planner`, `hero_ban_merge`, `name_normalization`).
 - `model/`: role/wheel helpers and runtime phase enums.

@@ -144,7 +144,9 @@ MODE_CHOICE_INPUT_GUARD_MS = 260
 # Keep disabled in this version until online flow is fully released.
 MODE_CHOICE_ONLINE_ENABLED = False
 STARTUP_FINALIZE_DELAY_MS = 60
-STARTUP_WARMUP_COOLDOWN_MS = 0
+# Temporary debug delay so Offline mode choice stays locked for 20s after
+# startup warmup, making startup/warmup timing easier to inspect.
+STARTUP_WARMUP_COOLDOWN_MS = 20000
 STARTUP_INPUT_DRAIN_MS = 0
 # Minimum startup lock duration for global input filtering.
 # Set to 0 to disable this additional lock window.
@@ -254,6 +256,9 @@ PAUSE_SOUND_WARMUP_DURING_SPIN = True
 # Default to "high" to prioritize clean separation between end-ding and next spin.
 SOUND_SPIN_RESTART_GAP_PROFILE = "high"
 SOUND_SPIN_RESTART_GAP_MS = -1
+# Additional stop-tail guard for audio backends that release output asynchronously.
+# -1 = auto profile, >=0 = explicit milliseconds.
+SOUND_AUDIO_STOP_GUARD_MS = -1
 STATE_SAVE_DEBOUNCE_MS = 220
 NETWORK_SYNC_DEBOUNCE_MS = 220
 NETWORK_SYNC_WORKERS = 2
@@ -728,6 +733,7 @@ def _normalize_config_values() -> None:
     global MAP_LIST_NAMES_EXTRA_PADDING_PX
     global SOUND_SPIN_RESTART_GAP_PROFILE
     global SOUND_SPIN_RESTART_GAP_MS
+    global SOUND_AUDIO_STOP_GUARD_MS
     global MAP_CATEGORIES
     global MAP_INCLUDE_DEFAULTS
     global DEFAULT_MAPS
@@ -783,6 +789,7 @@ def _normalize_config_values() -> None:
     if SOUND_SPIN_RESTART_GAP_PROFILE not in {"auto", "low", "balanced", "high", "custom"}:
         SOUND_SPIN_RESTART_GAP_PROFILE = "balanced"
     SOUND_SPIN_RESTART_GAP_MS = max(-1, _as_int(SOUND_SPIN_RESTART_GAP_MS, -1))
+    SOUND_AUDIO_STOP_GUARD_MS = max(-1, _as_int(SOUND_AUDIO_STOP_GUARD_MS, -1))
 
     map_categories = _normalize_csv_list(MAP_CATEGORIES, list(DEFAULT_MAPS.keys()))
     MAP_CATEGORIES = list(map_categories)
