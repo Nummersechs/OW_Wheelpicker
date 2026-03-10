@@ -65,6 +65,7 @@ class TraceSettings:
 @dataclass(frozen=True)
 class StartupSettings:
     mode_choice_input_guard_ms: int = 220
+    mode_choice_online_enabled: bool = False
     startup_finalize_delay_ms: int = 60
     startup_warmup_cooldown_ms: int = 0
     startup_input_drain_ms: int = 0
@@ -211,6 +212,7 @@ class AppSettings:
         )
         self.startup = StartupSettings(
             mode_choice_input_guard_ms=max(0, _coerce_int(values.get("MODE_CHOICE_INPUT_GUARD_MS", 220), 220)),
+            mode_choice_online_enabled=_coerce_bool(values.get("MODE_CHOICE_ONLINE_ENABLED", False)),
             startup_finalize_delay_ms=max(0, _coerce_int(values.get("STARTUP_FINALIZE_DELAY_MS", 60), 60)),
             startup_warmup_cooldown_ms=max(0, _coerce_int(values.get("STARTUP_WARMUP_COOLDOWN_MS", 0), 0)),
             startup_input_drain_ms=max(0, _coerce_int(values.get("STARTUP_INPUT_DRAIN_MS", 0), 0)),
@@ -410,6 +412,7 @@ class AppSettings:
             "TRACE_CLEAR_ON_START": self.trace.clear_on_start,
             "TRACE_OCR_RUNTIME": self.trace.ocr_runtime,
             "MODE_CHOICE_INPUT_GUARD_MS": self.startup.mode_choice_input_guard_ms,
+            "MODE_CHOICE_ONLINE_ENABLED": self.startup.mode_choice_online_enabled,
             "STARTUP_FINALIZE_DELAY_MS": self.startup.startup_finalize_delay_ms,
             "STARTUP_WARMUP_COOLDOWN_MS": self.startup.startup_warmup_cooldown_ms,
             "STARTUP_INPUT_DRAIN_MS": self.startup.startup_input_drain_ms,

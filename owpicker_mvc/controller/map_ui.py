@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Dict
 from PySide6 import QtCore, QtWidgets
-import config
 import i18n
 from utils import qt_runtime, theme as theme_util, ui_helpers
 from view import style_helpers, ui_tokens
@@ -123,15 +122,24 @@ class MapUI(QtCore.QObject):
     requestSpinCategory = QtCore.Signal(str)
     listsBuilt = QtCore.Signal()
 
-    def __init__(self, state_store, language: str, theme_key: str, role_widgets: tuple, defer_lists: bool = False):
+    def __init__(
+        self,
+        state_store,
+        language: str,
+        theme_key: str,
+        role_widgets: tuple,
+        defer_lists: bool = False,
+        *,
+        settings=None,
+    ):
         super().__init__()
         self.state_store = state_store
         self.language = language
         self.theme_key = theme_key
         self._role_widgets = role_widgets  # (tank, dps, support)
         self._defer_list_build = bool(defer_lists)
-
-        self.map_categories = list(getattr(config, "MAP_CATEGORIES", [])) or list(config.DEFAULT_MAPS.keys())
+        self._settings = settings
+        self.map_categories = self._resolve_map_categories()
         self.map_lists: Dict[str, ListPanel] = {}
         self._map_combined: list[str] = []
         self._map_override_entries: list[dict] = []
@@ -155,6 +163,50 @@ class MapUI(QtCore.QObject):
         self._last_cap_signature: tuple[int, int, int, int] | None = None
         self._resize_watch_targets: tuple[QtWidgets.QWidget, ...] = tuple()
         self.container = self._build_ui()
+
+    def _cfg(self, key: str, default=None):
+        settings = self._settings
+        if settings is not None and hasattr(settings, "resolve"):
+            try:
+                return settings.resolve(key, default)
+            except Exception:
+                pass
+        if settings is not None and hasattr(settings, "get"):
+            try:
+                return settings.get(key, default)
+            except Exception:
+                pass
+        return default
+
+    @staticmethod
+    def _normalize_categories(raw_value) -> list[str]:
+        if isinstance(raw_value, str):
+            tokens = [tok.strip() for tok in raw_value.split(",")]
+        elif isinstance(raw_value, (list, tuple, set)):
+            tokens = [str(tok).strip() for tok in raw_value]
+        else:
+            tokens = []
+        categories: list[str] = []
+        seen: set[str] = set()
+        for token in tokens:
+            if not token:
+                continue
+            key = token.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            categories.append(token)
+        return categories
+
+    def _resolve_map_categories(self) -> list[str]:
+        configured = self._normalize_categories(self._cfg("MAP_CATEGORIES", []))
+        if configured:
+            return configured
+        state = self.state_store.get_mode_state("maps") or {}
+        fallback = self._normalize_categories(list(state.keys()))
+        if fallback:
+            return fallback
+        return ["Control", "Escort", "Hybrid", "Push", "Flashpoint", "Assault", "Clash"]
 
     # ----- Build UI -----
     def _build_ui(self) -> QtWidgets.QWidget:
@@ -334,11 +386,11 @@ class MapUI(QtCore.QObject):
         if row_height <= 0:
             row_height = max(18, int(getattr(names_canvas, "_row_height", 20)))
         row_count = max(1, int(names_canvas.count()))
-        min_rows = max(1, int(getattr(config, "MAP_LIST_NAMES_MIN_VISIBLE_ROWS", 2)))
-        max_rows = max(min_rows, int(getattr(config, "MAP_LIST_NAMES_MAX_VISIBLE_ROWS", 6)))
+        min_rows = max(1, int(self._cfg("MAP_LIST_NAMES_MIN_VISIBLE_ROWS", 2)))
+        max_rows = max(min_rows, int(self._cfg("MAP_LIST_NAMES_MAX_VISIBLE_ROWS", 6)))
         visible_rows = max(min_rows, min(row_count, max_rows))
         frame = max(0, int(names_canvas.frameWidth()) * 2)
-        extra_padding = max(0, int(getattr(config, "MAP_LIST_NAMES_EXTRA_PADDING_PX", 8)))
+        extra_padding = max(0, int(self._cfg("MAP_LIST_NAMES_EXTRA_PADDING_PX", 8)))
         target = int((visible_rows * row_height) + frame + extra_padding)
         return max(40, target)
 

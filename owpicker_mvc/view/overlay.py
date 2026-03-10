@@ -184,6 +184,7 @@ class ResultOverlay(QtWidgets.QWidget):
         self._last_view: dict | None = None
         self._applied_theme_key: str | None = None
         self._choice_buttons_loading = False
+        self._online_choice_available = True
         # Prefer the currently applied app theme during startup to avoid
         # brief light-theme flashes before MainWindow reapplies persisted theme.
         default_theme = theme_util.app_theme("light")
@@ -425,12 +426,18 @@ class ResultOverlay(QtWidgets.QWidget):
     def set_choice_enabled(self, enabled: bool):
         """Aktiviert/Deaktiviert die Online/Offline-Buttons (z.B. während des Ladens)."""
         enabled_bool = bool(enabled)
+        online_available = bool(getattr(self, "_online_choice_available", True))
         self._choice_buttons_loading = not enabled_bool
-        self.btn_online.setEnabled(enabled_bool)
+        self.btn_online.setEnabled(enabled_bool and online_available)
         self.btn_offline.setEnabled(enabled_bool)
         self._refresh_choice_button_visual_state(self.btn_online)
         self._refresh_choice_button_visual_state(self.btn_offline)
         self._apply_choice_button_tooltips()
+
+    def set_online_choice_available(self, enabled: bool) -> None:
+        self._online_choice_available = bool(enabled)
+        choice_enabled = not bool(getattr(self, "_choice_buttons_loading", False))
+        self.set_choice_enabled(choice_enabled)
 
     def _refresh_choice_button_visual_state(self, button: QtWidgets.QPushButton) -> None:
         if button is None:
@@ -501,9 +508,14 @@ class ResultOverlay(QtWidgets.QWidget):
     def _apply_choice_button_tooltips(self) -> None:
         loading_tip = i18n.t("overlay.choice_loading_tooltip")
         loading_mode = bool(getattr(self, "_choice_buttons_loading", False))
-        online_tip = (
-            loading_tip if loading_mode or not bool(self.btn_online.isEnabled()) else i18n.t("overlay.button_online_tooltip")
-        )
+        online_available = bool(getattr(self, "_online_choice_available", True))
+        online_tip = i18n.t("overlay.button_online_tooltip")
+        if loading_mode:
+            online_tip = loading_tip
+        elif not online_available:
+            online_tip = i18n.t("overlay.button_online_disabled_tooltip")
+        elif not bool(self.btn_online.isEnabled()):
+            online_tip = loading_tip
         offline_tip = (
             loading_tip if loading_mode or not bool(self.btn_offline.isEnabled()) else i18n.t("overlay.button_offline_tooltip")
         )

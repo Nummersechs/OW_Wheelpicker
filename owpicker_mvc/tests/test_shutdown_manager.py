@@ -1,6 +1,5 @@
 import unittest
 
-import config
 from controller import shutdown_manager
 
 
@@ -106,10 +105,10 @@ class TestShutdownManager(unittest.TestCase):
         self.assertIn("qt_timer", components)
         self.assertIn("state_sync", components)
 
-    def test_cfg_falls_back_to_config_when_main_window_cfg_fails(self):
+    def test_cfg_falls_back_to_default_when_main_window_cfg_fails(self):
         mw = _CfgRaiser()
-        value = shutdown_manager._cfg(mw, "DEBUG", not bool(config.DEBUG))
-        self.assertEqual(value, config.DEBUG)
+        self.assertEqual(shutdown_manager._cfg(mw, "DEBUG", False), False)
+        self.assertEqual(shutdown_manager._cfg(mw, "MISSING", "x"), "x")
 
     def test_run_shutdown_step_traces_success_and_error(self):
         tracer = _StepTracer()

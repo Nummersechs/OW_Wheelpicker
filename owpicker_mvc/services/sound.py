@@ -5,7 +5,7 @@ from typing import Callable, Any
 from PySide6.QtCore import QUrl
 from pathlib import Path
 import random, math, tempfile, wave
-import config
+import sys
 
 AUDIO_EXTENSIONS = {".wav", ".ogg", ".mp3"}
 _QSOUND_EFFECT_UNSET = object()
@@ -24,7 +24,7 @@ def _resolve_qsoundeffect() -> Any | None:
 
 
 class SoundManager:
-    def __init__(self, base_dir: Path):
+    def __init__(self, base_dir: Path, *, settings: Any | None = None):
         """Lädt Spin- und Ding-Sounds.
 
         Erwartete Struktur (Entwicklungsmodus):
@@ -50,12 +50,29 @@ class SoundManager:
         self._warmup_done_callbacks: list[Callable[[], None]] = []
         self._lazy_warmup_started = False
         self._warmup_paused = False
+        self._pending_spin_timer: QtCore.QTimer | None = None
+        self._pending_spin_effect: Any | None = None
+        self._settings = settings
 
         spin_dir = base_dir / "Spin"
         ding_dir = base_dir / "Ding"
 
         self.spin_sources = self._collect_sources(spin_dir, default_path=base_dir / "spin.wav")
         self.ding_sources = self._collect_sources(ding_dir, default_path=base_dir / "ding.wav")
+
+    def _cfg(self, key: str, default: Any = None) -> Any:
+        settings = self._settings
+        if settings is not None and hasattr(settings, "resolve"):
+            try:
+                return settings.resolve(key, default)
+            except Exception:
+                pass
+        if settings is not None and hasattr(settings, "get"):
+            try:
+                return settings.get(key, default)
+            except Exception:
+                pass
+        return default
 
     def _collect_sources(self, folder: Path, default_path: Path) -> list[Path]:
         sources: list[Path] = []
@@ -93,7 +110,7 @@ class SoundManager:
         if self._warmup_complete():
             return
         self._lazy_warmup_started = True
-        step_ms = int(getattr(config, "SOUND_WARMUP_LAZY_STEP_MS", 25))
+        step_ms = int(self._cfg("SOUND_WARMUP_LAZY_STEP_MS", 25))
         self.warmup_async(parent=None, step_ms=step_ms)
 
     def _get_or_create_effect(
@@ -205,7 +222,7 @@ class SoundManager:
             return
         self._warmup_paused = False
         try:
-            step_ms = int(getattr(config, "SOUND_WARMUP_LAZY_STEP_MS", 25))
+            step_ms = int(self._cfg("SOUND_WARMUP_LAZY_STEP_MS", 25))
             timer.start(max(0, step_ms))
         except Exception:
             pass
@@ -244,9 +261,73 @@ class SoundManager:
         except Exception:
             pass
 
+    def _cancel_pending_spin_start(self) -> None:
+        timer = self._pending_spin_timer
+        self._pending_spin_timer = None
+        self._pending_spin_effect = None
+        if timer is None:
+            return
+        try:
+            timer.stop()
+        except Exception:
+            pass
+        try:
+            timer.deleteLater()
+        except Exception:
+            pass
+
+    def _schedule_spin_start(self, eff: Any, delay_ms: int) -> None:
+        self._cancel_pending_spin_start()
+        if delay_ms <= 0:
+            self._play_effect(eff)
+            return
+
+        timer = QtCore.QTimer()
+        timer.setSingleShot(True)
+        self._pending_spin_timer = timer
+        self._pending_spin_effect = eff
+
+        def _on_timeout() -> None:
+            pending_eff = self._pending_spin_effect
+            self._pending_spin_effect = None
+            self._pending_spin_timer = None
+            try:
+                timer.deleteLater()
+            except Exception:
+                pass
+            if pending_eff is None:
+                return
+            self._play_effect(pending_eff)
+
+        timer.timeout.connect(_on_timeout)
+        timer.start(int(delay_ms))
+
+    def _resolve_spin_restart_gap_ms(self) -> int:
+        try:
+            configured_gap_ms = int(self._cfg("SOUND_SPIN_RESTART_GAP_MS", -1))
+        except Exception:
+            configured_gap_ms = -1
+        if configured_gap_ms >= 0:
+            return max(0, configured_gap_ms)
+        if not sys.platform.startswith("win"):
+            return 0
+        try:
+            profile = str(self._cfg("SOUND_SPIN_RESTART_GAP_PROFILE", "balanced") or "balanced").strip().lower()
+        except Exception:
+            profile = "balanced"
+        profile_gap_ms = {
+            "low": 20,
+            "balanced": 30,
+            "high": 40,
+            "auto": 35,
+            "custom": 35,
+        }
+        return int(profile_gap_ms.get(profile, 30))
+
     def shutdown(self) -> None:
         """Stop sounds/timers and release audio resources."""
         self._stop_warmup_timer()
+        self._cancel_pending_spin_start()
         try:
             self.stop_spin()
             self.stop_ding()
@@ -298,6 +379,7 @@ class SoundManager:
             "warmup_callbacks": len(self._warmup_done_callbacks),
             "preview_tmp_exists": preview_tmp_exists,
             "lazy_warmup_started": bool(self._lazy_warmup_started),
+            "pending_spin_timer": bool(self._pending_spin_timer is not None),
         }
 
     # --- Control ---
@@ -307,18 +389,22 @@ class SoundManager:
         try:
             self._maybe_start_lazy_warmup()
             # Prevent audible tail overlap from a previously chosen random spin effect.
+            self._cancel_pending_spin_start()
             self.stop_spin()
+            self.stop_ding()
             self._stop_preview_effect()
             if self.spin_sources:
                 path = random.choice(self.spin_sources)
                 eff = self._get_or_create_effect(self.spin_effects, path, self.spin_base_volume)
-                self._play_effect(eff)
+                gap_ms = self._resolve_spin_restart_gap_ms()
+                self._schedule_spin_start(eff, delay_ms=gap_ms)
             else:
                 QtWidgets.QApplication.beep()
         except Exception:
             QtWidgets.QApplication.beep()
 
     def stop_spin(self):
+        self._cancel_pending_spin_start()
         self._stop_effects(self.spin_effects.values())
 
     def set_master_volume(self, factor: float):

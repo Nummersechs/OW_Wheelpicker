@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 
 def start_ocr_async_import(
@@ -27,6 +28,7 @@ def start_ocr_async_import(
     qtcore,
     qtwidgets,
 ) -> None:
+    request_started_at = time.monotonic()
     temp_paths: list[Path] = []
     async_started = False
     ocr_runtime_trace_module.trace(
@@ -77,7 +79,11 @@ def start_ocr_async_import(
                 ready = bool(availability_fn(**easyocr_kwargs))
             else:
                 ready = False
-        ocr_runtime_trace_module.trace("ocr_availability_probe:done", ready=bool(ready))
+        ocr_runtime_trace_module.trace(
+            "ocr_availability_probe:done",
+            ready=bool(ready),
+            probe_ms=int((time.monotonic() - request_started_at) * 1000.0),
+        )
         if not ready:
             diag_fn = getattr(ocr_import, "easyocr_resolution_diagnostics", None)
             if callable(diag_fn):
@@ -136,6 +142,8 @@ def start_ocr_async_import(
             "relay": relay,
             "paths": list(temp_paths),
             "role": role,
+            "request_started_mono": float(request_started_at),
+            "worker_started_mono": None,
         }
         setattr(mw, "_ocr_async_job", job)
         ocr_runtime_trace_module.trace(
@@ -183,6 +191,11 @@ def start_ocr_async_import(
                 names=len(list(names or [])),
                 has_error=bool(ocr_error),
                 error=str(ocr_error or ""),
+                request_latency_ms=int((time.monotonic() - float(job.get("request_started_mono") or request_started_at)) * 1000.0),
+                worker_latency_ms=int(
+                    (time.monotonic() - float(job.get("worker_started_mono") or job.get("request_started_mono") or request_started_at))
+                    * 1000.0
+                ),
             )
             debug_mode = (
                 bool(runtime_cfg.get("debug_show_report", False))
@@ -273,6 +286,11 @@ def start_ocr_async_import(
                 "ocr_async_import:worker_error",
                 role=str(role or ""),
                 reason=str(reason or "worker-error"),
+                request_latency_ms=int((time.monotonic() - float(job.get("request_started_mono") or request_started_at)) * 1000.0),
+                worker_latency_ms=int(
+                    (time.monotonic() - float(job.get("worker_started_mono") or job.get("request_started_mono") or request_started_at))
+                    * 1000.0
+                ),
             )
             qtwidgets.QMessageBox.warning(
                 mw,
@@ -341,11 +359,21 @@ def start_ocr_async_import(
             thread.start(qtcore.QThread.LowPriority)
         except Exception:
             thread.start()
-        ocr_runtime_trace_module.trace("ocr_async_import:worker_thread_started", role=str(role or ""))
+        job["worker_started_mono"] = float(time.monotonic())
+        ocr_runtime_trace_module.trace(
+            "ocr_async_import:worker_thread_started",
+            role=str(role or ""),
+            request_to_worker_start_ms=int((float(job.get("worker_started_mono") or time.monotonic()) - request_started_at) * 1000.0),
+        )
         async_started = True
         return
     except Exception as exc:
-        ocr_runtime_trace_module.trace("ocr_async_import:exception", role=str(role or ""), error=repr(exc))
+        ocr_runtime_trace_module.trace(
+            "ocr_async_import:exception",
+            role=str(role or ""),
+            error=repr(exc),
+            request_latency_ms=int((time.monotonic() - request_started_at) * 1000.0),
+        )
         cleanup_temp_paths_fn(temp_paths)
         hide_ocr_busy_overlay_fn(mw, active=busy_overlay_shown)
         restore_override_cursor_fn()

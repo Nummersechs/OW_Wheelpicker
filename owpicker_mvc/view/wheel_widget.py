@@ -4,7 +4,6 @@ from typing import List, Set
 from PySide6 import QtCore, QtGui, QtWidgets
 from view.wheel_disc import WheelDisc
 from logic.spin_engine import plan_spin
-import config
 
 
 class WheelWidget(QtWidgets.QGraphicsView):
@@ -12,6 +11,19 @@ class WheelWidget(QtWidgets.QGraphicsView):
     Isoliert das Rendering und die Animation des Rads.
     """
     segmentToggled = QtCore.Signal(int, bool, str)
+
+    def _cfg(self, key: str, default=None):
+        try:
+            win = self.window()
+        except Exception:
+            win = None
+        getter = getattr(win, "_cfg", None)
+        if callable(getter):
+            try:
+                return getter(key, default)
+            except Exception:
+                pass
+        return default
 
     def __init__(self, names: List[str], parent=None):
         super().__init__(parent)
@@ -21,7 +33,7 @@ class WheelWidget(QtWidgets.QGraphicsView):
         # Smart mode avoids missed redraws for rotations while keeping cost lower
         # than forcing full viewport updates on every frame.
         self.setViewportUpdateMode(QtWidgets.QGraphicsView.SmartViewportUpdate)
-        self._hover_trace_budget = int(getattr(config, "HOVER_TRACE_BUDGET_PER_VIEW", 0))
+        self._hover_trace_budget = int(self._cfg("HOVER_TRACE_BUDGET_PER_VIEW", 0))
         self._cache_warmup_retry_scheduled = False
         self._rearm_hover_tracking()
         self.scene = QtWidgets.QGraphicsScene()
@@ -37,7 +49,8 @@ class WheelWidget(QtWidgets.QGraphicsView):
         self._scene_pad_bottom = 0
         self._fit_pad = 2
 
-        self.wheel = WheelDisc(names, radius=config.WHEEL_RADIUS)
+        wheel_radius = int(self._cfg("WHEEL_RADIUS", 136))
+        self.wheel = WheelDisc(names, radius=wheel_radius, cfg_getter=self._cfg)
         self.scene.addItem(self.wheel)
         self.wheel.setPos(0, 0)
         self.wheel.segmentToggled.connect(self.segmentToggled)
@@ -68,7 +81,7 @@ class WheelWidget(QtWidgets.QGraphicsView):
         return QtCore.QSize(self._preferred_canvas_size, self._preferred_canvas_size)
 
     def _pointer_geometry(self, radius: int) -> tuple[int, int, int]:
-        ref_radius = max(1, int(getattr(config, "WHEEL_RADIUS", radius or 1)))
+        ref_radius = max(1, int(self._cfg("WHEEL_RADIUS", radius or 1)))
         scale = float(max(1, int(radius))) / float(ref_radius)
         # Keep pointer readable on very small wheels and avoid oversized growth.
         scale = max(0.55, min(1.8, scale))
@@ -122,7 +135,7 @@ class WheelWidget(QtWidgets.QGraphicsView):
     def viewportEvent(self, event: QtCore.QEvent) -> bool:
         try:
             etype = int(event.type())
-            if getattr(config, "TRACE_HOVER", False) and getattr(self, "_hover_trace_budget", 0) > 0:
+            if bool(self._cfg("TRACE_HOVER", False)) and getattr(self, "_hover_trace_budget", 0) > 0:
                 if etype in (
                     QtCore.QEvent.MouseMove,
                     QtCore.QEvent.HoverMove,
@@ -157,7 +170,7 @@ class WheelWidget(QtWidgets.QGraphicsView):
                             )
                         except Exception:
                             pass
-            if getattr(config, "HOVER_PUMP_ON_START", False):
+            if bool(self._cfg("HOVER_PUMP_ON_START", False)):
                 try:
                     if etype in (QtCore.QEvent.MouseMove, QtCore.QEvent.HoverMove):
                         if hasattr(event, "spontaneous") and event.spontaneous():
@@ -333,7 +346,7 @@ class WheelWidget(QtWidgets.QGraphicsView):
         self._cache_warmup_retry_scheduled = True
         retry_ms = delay_ms
         if retry_ms is None:
-            retry_ms = int(getattr(config, "WHEEL_CACHE_WARMUP_RETRY_MS", 180))
+            retry_ms = int(self._cfg("WHEEL_CACHE_WARMUP_RETRY_MS", 180))
         QtCore.QTimer.singleShot(max(60, int(retry_ms)), self._run_cache_warmup_retry)
 
     def _run_cache_warmup_retry(self) -> None:

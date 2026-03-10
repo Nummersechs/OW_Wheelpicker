@@ -14,6 +14,7 @@ from view import screen_region_selector as _screen_selector
 
 from . import (
     ocr_capture_async_import as _ocr_capture_async_import,
+    ocr_capture_entry_helpers as _ocr_capture_entry_helpers,
     ocr_capture_pipeline_helpers as _ocr_capture_pipeline_helpers,
     ocr_capture_runtime_cfg as _ocr_capture_runtime_cfg,
     ocr_capture_ui_helpers as _ocr_capture_ui_helpers,
@@ -45,99 +46,36 @@ def select_region_with_macos_screencapture(*args, **kwargs):
 
 
 def _restore_override_cursor() -> None:
-    try:
-        while QtWidgets.QApplication.overrideCursor() is not None:
-            QtWidgets.QApplication.restoreOverrideCursor()
-    except Exception:
-        pass
+    _ocr_capture_entry_helpers.restore_override_cursor(qtwidgets=QtWidgets)
 
 
 def _cancel_ocr_cache_release(mw) -> None:
-    handler = getattr(mw, "_cancel_ocr_runtime_cache_release", None)
-    if callable(handler):
-        try:
-            handler()
-        except Exception:
-            pass
+    _ocr_capture_entry_helpers.cancel_ocr_cache_release(mw)
 
 
 def _schedule_ocr_cache_release(mw) -> None:
-    handler = getattr(mw, "_schedule_ocr_runtime_cache_release", None)
-    if callable(handler):
-        try:
-            handler()
-        except Exception:
-            pass
+    _ocr_capture_entry_helpers.schedule_ocr_cache_release(mw)
 
 
 def _show_ocr_busy_overlay(mw, role: str) -> bool:
-    overlay = getattr(mw, "overlay", None)
-    if overlay is None:
-        return False
-    try:
-        normalized_role = str(role or "").strip().casefold()
-        if normalized_role == "all":
-            line1 = i18n.t("ocr.progress_line_all")
-        else:
-            role_name_fn = getattr(mw, "_ocr_role_display_name", None)
-            role_name = role_name_fn(normalized_role) if callable(role_name_fn) else normalized_role.upper()
-            line1 = i18n.t("ocr.progress_line_role", role=role_name)
-        overlay.show_status_message(
-            i18n.t("ocr.progress_title"),
-            [
-                line1,
-                i18n.t("ocr.progress_line_wait"),
-                "",
-            ],
-        )
-        overlay.setEnabled(False)
-        # Force a paint pass before CPU-heavy OCR checks/work so users see
-        # immediate feedback right after the screenshot selection.
-        try:
-            QtWidgets.QApplication.processEvents()
-        except Exception:
-            pass
-        return True
-    except Exception:
-        return False
+    return _ocr_capture_entry_helpers.show_ocr_busy_overlay(
+        mw,
+        role,
+        i18n_module=i18n,
+        qtwidgets=QtWidgets,
+    )
 
 
 def _hide_ocr_busy_overlay(mw, *, active: bool) -> None:
-    if not active:
-        return
-    overlay = getattr(mw, "overlay", None)
-    if overlay is None:
-        return
-    try:
-        overlay.setEnabled(True)
-    except Exception:
-        pass
-    try:
-        last_view = getattr(overlay, "_last_view", {}) or {}
-        if last_view.get("type") != "status_message":
-            return
-        data = last_view.get("data") or ()
-        if not data:
-            return
-        if str(data[0]) != str(i18n.t("ocr.progress_title")):
-            return
-        overlay.hide()
-    except Exception:
-        pass
+    _ocr_capture_entry_helpers.hide_ocr_busy_overlay(
+        mw,
+        active=active,
+        i18n_module=i18n,
+    )
 
 
 def _mark_ocr_runtime_activated(mw) -> None:
-    marker = getattr(mw, "_mark_ocr_runtime_activated", None)
-    if callable(marker):
-        try:
-            marker()
-            return
-        except Exception:
-            pass
-    try:
-        setattr(mw, "_ocr_runtime_activated", True)
-    except Exception:
-        pass
+    _ocr_capture_entry_helpers.mark_ocr_runtime_activated(mw)
 
 
 def _restore_main_window_after_capture(
@@ -146,23 +84,25 @@ def _restore_main_window_after_capture(
     was_visible: bool,
     was_minimized: bool,
 ) -> None:
-    _ocr_capture_ui_helpers.restore_main_window_after_capture(
+    _ocr_capture_entry_helpers.restore_main_window_after_capture(
         mw,
         was_visible=was_visible,
         was_minimized=was_minimized,
+        ocr_capture_ui_helpers_module=_ocr_capture_ui_helpers,
         qt_runtime_module=qt_runtime,
     )
 
 
 def _suspend_quit_on_last_window_closed(*, active: bool):
-    return _ocr_capture_ui_helpers.suspend_quit_on_last_window_closed(
+    return _ocr_capture_entry_helpers.suspend_quit_on_last_window_closed(
         active=active,
+        ocr_capture_ui_helpers_module=_ocr_capture_ui_helpers,
         ocr_runtime_trace_module=_ocr_runtime_trace,
     )
 
 
 def _capture_region_with_qt_selector(mw) -> tuple[QtGui.QPixmap | None, str | None]:
-    return _ocr_capture_ui_helpers.capture_region_with_qt_selector(
+    return _ocr_capture_entry_helpers.capture_region_with_qt_selector(
         mw,
         sys_platform=sys.platform,
         select_region_from_primary_screen_fn=select_region_from_primary_screen,
@@ -170,11 +110,12 @@ def _capture_region_with_qt_selector(mw) -> tuple[QtGui.QPixmap | None, str | No
         restore_main_window_after_capture_fn=_restore_main_window_after_capture,
         time_module=time,
         i18n_module=i18n,
+        ocr_capture_ui_helpers_module=_ocr_capture_ui_helpers,
     )
 
 
 def capture_region_for_ocr(mw) -> tuple[QtGui.QPixmap | None, str | None]:
-    return _ocr_capture_ui_helpers.capture_region_for_ocr(
+    return _ocr_capture_entry_helpers.capture_region_for_ocr(
         mw,
         sys_platform=sys.platform,
         capture_region_with_qt_selector_fn=_capture_region_with_qt_selector,
@@ -183,6 +124,7 @@ def capture_region_for_ocr(mw) -> tuple[QtGui.QPixmap | None, str | None]:
         restore_main_window_after_capture_fn=_restore_main_window_after_capture,
         time_module=time,
         i18n_module=i18n,
+        ocr_capture_ui_helpers_module=_ocr_capture_ui_helpers,
     )
 
 
@@ -411,7 +353,7 @@ def _estimate_expected_rows_from_paths(paths: list[Path], cfg: dict) -> int | No
             return 0
         try:
             return len(value)
-        except Exception:
+        except TypeError:
             return len(list(value or ()))
 
     def _collect_counts(expected_values: list[int]) -> list[int]:
@@ -535,7 +477,7 @@ def _primary_order_inversions(values: list[str], trace_entries: list[dict] | Non
             continue
         try:
             line_index = int(entry.get("line_index", 0) or 0)
-        except Exception:
+        except (TypeError, ValueError):
             line_index = 0
         if line_index <= 0:
             continue

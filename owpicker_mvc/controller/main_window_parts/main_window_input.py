@@ -625,7 +625,7 @@ class MainWindowInputMixin:
         self._drained_input_last_t = None
 
     def _end_startup_input_drain(self) -> None:
-        self._startup_drain_active = False
+        self._set_startup_runtime_state(drain_active=False)
         self._refresh_app_event_filter_state()
         self._flush_posted_events("startup_drain_done")
         self._flush_drained_input_stats("startup_drain_done")

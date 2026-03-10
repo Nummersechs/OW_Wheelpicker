@@ -42,6 +42,7 @@ Expected result:
 - OCR button enable/disable gating waehrend preload
 - OCR loading tooltip behavior waehrend preload block
 - OCR runtime cache release scheduling
+- OCR preload phase transitions (`scheduled/deferred/running/done/failed/cancelled`)
 
 ## `ocr_capture_ops.py`
 - capture orchestration, async worker launch, busy overlay
@@ -99,6 +100,7 @@ Expected result:
 - OCR preload runs in a low-priority background thread and uses a subprocess probe plus optional in-process cache warmup.
 - OCR buttons can stay disabled with loading-tooltip until preload state flips to attempted/done.
 - Startup warmup can optionally include OCR preload waiting logic without blocking forever (`STARTUP_OCR_PRELOAD_*` budgets).
+- Runtime phase tracking keeps preload visibility explicit across startup/shutdown transitions (`OCRPreloadPhase`).
 
 ## Language + model behavior
 - CJK languages are split into dedicated EasyOCR groups with English pairing.

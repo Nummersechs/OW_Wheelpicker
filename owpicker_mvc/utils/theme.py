@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from PySide6 import QtGui, QtWidgets
-import config
 
 
 @dataclass(frozen=True)
@@ -371,7 +370,7 @@ def _cached_palette(theme: Theme) -> QtGui.QPalette:
     return QtGui.QPalette(cached)
 
 
-def apply_app_theme(theme: Theme) -> None:
+def apply_app_theme(theme: Theme, *, force_fusion_style: bool | None = None) -> None:
     """Apply palette and global stylesheet to the QApplication."""
     app = QtWidgets.QApplication.instance()
     if not app:
@@ -381,7 +380,7 @@ def apply_app_theme(theme: Theme) -> None:
     if isinstance(current_key, str) and current_key == theme.key and stylesheet_applied:
         return
 
-    force_fusion = bool(getattr(config, "FORCE_FUSION_STYLE", False))
+    force_fusion = bool(force_fusion_style)
     if force_fusion and not bool(app.property(_FUSION_INIT_PROP)):
         try:
             app.setStyle(_FUSION_STYLE)

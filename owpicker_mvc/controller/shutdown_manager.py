@@ -4,20 +4,16 @@ from typing import Callable
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-import config
-
+from model.main_window_runtime_state import ShutdownPhase
 
 def _cfg(mw, key: str, default=None):
     getter = getattr(mw, "_cfg", None)
     if callable(getter):
         try:
             return getter(key, default)
-        except Exception as exc:
-            try:
-                config.debug_print(f"shutdown _cfg fallback for {key}: {exc}")
-            except Exception:
-                pass
-    return getattr(config, key, default)
+        except Exception:
+            pass
+    return default
 
 
 def merge_shutdown_snapshot(prefix: str, payload: dict | None, target: dict) -> None:
@@ -225,7 +221,14 @@ def _schedule_app_quit_guard(mw) -> None:
 
 
 def handle_close_event(mw, event: QtGui.QCloseEvent) -> None:
-    mw._closing = True
+    set_state = getattr(mw, "_set_shutdown_runtime_state", None)
+    if callable(set_state):
+        set_state(
+            closing=True,
+            shutdown_phase=ShutdownPhase.FINALIZING_CLOSE.value,
+        )
+    else:
+        mw._closing = True
     mw._trace_event("close_event")
 
     if bool(_cfg(mw, "TRACE_SHUTDOWN", False)):
@@ -325,4 +328,6 @@ def handle_close_event(mw, event: QtGui.QCloseEvent) -> None:
             accepted = False
         mw._trace_event("shutdown_qt_closeevent:forced_accept", accepted=bool(accepted))
     if accepted:
+        if callable(set_state):
+            set_state(shutdown_phase=ShutdownPhase.CLOSED.value)
         _schedule_app_quit_guard(mw)

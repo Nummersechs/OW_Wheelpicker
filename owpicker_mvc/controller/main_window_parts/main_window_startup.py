@@ -4,6 +4,7 @@ import time
 
 from PySide6 import QtCore
 
+from model.main_window_runtime_state import OCRPreloadPhase, StartupPhase
 from utils import theme as theme_util
 
 
@@ -111,7 +112,10 @@ class MainWindowStartupMixin:
         self._set_controls_enabled(False)
         self._set_heavy_ui_updates_enabled(False)
         self.overlay.show_online_choice()
+        if hasattr(self.overlay, "set_online_choice_available"):
+            self.overlay.set_online_choice_available(self._cfg("MODE_CHOICE_ONLINE_ENABLED", False))
         self.overlay.set_choice_enabled(False)
+        self._set_startup_runtime_state(startup_phase=StartupPhase.SHOWING_MODE_CHOICE.value)
         self._choice_shown_at = time.monotonic()
         self._trace_event("show_mode_choice")
         self._start_startup_warmup()
@@ -141,6 +145,7 @@ class MainWindowStartupMixin:
         # Fast-path for normal startup: no warmup tasks and no explicit lock.
         if not tasks and min_block_ms <= 0:
             self._set_startup_runtime_state(
+                startup_phase=StartupPhase.WARMUP_DONE.value,
                 task_queue=[],
                 warmup_running=False,
                 warmup_done=True,
@@ -157,6 +162,7 @@ class MainWindowStartupMixin:
                 pass
             return
         self._set_startup_runtime_state(
+            startup_phase=StartupPhase.WARMUP_RUNNING.value,
             task_queue=tasks,
             warmup_running=True,
             block_input=True,
@@ -193,7 +199,10 @@ class MainWindowStartupMixin:
             return
         if getattr(self, "_startup_warmup_finalize_scheduled", False):
             return
-        self._set_startup_runtime_state(warmup_finalize_scheduled=True)
+        self._set_startup_runtime_state(
+            startup_phase=StartupPhase.WARMUP_COOLDOWN.value,
+            warmup_finalize_scheduled=True,
+        )
         extra_ms = max(0, int(self._cfg("STARTUP_WARMUP_COOLDOWN_MS", 500)))
         remaining_lock_ms = 0
         block_until = getattr(self, "_startup_block_input_until", None)
@@ -207,6 +216,7 @@ class MainWindowStartupMixin:
         if getattr(self, "_startup_warmup_done", False):
             return
         self._set_startup_runtime_state(
+            startup_phase=StartupPhase.WARMUP_DONE.value,
             warmup_running=False,
             warmup_done=True,
             block_input=False,
@@ -220,6 +230,8 @@ class MainWindowStartupMixin:
             ocr_preload_deadline=None,
             ocr_preload_started_at=None,
             ocr_preload_running_wait_logged=False,
+            ocr_preload_phase=OCRPreloadPhase.IDLE.value,
+            ocr_preload_phase_reason=None,
         )
         self._flush_posted_events("startup_warmup_done")
         self._refresh_app_event_filter_state()
@@ -275,16 +287,26 @@ class MainWindowStartupMixin:
         if bool(getattr(self, "_ocr_runtime_activated", False)) or bool(
             getattr(self, "_ocr_preload_done", False)
         ):
+            self._set_startup_runtime_state(
+                ocr_preload_phase=OCRPreloadPhase.DONE.value,
+                ocr_preload_phase_reason="already_ready",
+            )
             self._startup_task_done("ocr_preload")
             return
         run_preload = getattr(self, "_run_ocr_background_preload", None)
         if not callable(run_preload):
+            self._set_startup_runtime_state(
+                ocr_preload_phase=OCRPreloadPhase.FAILED.value,
+                ocr_preload_phase_reason="no_runner",
+            )
             self._startup_task_done("ocr_preload")
             return
         self._set_startup_runtime_state(
             waiting_for_ocr_preload=True,
             ocr_preload_running_wait_logged=False,
             ocr_preload_started_at=None,
+            ocr_preload_phase=OCRPreloadPhase.RUNNING.value,
+            ocr_preload_phase_reason="startup_task",
         )
         max_wait_ms = max(250, int(self._cfg("STARTUP_OCR_PRELOAD_MAX_WAIT_MS", 1800)))
         self._set_startup_runtime_state(ocr_preload_deadline=time.monotonic() + (max_wait_ms / 1000.0))
@@ -295,6 +317,8 @@ class MainWindowStartupMixin:
                 waiting_for_ocr_preload=False,
                 ocr_preload_deadline=None,
                 ocr_preload_started_at=None,
+                ocr_preload_phase=OCRPreloadPhase.FAILED.value,
+                ocr_preload_phase_reason="runner_error",
             )
             self._startup_task_done("ocr_preload")
             return
@@ -323,6 +347,11 @@ class MainWindowStartupMixin:
                 ocr_preload_deadline=None,
                 ocr_preload_started_at=None,
             )
+            if bool(getattr(self, "_ocr_preload_done", False)):
+                self._set_startup_runtime_state(
+                    ocr_preload_phase=OCRPreloadPhase.DONE.value,
+                    ocr_preload_phase_reason="startup_poll",
+                )
             self._startup_task_done("ocr_preload")
             return
         wait_ms = max(40, int(self._cfg("POST_CHOICE_INIT_BUSY_RETRY_MS", 220)))
@@ -356,6 +385,8 @@ class MainWindowStartupMixin:
                 waiting_for_ocr_preload=False,
                 ocr_preload_deadline=None,
                 ocr_preload_started_at=None,
+                ocr_preload_phase=OCRPreloadPhase.FAILED.value,
+                ocr_preload_phase_reason="startup_timeout",
             )
             self._trace_event("startup_warmup:ocr_preload_timeout")
             self._startup_task_done("ocr_preload")
@@ -382,6 +413,8 @@ class MainWindowStartupMixin:
                         waiting_for_ocr_preload=False,
                         ocr_preload_deadline=None,
                         ocr_preload_started_at=None,
+                        ocr_preload_phase=OCRPreloadPhase.FAILED.value,
+                        ocr_preload_phase_reason="restart_error",
                     )
                     self._startup_task_done("ocr_preload")
                     return
@@ -442,7 +475,10 @@ class MainWindowStartupMixin:
             self._apply_language(defer_heavy=True)
         # Tooltips sofort erlauben (werden später noch einmal frisch berechnet)
         self._set_tooltips_ready(True)
-        self._set_startup_runtime_state(finalize_done=True)
+        self._set_startup_runtime_state(
+            startup_phase=StartupPhase.FINALIZED.value,
+            finalize_done=True,
+        )
 
     def _schedule_post_choice_init(self, delay_ms: int) -> None:
         if getattr(self, "_closing", False):

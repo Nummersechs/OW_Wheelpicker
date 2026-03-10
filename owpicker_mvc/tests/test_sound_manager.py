@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from services.app_settings import AppSettings
 from services.sound import SoundManager
 
 
@@ -55,6 +57,18 @@ class _FakeWarmupTimer:
         return
 
 
+class _FakeSpinTimer:
+    def __init__(self) -> None:
+        self.stop_calls = 0
+        self.delete_calls = 0
+
+    def stop(self) -> None:
+        self.stop_calls += 1
+
+    def deleteLater(self) -> None:
+        self.delete_calls += 1
+
+
 class TestSoundManager(unittest.TestCase):
     def test_play_spin_stops_existing_spin_effects_before_new_play(self):
         sm = SoundManager(base_dir=Path("."))
@@ -71,6 +85,95 @@ class TestSoundManager(unittest.TestCase):
         self.assertGreaterEqual(e1.stop_calls, 1)
         self.assertGreaterEqual(e2.stop_calls, 1)
         self.assertGreaterEqual(e1.play_calls + e2.play_calls, 1)
+
+    def test_play_spin_stops_existing_ding_effects_before_new_play(self):
+        sm = SoundManager(base_dir=Path("."))
+        p_spin = Path("spin.wav")
+        p_ding = Path("ding.wav")
+        spin_eff = _FakeEffect()
+        ding_eff = _FakeEffect()
+        sm.spin_sources = [p_spin]
+        sm.spin_effects = {p_spin: spin_eff}
+        sm.ding_effects = {p_ding: ding_eff}
+        sm._maybe_start_lazy_warmup = lambda: None
+
+        sm.play_spin()
+
+        self.assertGreaterEqual(ding_eff.stop_calls, 1)
+        self.assertGreaterEqual(spin_eff.play_calls, 1)
+
+    def test_stop_spin_cancels_pending_spin_start_timer(self):
+        sm = SoundManager(base_dir=Path("."))
+        timer = _FakeSpinTimer()
+        sm._pending_spin_timer = timer
+        sm._pending_spin_effect = object()
+
+        sm.stop_spin()
+
+        self.assertEqual(timer.stop_calls, 1)
+        self.assertEqual(timer.delete_calls, 1)
+        self.assertIsNone(sm._pending_spin_timer)
+        self.assertIsNone(sm._pending_spin_effect)
+
+    def test_play_spin_windows_profile_low_uses_20ms_gap(self):
+        sm = SoundManager(base_dir=Path("."))
+        sm._settings = AppSettings(
+            values={
+                "SOUND_SPIN_RESTART_GAP_MS": -1,
+                "SOUND_SPIN_RESTART_GAP_PROFILE": "low",
+            }
+        )
+        p1 = Path("a.wav")
+        sm.spin_sources = [p1]
+        sm.spin_effects = {p1: _FakeEffect()}
+        sm._maybe_start_lazy_warmup = lambda: None
+        recorded: list[int] = []
+        sm._schedule_spin_start = lambda _eff, delay_ms: recorded.append(int(delay_ms))
+
+        with patch("services.sound.sys.platform", "win32"):
+            sm.play_spin()
+
+        self.assertEqual(recorded, [20])
+
+    def test_play_spin_windows_profile_high_uses_40ms_gap(self):
+        sm = SoundManager(base_dir=Path("."))
+        sm._settings = AppSettings(
+            values={
+                "SOUND_SPIN_RESTART_GAP_MS": -1,
+                "SOUND_SPIN_RESTART_GAP_PROFILE": "high",
+            }
+        )
+        p1 = Path("a.wav")
+        sm.spin_sources = [p1]
+        sm.spin_effects = {p1: _FakeEffect()}
+        sm._maybe_start_lazy_warmup = lambda: None
+        recorded: list[int] = []
+        sm._schedule_spin_start = lambda _eff, delay_ms: recorded.append(int(delay_ms))
+
+        with patch("services.sound.sys.platform", "win32"):
+            sm.play_spin()
+
+        self.assertEqual(recorded, [40])
+
+    def test_play_spin_explicit_gap_overrides_profile(self):
+        sm = SoundManager(base_dir=Path("."))
+        sm._settings = AppSettings(
+            values={
+                "SOUND_SPIN_RESTART_GAP_MS": 55,
+                "SOUND_SPIN_RESTART_GAP_PROFILE": "low",
+            }
+        )
+        p1 = Path("a.wav")
+        sm.spin_sources = [p1]
+        sm.spin_effects = {p1: _FakeEffect()}
+        sm._maybe_start_lazy_warmup = lambda: None
+        recorded: list[int] = []
+        sm._schedule_spin_start = lambda _eff, delay_ms: recorded.append(int(delay_ms))
+
+        with patch("services.sound.sys.platform", "win32"):
+            sm.play_spin()
+
+        self.assertEqual(recorded, [55])
 
     def test_apply_volume_handles_cache_mutation_safely(self):
         sm = SoundManager(base_dir=Path("."))

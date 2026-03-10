@@ -25,6 +25,7 @@ class TestOverlayChoiceTooltips(unittest.TestCase):
         overlay.btn_online = _FakeButton()
         overlay.btn_offline = _FakeButton()
         overlay._choice_buttons_loading = False
+        overlay._online_choice_available = True
         return overlay
 
     def test_set_choice_enabled_false_uses_loading_tooltip(self):
@@ -58,6 +59,16 @@ class TestOverlayChoiceTooltips(unittest.TestCase):
 
         self.assertEqual(overlay.btn_online.tooltip, i18n.t("overlay.choice_loading_tooltip"))
         self.assertEqual(overlay.btn_offline.tooltip, i18n.t("overlay.choice_loading_tooltip"))
+
+    def test_online_choice_unavailable_keeps_online_disabled_with_version_tooltip(self):
+        overlay = self._make_overlay()
+        ResultOverlay.set_online_choice_available(overlay, False)
+        ResultOverlay.set_choice_enabled(overlay, True)
+
+        self.assertFalse(overlay.btn_online.isEnabled())
+        self.assertTrue(overlay.btn_offline.isEnabled())
+        self.assertEqual(overlay.btn_online.tooltip, i18n.t("overlay.button_online_disabled_tooltip"))
+        self.assertEqual(overlay.btn_offline.tooltip, i18n.t("overlay.button_offline_tooltip"))
 
 
 if __name__ == "__main__":

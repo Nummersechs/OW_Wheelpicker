@@ -168,7 +168,26 @@ class OCRPreloadWorker(QtCore.QObject):
         except Exception as exc:
             return False, f"inprocess-import-error:{exc!r}"
 
+        started_at = time.monotonic()
         self._trace_runtime("ocr_preload_worker:inprocess_warmup_start")
+
+        warm_detail: str | None = None
+        warmup_fn = getattr(ocr_import, "easyocr_warmup_runtime", None)
+        if callable(warmup_fn):
+            try:
+                warm_ok, warm_detail = warmup_fn(**self._easyocr_kwargs)
+            except Exception as exc:
+                warm_ok = False
+                warm_detail = f"inprocess-warmup-error:{exc!r}"
+            if warm_ok:
+                detail = str(warm_detail or "").strip() or "ready"
+                self._trace_runtime(
+                    "ocr_preload_worker:inprocess_warmup_done",
+                    ok=True,
+                    detail=detail,
+                    runtime_ms=int((time.monotonic() - started_at) * 1000.0),
+                )
+                return True, detail
 
         availability_fn = getattr(ocr_import, "easyocr_available", None)
         if not callable(availability_fn):
@@ -178,8 +197,17 @@ class OCRPreloadWorker(QtCore.QObject):
         except Exception as exc:
             return False, f"inprocess-availability-error:{exc!r}"
         if ok:
-            self._trace_runtime("ocr_preload_worker:inprocess_warmup_done", ok=True)
-            return True, "ready"
+            detail = "ready"
+            text = str(warm_detail or "").strip()
+            if text:
+                detail = f"{detail}; {text}"
+            self._trace_runtime(
+                "ocr_preload_worker:inprocess_warmup_done",
+                ok=True,
+                detail=detail,
+                runtime_ms=int((time.monotonic() - started_at) * 1000.0),
+            )
+            return True, detail
 
         detail = "inprocess-not-ready"
         diag_fn = getattr(ocr_import, "easyocr_resolution_diagnostics", None)
@@ -194,11 +222,13 @@ class OCRPreloadWorker(QtCore.QObject):
             "ocr_preload_worker:inprocess_warmup_done",
             ok=False,
             detail=str(detail or ""),
+            runtime_ms=int((time.monotonic() - started_at) * 1000.0),
         )
         return False, detail
 
     @QtCore.Slot()
     def run(self) -> None:
+        run_started_at = time.monotonic()
         self._trace_runtime("ocr_preload_worker:start", frozen=bool(getattr(sys, "frozen", False)))
 
         def _interrupted() -> bool:
@@ -231,6 +261,12 @@ class OCRPreloadWorker(QtCore.QObject):
             if _interrupted():
                 self.finished.emit(False, "interrupted")
                 return
+            self._trace_runtime(
+                "ocr_preload_worker:done",
+                ok=bool(warm_ok),
+                detail=str(warm_detail or ("ready" if warm_ok else "not-ready")),
+                runtime_ms=int((time.monotonic() - run_started_at) * 1000.0),
+            )
             self.finished.emit(bool(warm_ok), str(warm_detail or ("ready" if warm_ok else "not-ready")))
             return
 
@@ -385,7 +421,12 @@ class OCRPreloadWorker(QtCore.QObject):
                     return
                 if str(warm_detail or "").strip():
                     detail = str(warm_detail).strip()
-            self._trace_runtime("ocr_preload_worker:done", ok=bool(ok), detail=str(detail or ""))
+            self._trace_runtime(
+                "ocr_preload_worker:done",
+                ok=bool(ok),
+                detail=str(detail or ""),
+                runtime_ms=int((time.monotonic() - run_started_at) * 1000.0),
+            )
             self.finished.emit(ok, detail or ("ready" if ok else "not-ready"))
         finally:
             self._clear_proc(proc)

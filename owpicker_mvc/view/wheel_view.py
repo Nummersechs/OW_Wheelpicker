@@ -1,7 +1,6 @@
 from contextlib import contextmanager
 from typing import List, Optional
 from PySide6 import QtCore, QtGui, QtWidgets
-import config
 from view.base_panel import BasePanel
 from view.wheel_widget import WheelWidget
 from view import ui_tokens, wheel_spin_ops
@@ -504,9 +503,19 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
     def is_anim_running(self) -> bool:
         return hasattr(self, "anim") and self.anim.state() == QtCore.QAbstractAnimation.Running
 
+    def _cfg(self, key: str, default=None):
+        win = self.window()
+        getter = getattr(win, "_cfg", None) if win is not None else None
+        if callable(getter):
+            try:
+                return getter(key, default)
+            except Exception:
+                pass
+        return default
+
     def _arm_spin_guard(self, duration_ms: int) -> None:
         self._disarm_spin_guard()
-        if not bool(getattr(config, "WHEEL_SPIN_GUARD_ENABLED", False)):
+        if not bool(self._cfg("WHEEL_SPIN_GUARD_ENABLED", False)):
             return
         timeout_ms = max(1200, int(duration_ms) + 3000)
         timer = QtCore.QTimer(self)
@@ -527,7 +536,7 @@ class WheelView(WheelViewEntriesMixin, BasePanel):
 
     def _on_spin_guard_timeout(self) -> None:
         # Fallback for overloaded systems where animation finished-signal is delayed/lost.
-        if not bool(getattr(config, "WHEEL_SPIN_GUARD_ENABLED", False)):
+        if not bool(self._cfg("WHEEL_SPIN_GUARD_ENABLED", False)):
             return
         if not getattr(self, "_is_spinning", False):
             return

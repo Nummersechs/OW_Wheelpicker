@@ -104,6 +104,12 @@ class TestAppSettings(unittest.TestCase):
         self.assertEqual(settings.ocr.release_cache_on_spin, True)
         self.assertEqual(settings.resolve("OCR_IDLE_CACHE_RELEASE_MS", 0), 12000)
 
+    def test_startup_section_exposes_online_choice_flag(self):
+        settings = AppSettings(values={"MODE_CHOICE_ONLINE_ENABLED": "1"})
+
+        self.assertEqual(settings.startup.mode_choice_online_enabled, True)
+        self.assertEqual(settings.resolve("MODE_CHOICE_ONLINE_ENABLED", False), True)
+
 
 if __name__ == "__main__":
     unittest.main()

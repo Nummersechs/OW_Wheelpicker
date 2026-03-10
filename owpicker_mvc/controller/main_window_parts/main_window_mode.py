@@ -4,7 +4,6 @@ import time
 
 from PySide6 import QtCore
 
-import config
 from .. import mode_manager
 from model.role_keys import role_wheel_map
 
@@ -129,9 +128,9 @@ class MainWindowModeMixin:
         self._start_hover_pump(reason="mode_choice", duration_ms=2000, force=True)
 
         if self.online_mode:
-            config.debug_print("Online-Modus aktiv.")
+            self._debug_print("Online-Modus aktiv.")
         else:
-            config.debug_print("Offline-Modus aktiv.")
+            self._debug_print("Offline-Modus aktiv.")
         # Sync ggf. neu einplanen oder abbrechen
         self.state_sync.sync_all_roles()
         if bool(getattr(self, "_startup_visual_finalize_pending", False)):

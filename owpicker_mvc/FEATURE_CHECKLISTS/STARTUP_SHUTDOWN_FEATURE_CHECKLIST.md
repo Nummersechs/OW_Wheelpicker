@@ -2,9 +2,11 @@
 
 ## Scope
 - `controller/main_window.py`
+- `controller/main_window_runtime_bridge.py`
 - `controller/main_window_parts/main_window_startup.py`
 - `controller/main_window_parts/main_window_input.py`
 - `controller/main_window_parts/main_window_shutdown.py`
+- `model/main_window_runtime_state.py`
 - `view/overlay.py`
 - `controller/shutdown_manager.py`
 - `controller/hover_tooltip_ops.py`
@@ -13,6 +15,7 @@
 - [ ] Startup Mode Choice Overlay
 - [ ] Startup Mode Choice Buttons bleiben deaktiviert mit Loading-Tooltip bis Warmup/Input-Drain fertig ist
 - [ ] Startup Warmup Tasks (Wheel-Cache/Sound/Map optional, OCR-Preload optional)
+- [ ] Explizite Startup/OCR/Shutdown-Phasen werden korrekt gesetzt und getraced
 - [ ] Input Guard und Event-Filter waehrend kritischer Startup-Phasen
 - [ ] Deferred Visual Finalize (Theme/Language heavy updates)
 - [ ] Optionales Shutdown Overlay
@@ -23,6 +26,7 @@
 ## Versteckte/Non-Obvious Logik
 - Startup kann Heavy-UI Updates deferen, um ersten Klickpfad fluessig zu halten.
 - Input wird temporär geblockt/drained, um Race Conditions am Start zu reduzieren.
+- Startup-/Shutdown-/OCR-Preload-Status laufen ueber RuntimeState-Dataclasses und werden via RuntimeBridge auf Legacy-Attribute gespiegelt.
 - CloseEvent ruft explizit `QMainWindow.closeEvent`, um Mixin-Rekursion zu vermeiden.
 - OCR Async/Preload Jobs werden bei Close aktiv gecleant; wenn sie nicht stoppen, werden sie kontrolliert detached/orphaned.
 - Mode-Choice Tooltips werden im Loading-Zustand priorisiert, auch wenn ein frueher Tooltip bereits sichtbar war.
@@ -47,6 +51,7 @@
 - [ ] `python3 -m unittest -q tests.test_main_window_input_filter`
 - [ ] `python3 -m unittest -q tests.test_main_window_shutdown_mixin`
 - [ ] `python3 -m unittest -q tests.test_overlay_choice_tooltips`
+- [ ] `python3 -m unittest discover tests` (Smoke fuer Phase-Transitions)
 
 ## Regression Hinweise
 - Typische Bruchstellen: Event-Filter Activation, deferred finalize timing, close overlay race.

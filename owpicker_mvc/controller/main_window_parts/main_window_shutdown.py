@@ -9,6 +9,7 @@ import warnings
 
 from PySide6 import QtCore, QtGui
 
+from model.main_window_runtime_state import ShutdownPhase
 from .. import shutdown_manager
 from ..shutdown_flow_coordinator import ShutdownFlowCoordinator
 from ..shutdown_thread_coordinator import ShutdownThreadCoordinator
@@ -79,7 +80,7 @@ class MainWindowShutdownMixin:
                 # Keep the earliest active watchdog deadline.
                 if float(current_deadline) <= deadline:
                     return
-            except Exception:
+            except (TypeError, ValueError):
                 pass
         token = object()
         self._set_shutdown_runtime_state(
@@ -152,7 +153,7 @@ class MainWindowShutdownMixin:
         try:
             if bool(self._cfg("QUIET", False)):
                 return
-        except Exception:
+        except (TypeError, ValueError):
             pass
         signature = (str(where or "shutdown"), type(exc).__name__, str(exc))
         seen = getattr(self, "_shutdown_suppressed_exception_seen", None)
@@ -478,7 +479,7 @@ class MainWindowShutdownMixin:
     def _running_child_qthreads(self, *, exclude: tuple[object | None, ...] = ()) -> list[QtCore.QThread]:
         try:
             threads = list(self.findChildren(QtCore.QThread))
-        except Exception:
+        except (RuntimeError, AttributeError, TypeError):
             return []
         if not threads:
             return []
@@ -502,7 +503,7 @@ class MainWindowShutdownMixin:
             try:
                 if not bool(thread.isRunning()):
                     continue
-            except Exception:
+            except RuntimeError:
                 continue
             running.append(thread)
         return running
@@ -520,7 +521,7 @@ class MainWindowShutdownMixin:
         for thread in stale:
             try:
                 _DETACHED_QTHREADS.remove(thread)
-            except Exception as exc:
+            except ValueError as exc:
                 self._warn_shutdown_suppressed_exception("prune_detached:remove", exc)
 
     def _has_running_detached_qthreads(self) -> bool:
@@ -528,7 +529,7 @@ class MainWindowShutdownMixin:
             try:
                 if thread is not None and bool(thread.isRunning()):
                     return True
-            except Exception:
+            except RuntimeError:
                 continue
         return False
 
@@ -541,7 +542,7 @@ class MainWindowShutdownMixin:
             try:
                 if bool(getattr(thread, "daemon", False)):
                     continue
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 continue
             running.append(thread)
         return running
@@ -551,19 +552,19 @@ class MainWindowShutdownMixin:
             return ""
         try:
             running = bool(thread.isRunning())
-        except Exception:
+        except RuntimeError:
             running = False
         try:
             finished = bool(thread.isFinished())
-        except Exception:
+        except RuntimeError:
             finished = False
         try:
             interrupted = bool(thread.isInterruptionRequested())
-        except Exception:
+        except RuntimeError:
             interrupted = False
         try:
             name = str(thread.objectName() or "").strip()
-        except Exception:
+        except RuntimeError:
             name = ""
         parts: list[str] = []
         if label:
@@ -581,19 +582,19 @@ class MainWindowShutdownMixin:
             return ""
         try:
             name = str(getattr(thread, "name", "") or "thread")
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             name = "thread"
         try:
             ident = int(getattr(thread, "ident", 0) or 0)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             ident = 0
         try:
             alive = bool(thread.is_alive())
-        except Exception:
+        except RuntimeError:
             alive = False
         try:
             daemon = bool(getattr(thread, "daemon", False))
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             daemon = False
         return f"name={name},ident={ident},alive={1 if alive else 0},daemon={1 if daemon else 0}"
 
@@ -606,6 +607,7 @@ class MainWindowShutdownMixin:
         )
 
     def _defer_close_for_running_thread(self, event: QtGui.QCloseEvent, *, reason: str) -> None:
+        self._set_shutdown_runtime_state(shutdown_phase=ShutdownPhase.WAITING_THREADS.value)
         self._shutdown_flow_coordinator().defer_close_for_running_thread(
             event,
             reason=reason,
@@ -625,6 +627,7 @@ class MainWindowShutdownMixin:
         # This protects against rare cases where background threads/preload
         # jobs never finish and Qt would otherwise keep the process alive.
         self._arm_shutdown_force_exit_watchdog(reason="close_request")
+        self._set_shutdown_runtime_state(shutdown_phase=ShutdownPhase.CLOSE_REQUESTED.value)
 
         if not getattr(self, "_closing", False):
             if bool(getattr(self, "_close_overlay_active", False)):
@@ -643,7 +646,10 @@ class MainWindowShutdownMixin:
             retry_timer.stop()
         # Mark close intent before thread checks/cancellation to block any new
         # OCR preload scheduling paths during shutdown retries.
-        self._set_shutdown_runtime_state(closing=True)
+        self._set_shutdown_runtime_state(
+            closing=True,
+            shutdown_phase=ShutdownPhase.STOPPING_WORKERS.value,
+        )
         self._trace_shutdown_blockers(stage="close_enter", reason="close_request", force=True)
 
         if hasattr(self, "_cancel_ocr_background_preload"):
@@ -833,4 +839,5 @@ class MainWindowShutdownMixin:
                 self._warn_shutdown_suppressed_exception("close_event:release_ocr_runtime_cache", exc)
         self._trace_shutdown_blockers(stage="close_commit", reason="before_handle_close", force=True)
         self._set_app_event_filter_enabled(False)
+        self._set_shutdown_runtime_state(shutdown_phase=ShutdownPhase.FINALIZING_CLOSE.value)
         shutdown_manager.handle_close_event(self, event)

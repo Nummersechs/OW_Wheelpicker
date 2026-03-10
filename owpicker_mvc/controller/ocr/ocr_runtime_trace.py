@@ -7,17 +7,43 @@ import sys
 import threading
 import time
 
-import config
+from services import settings_provider
 
 
 _TRACE_LOCK = threading.Lock()
 _TRACE_HEADER_WRITTEN = False
 
 
+def _settings():
+    return settings_provider.get_settings()
+
+
+def _cfg_bool(key: str, default: bool) -> bool:
+    try:
+        return bool(_settings().resolve(key, default))
+    except (AttributeError, TypeError, ValueError):
+        return bool(default)
+
+
+def _cfg_int(key: str, default: int) -> int:
+    try:
+        return int(_settings().resolve(key, default))
+    except (AttributeError, TypeError, ValueError):
+        return int(default)
+
+
+def _cfg_str(key: str, default: str) -> str:
+    try:
+        value = str(_settings().resolve(key, default) or "").strip()
+    except (AttributeError, TypeError, ValueError):
+        value = ""
+    return value or str(default)
+
+
 def _trace_enabled() -> bool:
-    if bool(getattr(config, "QUIET", False)):
+    if _cfg_bool("QUIET", False):
         return False
-    return bool(getattr(config, "TRACE_OCR_RUNTIME", False))
+    return _cfg_bool("TRACE_OCR_RUNTIME", False)
 
 
 def _state_base_dir() -> Path:
@@ -27,7 +53,7 @@ def _state_base_dir() -> Path:
 
 
 def _resolve_log_root() -> Path:
-    configured = str(getattr(config, "LOG_OUTPUT_DIR", "logs") or "").strip()
+    configured = _cfg_str("LOG_OUTPUT_DIR", "logs")
     state_dir = _state_base_dir()
     if not configured:
         return state_dir
@@ -38,7 +64,7 @@ def _resolve_log_root() -> Path:
 
 
 def _resolve_trace_file() -> Path:
-    configured = str(getattr(config, "OCR_RUNTIME_TRACE_FILE", "ocr_runtime_trace.log") or "").strip()
+    configured = _cfg_str("OCR_RUNTIME_TRACE_FILE", "ocr_runtime_trace.log")
     if not configured:
         configured = "ocr_runtime_trace.log"
     path = Path(configured).expanduser()
@@ -57,10 +83,7 @@ def _line_value(value) -> str:
 
 
 def _trim_trace_if_needed(path: Path) -> None:
-    try:
-        max_bytes = int(getattr(config, "OCR_RUNTIME_TRACE_MAX_BYTES", 0) or 0)
-    except Exception:
-        max_bytes = 0
+    max_bytes = _cfg_int("OCR_RUNTIME_TRACE_MAX_BYTES", 0)
     if max_bytes <= 0:
         return
     try:
@@ -80,7 +103,7 @@ def _trim_trace_if_needed(path: Path) -> None:
             handle.write(tail)
             handle.write(b"\n")
             handle.write(b"...<trimmed older OCR runtime trace entries>...\n")
-    except Exception:
+    except OSError:
         return
 
 
@@ -115,6 +138,5 @@ def trace(event: str, **fields) -> None:
                     )
                     _TRACE_HEADER_WRITTEN = True
                 handle.write(line + "\n")
-        except Exception:
+        except OSError:
             return
-

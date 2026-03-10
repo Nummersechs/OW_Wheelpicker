@@ -5,7 +5,7 @@ from services.sound import SoundManager
 
 class MainWindowSoundMixin:
     def _init_sound_manager(self) -> None:
-        self.sound = SoundManager(base_dir=self._asset_dir)
+        self.sound = SoundManager(base_dir=self._asset_dir, settings=getattr(self, "settings", None))
         # Ensure clean audio state on startup (no lingering backend playback).
         self.sound.stop_spin()
         self.sound.stop_ding()

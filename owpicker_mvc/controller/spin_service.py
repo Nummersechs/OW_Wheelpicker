@@ -72,16 +72,167 @@ def _clear_spin_started(mw) -> None:
     mw._spin_started_at_monotonic = None
 
 
+def _pending(mw) -> int:
+    try:
+        return int(getattr(mw, "pending", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _set_pending(mw, value: int) -> None:
+    try:
+        setattr(mw, "pending", int(value))
+    except Exception:
+        setattr(mw, "pending", 0)
+
+
+def _inc_pending(mw, delta: int = 1) -> None:
+    _set_pending(mw, _pending(mw) + int(delta))
+
+
+def _sound_stop_spin(mw) -> None:
+    sound = getattr(mw, "sound", None)
+    stop = getattr(sound, "stop_spin", None)
+    if callable(stop):
+        stop()
+
+
+def _sound_stop_ding(mw) -> None:
+    sound = getattr(mw, "sound", None)
+    stop = getattr(sound, "stop_ding", None)
+    if callable(stop):
+        stop()
+
+
+def _sound_play_spin(mw) -> None:
+    sound = getattr(mw, "sound", None)
+    play = getattr(sound, "play_spin", None)
+    if callable(play):
+        play()
+
+
+def _stop_all_wheels(mw) -> None:
+    stop_all = getattr(mw, "_stop_all_wheels", None)
+    if callable(stop_all):
+        stop_all()
+
+
+def _snapshot_results(mw) -> None:
+    snapshot = getattr(mw, "_snapshot_results", None)
+    if callable(snapshot):
+        snapshot()
+
+
+def _set_summary_text(mw, text: str) -> None:
+    summary = getattr(mw, "summary", None)
+    setter = getattr(summary, "setText", None)
+    if callable(setter):
+        setter(str(text))
+
+
+def _overlay_hide(mw) -> None:
+    overlay = getattr(mw, "overlay", None)
+    hide = getattr(overlay, "hide", None)
+    if callable(hide):
+        hide()
+
+
+def _overlay_show_message(mw, title: str, lines: list[str]) -> None:
+    overlay = getattr(mw, "overlay", None)
+    show_message = getattr(overlay, "show_message", None)
+    if callable(show_message):
+        show_message(str(title), list(lines))
+
+
+def _update_cancel_enabled(mw) -> None:
+    updater = getattr(mw, "_update_cancel_enabled", None)
+    if callable(updater):
+        updater()
+
+
+def _set_result_sent_this_spin(mw, value: bool) -> None:
+    setattr(mw, "_result_sent_this_spin", bool(value))
+
+
+def _set_hero_ban_override_role(mw, role_value) -> None:
+    setattr(mw, "_hero_ban_override_role", role_value)
+
+
+def _update_hero_ban_wheel(mw) -> None:
+    updater = getattr(mw, "_update_hero_ban_wheel", None)
+    if callable(updater):
+        updater()
+
+
+def _duration_value(mw) -> int:
+    duration = getattr(mw, "duration", None)
+    value_fn = getattr(duration, "value", None)
+    if callable(value_fn):
+        try:
+            return int(value_fn())
+        except Exception:
+            return 2500
+    return 2500
+
+
+def _open_queue_spin_active(mw) -> bool:
+    open_queue = getattr(mw, "open_queue", None)
+    spin_active = getattr(open_queue, "spin_active", None)
+    if callable(spin_active):
+        try:
+            return bool(spin_active())
+        except Exception:
+            return False
+    return False
+
+
+def _open_queue_restore_spin_overrides(mw) -> None:
+    open_queue = getattr(mw, "open_queue", None)
+    restore = getattr(open_queue, "restore_spin_overrides", None)
+    if callable(restore):
+        restore()
+
+
+def _open_queue_apply_slider_combination(mw) -> None:
+    open_queue = getattr(mw, "open_queue", None)
+    apply = getattr(open_queue, "apply_slider_combination", None)
+    if callable(apply):
+        apply()
+
+
+def _open_queue_slot_plan(mw):
+    open_queue = getattr(mw, "open_queue", None)
+    plan = getattr(open_queue, "slot_plan", None)
+    if callable(plan):
+        return list(plan())
+    return []
+
+
+def _open_queue_names(mw) -> list[str]:
+    open_queue = getattr(mw, "open_queue", None)
+    names_fn = getattr(open_queue, "names", None)
+    if callable(names_fn):
+        return list(names_fn())
+    return []
+
+
+def _open_queue_begin_spin_override(mw, entries_by_wheel: dict, *, mode_overrides: dict) -> None:
+    open_queue = getattr(mw, "open_queue", None)
+    begin = getattr(open_queue, "begin_spin_override", None)
+    if callable(begin):
+        begin(entries_by_wheel, mode_overrides=mode_overrides)
+
+
 def _prepare_spin_ui(mw) -> None:
-    mw.sound.stop_spin()
-    mw.sound.stop_ding()
-    mw._stop_all_wheels()
+    _sound_stop_spin(mw)
+    _sound_stop_ding(mw)
+    _stop_all_wheels(mw)
     _set_heavy_ui_updates_enabled(mw, True)
-    mw.summary.setText("")
-    mw.pending = 0
+    _set_summary_text(mw, "")
+    _set_pending(mw, 0)
     _set_controls_enabled(mw, False, spin_mode=True)
-    mw.overlay.hide()
-    mw.sound.play_spin()
+    _overlay_hide(mw)
+    _sound_play_spin(mw)
     _mark_spin_started(mw)
 
 
@@ -100,19 +251,19 @@ def _finish_spin_launch(
     trace_payload: dict | None = None,
     restore_open_queue_when_idle: bool = False,
 ) -> None:
-    if mw.pending == 0:
-        mw.sound.stop_spin()
+    if _pending(mw) == 0:
+        _sound_stop_spin(mw)
         _set_controls_enabled(mw, True)
         _show_roles_prompt(mw)
-        if restore_open_queue_when_idle and mw.open_queue.spin_active():
-            mw.open_queue.restore_spin_overrides()
+        if restore_open_queue_when_idle and _open_queue_spin_active(mw):
+            _open_queue_restore_spin_overrides(mw)
     else:
         _arm_spin_watchdog(mw, max_started_duration)
-    payload = {"pending": mw.pending, "started_duration_ms": max_started_duration}
+    payload = {"pending": _pending(mw), "started_duration_ms": max_started_duration}
     if trace_payload:
         payload.update(trace_payload)
     _trace(mw, trace_event, **payload)
-    mw._update_cancel_enabled()
+    _update_cancel_enabled(mw)
 
 
 def _subroles_for_wheel(wheel) -> list[str]:
@@ -127,11 +278,11 @@ def _entries_for_names(wheel, names: list[str]) -> list[dict]:
 
 
 def _begin_spin_run(mw, active: list[tuple[str, object]]) -> None:
-    _trace(mw, "spin_run_begin", roles=[role for role, _wheel in active], pending=mw.pending)
+    _trace(mw, "spin_run_begin", roles=[role for role, _wheel in active], pending=_pending(mw))
     disarm_watchdog = getattr(mw, "_disarm_spin_watchdog", None)
     if callable(disarm_watchdog):
         disarm_watchdog()
-    mw._snapshot_results()
+    _snapshot_results(mw)
     for _role, wheel in active:
         wheel.clear_result()
     _prepare_spin_ui(mw)
@@ -142,7 +293,7 @@ def _run_assigned_spin(
     active: list[tuple[str, object]],
     assigned_for_role: list[str | None],
 ) -> int:
-    duration = mw.duration.value()
+    duration = _duration_value(mw)
     multipliers = [0.85, 1.00, 1.35]
     random.shuffle(multipliers)
     max_started_duration = 0
@@ -159,7 +310,7 @@ def _run_assigned_spin(
         else:
             started = bool(wheel.spin(duration_ms=spin_duration))
         if started:
-            mw.pending += 1
+            _inc_pending(mw, 1)
             if spin_duration > max_started_duration:
                 max_started_duration = spin_duration
         _trace(
@@ -174,24 +325,26 @@ def _run_assigned_spin(
 
 
 def _show_roles_prompt(mw) -> None:
-    mw.summary.setText(i18n.t("summary.roles_prompt"))
+    _set_summary_text(mw, i18n.t("summary.roles_prompt"))
 
 
 def _show_not_enough(mw) -> None:
     _show_roles_prompt(mw)
-    mw.overlay.show_message(
+    _overlay_show_message(
+        mw,
         i18n.t("overlay.not_enough_title"),
         [i18n.t("overlay.not_enough_line1"), i18n.t("overlay.not_enough_line2"), ""],
     )
 
 
 def _show_team_impossible(mw) -> None:
-    mw.sound.stop_spin()
-    mw.sound.stop_ding()
+    _sound_stop_spin(mw)
+    _sound_stop_ding(mw)
     _set_controls_enabled(mw, True)
-    mw.pending = 0
-    mw.summary.setText(i18n.t("summary.team_impossible"))
-    mw.overlay.show_message(
+    _set_pending(mw, 0)
+    _set_summary_text(mw, i18n.t("summary.team_impossible"))
+    _overlay_show_message(
+        mw,
         i18n.t("overlay.team_impossible_title"),
         [
             i18n.t("overlay.team_impossible_line1"),
@@ -290,17 +443,17 @@ def _plan_assignments(mw, all_candidates_per_role: list[list[tuple[str, list[str
 
 
 def spin_all(mw):
-    _trace(mw, "spin_all_dispatch", pending=mw.pending)
+    _trace(mw, "spin_all_dispatch", pending=_pending(mw))
     if mw.hero_ban_active:
-        if mw.pending > 0:
+        if _pending(mw) > 0:
             return
-        mw._hero_ban_override_role = None
-        mw._update_hero_ban_wheel()
+        _set_hero_ban_override_role(mw, None)
+        _update_hero_ban_wheel(mw)
         mw._spin_single(mw.dps, 1.0, hero_ban_override=False)
         return
-    if mw.pending > 0:
+    if _pending(mw) > 0:
         return
-    mw._result_sent_this_spin = False
+    _set_result_sent_this_spin(mw, False)
 
     active = _active_role_wheels(mw)
     if not active:
@@ -347,19 +500,19 @@ def spin_all(mw):
 
 
 def spin_open_queue(mw):
-    _trace(mw, "spin_open_dispatch", pending=mw.pending)
+    _trace(mw, "spin_open_dispatch", pending=_pending(mw))
     if mw.hero_ban_active or mw.current_mode == "maps":
         return
-    if mw.pending > 0:
+    if _pending(mw) > 0:
         return
-    mw._result_sent_this_spin = False
+    _set_result_sent_this_spin(mw, False)
 
     all_role_wheels = role_wheels(mw)
     if not all_role_wheels:
         return
 
-    mw.open_queue.apply_slider_combination()
-    slot_plan = mw.open_queue.slot_plan()
+    _open_queue_apply_slider_combination(mw)
+    slot_plan = _open_queue_slot_plan(mw)
     if not slot_plan:
         _show_not_enough(mw)
         return
@@ -369,7 +522,7 @@ def spin_open_queue(mw):
         _show_not_enough(mw)
         return
 
-    combined_names = list(mw.open_queue.names())
+    combined_names = _open_queue_names(mw)
 
     if not combined_names or total_slots <= 0 or len(combined_names) < total_slots:
         _show_not_enough(mw)
@@ -413,7 +566,8 @@ def spin_open_queue(mw):
         return
 
     _begin_spin_run(mw, all_role_wheels)
-    mw.open_queue.begin_spin_override(
+    _open_queue_begin_spin_override(
+        mw,
         entries_by_wheel,
         mode_overrides=mode_overrides_by_wheel,
     )
@@ -437,32 +591,33 @@ def spin_single(mw, wheel, mult: float = 1.0, hero_ban_override: bool = True):
         role = role_for_wheel(mw, wheel)
     except Exception:
         pass
-    _trace(mw, "spin_single_dispatch", role=role, pending=mw.pending)
-    if mw.pending > 0:
+    _trace(mw, "spin_single_dispatch", role=role, pending=_pending(mw))
+    if _pending(mw) > 0:
         return
     if mw.hero_ban_active:
         resolved_role = role_for_wheel(mw, wheel)
-        mw._hero_ban_override_role = resolved_role if hero_ban_override else None
-        mw._update_hero_ban_wheel()
+        _set_hero_ban_override_role(mw, resolved_role if hero_ban_override else None)
+        _update_hero_ban_wheel(mw)
         target_wheel = mw.dps
     else:
         target_wheel = wheel
-    mw._result_sent_this_spin = False
-    mw._snapshot_results()
+    _set_result_sent_this_spin(mw, False)
+    _snapshot_results(mw)
     _prepare_spin_ui(mw)
-    duration = int(mw.duration.value() * mult)
+    duration = int(_duration_value(mw) * mult)
     if target_wheel.spin(duration_ms=duration):
-        mw.pending = 1
+        _set_pending(mw, 1)
         _arm_spin_watchdog(mw, duration)
-        _trace(mw, "spin_single_started", pending=mw.pending, duration_ms=duration)
+        _trace(mw, "spin_single_started", pending=_pending(mw), duration_ms=duration)
     else:
-        mw.sound.stop_spin()
+        _sound_stop_spin(mw)
         _set_controls_enabled(mw, True)
         _clear_spin_started(mw)
-        mw.summary.setText(i18n.t("summary.wheel_prompt"))
-        mw.overlay.show_message(
+        _set_summary_text(mw, i18n.t("summary.wheel_prompt"))
+        _overlay_show_message(
+            mw,
             i18n.t("overlay.not_enough_title"),
             [i18n.t("overlay.not_enough_line1"), i18n.t("overlay.not_enough_line2"), ""],
         )
-        _trace(mw, "spin_single_failed", pending=mw.pending, duration_ms=duration)
-    mw._update_cancel_enabled()
+        _trace(mw, "spin_single_failed", pending=_pending(mw), duration_ms=duration)
+    _update_cancel_enabled(mw)

@@ -4,9 +4,6 @@ import time
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-import config
-
-
 def _cfg(mw, key: str, default=None):
     getter = getattr(mw, "_cfg", None)
     if callable(getter):
@@ -14,7 +11,16 @@ def _cfg(mw, key: str, default=None):
             return getter(key, default)
         except Exception:
             pass
-    return getattr(config, key, default)
+    return default
+
+
+def _debug_print(mw, *parts: object) -> None:
+    printer = getattr(mw, "_debug_print", None)
+    if callable(printer):
+        try:
+            printer(*parts)
+        except Exception:
+            pass
 
 
 def _trace_event_enabled(mw, name: str) -> bool:
@@ -471,6 +477,6 @@ def trace_event(mw, name: str, **extra) -> None:
         except Exception:
             pass
         if _cfg(mw, "DEBUG", False):
-            config.debug_print(line)
+            _debug_print(mw, line)
     except Exception:
         pass

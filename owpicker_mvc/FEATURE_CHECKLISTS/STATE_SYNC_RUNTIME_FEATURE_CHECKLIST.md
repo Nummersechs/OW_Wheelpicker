@@ -2,8 +2,10 @@
 
 ## Scope
 - `controller/state_sync.py`
+- `controller/state_sync_components.py`
 - `services/state_store.py`
 - `services/app_settings.py`
+- `services/settings_provider.py`
 - `controller/runtime_tracing.py`
 - `controller/shutdown_manager.py`
 - `main.py`
@@ -14,10 +16,12 @@
 - [ ] Optionales Online-Sync fuer Rollenzustand und Spin-Result
 - [ ] Resource-Snapshot fuer Shutdown-Diagnose
 - [ ] Logdateien in konfiguriertem Log-Ordner
+- [ ] Lokale Save-Queue und Remote-Sync-Transport als getrennte Komponenten
 
 ## Versteckte/Non-Obvious Logik
 - Saves werden signaturbasiert dedupliziert (kein unnötiger Disk-Write).
-- Network-Requests laufen im ThreadPool und werden bei Shutdown gecancelt.
+- Lokale Saves laufen ueber `LocalStatePersistenceQueue` (komponentenbasiert).
+- Network-Requests laufen ueber `RemoteRoleSyncService` im ThreadPool und werden bei Shutdown gecancelt.
 - Pending Save/Sync Payload wird getrackt und bei Flush zusammengefuehrt.
 - Runtime-Trace kann je nach `QUIET` und Trace-Flags teilweise deaktiviert sein.
 
@@ -36,4 +40,4 @@
 - [ ] `resource_snapshot` vor/nach Shutdown plausibel.
 
 ## Regression Hinweise
-- Typische Bruchstellen: Debounce race, executor lifecycle, state signature false positives.
+- Typische Bruchstellen: Debounce race, executor lifecycle, state signature false positives, Mirror-Kompatibilitaet zu alten Controller-Attributen.

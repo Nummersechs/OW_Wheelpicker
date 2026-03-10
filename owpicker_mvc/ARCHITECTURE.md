@@ -12,19 +12,23 @@
 ## Runtime Flow
 
 1. `main.py`
-   - optionally enables quiet mode (`config.QUIET`),
+   - bootstraps shared typed settings (`AppSettings` + `settings_provider`),
+   - optionally enables quiet mode,
    - creates `QApplication`,
-   - starts `controller.main_window.MainWindow`.
+   - starts `controller.main_window.MainWindow(settings=...)`.
 2. `controller/main_window.py`
-   - builds header, mode switcher, wheel/map area, overlay, and controls,
+   - coordinates runtime services and high-level state,
+   - delegates UI build to `main_window_ui_builder.py`,
+   - syncs dataclass runtime state via `main_window_runtime_bridge.py`,
    - initializes helper controllers (`StateSyncController`, `MapModeController`, `OpenQueueController`, ...),
    - shows initial mode choice in the overlay.
 3. Interaction
    - view signals are handled by controller callbacks,
    - controllers delegate UI-free parts to `logic/` and state to `model/`/`services/`.
 4. Persistence/Sync
-   - `StateSyncController` writes debounced updates to `saved_state.json`,
-   - optional online sync via `requests` to `config.API_BASE_URL`.
+   - `StateSyncController` orchestrates save/sync timers and signatures,
+   - `LocalStatePersistenceQueue` handles debounced local persistence flow,
+   - `RemoteRoleSyncService` handles async online sync via `requests` to `API_BASE_URL`.
 5. Shutdown
    - `shutdown_manager.py` stops timers/workers cleanly and secures final state.
 
@@ -43,11 +47,14 @@
 ### `controller/`
 
 - `main_window.py`: central UI composition and signal wiring.
+- `main_window_ui_builder.py`: extracted UI build steps from `MainWindow`.
+- `main_window_runtime_bridge.py`: maps runtime dataclass fields to legacy attrs.
 - `main_window_parts/main_window_*.py`: extracted MainWindow mixins (OCR, input, startup, spin, shutdown, appearance, mode, state, background, sound).
 - `spin_service.py`: spin-all/spin-single/open-queue execution flow.
 - `mode_manager.py`, `role_mode.py`: mode switching and hero-ban/role logic.
 - `map_ui.py`, `map_mode.py`: encapsulated map UI and map mode controller logic.
-- `state_sync.py`: save-state, debounce, thread pool, and online sync.
+- `state_sync.py`: state sync orchestrator (save/sync timers, debounce flow).
+- `state_sync_components.py`: extracted components (`StateSnapshotBuilder`, `LocalStatePersistenceQueue`, `RemoteRoleSyncService`, payload helpers).
 - `open_queue.py`: open-queue preview/override during spins.
 - `ocr/ocr_capture_ops.py`, `ocr/ocr_import.py`, `ocr/ocr_role_import.py`: OCR capture, parsing, and merge into role lists (single-role import or all-roles import with optional per-name role/subrole assignment + balanced distribution fallback).
 - `tooltip_manager.py`, `hover_tooltip_ops.py`, `focus_policy.py`, `runtime_tracing.py`: stability/tracing for hover/focus/tooltips.
@@ -57,6 +64,7 @@
 
 - `role_keys.py`: canonical role order and mapping helpers.
 - `wheel_state.py`: UI-agnostic wheel state (effective names, disabled labels, pair parsing).
+- `main_window_runtime_state.py`: startup/shutdown/ocr runtime dataclasses + phase enums.
 
 ### `logic/`
 
@@ -69,7 +77,8 @@
 
 - `state_store.py`: mode states, defaults, profiles, and capture/restore for save-state.
 - `sound.py`: sound loading, warmup, preview, master volume.
-- `app_settings.py`: read-only access layer for `config.py` (typed getter).
+- `app_settings.py`: typed config projection into runtime/startup/shutdown/ocr sections.
+- `settings_provider.py`: shared settings provider used by startup/bootstrap and runtime modules.
 
 ### Cross-Cutting
 
@@ -84,6 +93,14 @@
   - in PyInstaller builds next to the `.exe` (not inside temporary `_MEIPASS`).
 - Traces (optional, config-driven): e.g. `flow_trace.log`, `focus_trace.log`, `hover_trace.log`.
 
+## Runtime Phase Tracking
+
+- `StartupPhase`: `idle` -> `showing_mode_choice` -> `warmup_running` -> `warmup_cooldown` -> `warmup_done` -> `finalized`
+- `OCRPreloadPhase`: `idle|scheduled|deferred|running|done|failed|cancelled`
+- `ShutdownPhase`: `idle` -> `close_requested` -> `stopping_workers` -> `waiting_threads` -> `finalizing_close` -> `closed`
+
+These phases are stored in `StartupRuntimeState` / `ShutdownRuntimeState` and mirrored to legacy attributes by `MainWindowRuntimeBridgeMixin`.
+
 ## Tests (Current Focus)
 
 - Logic/model: `test_spin_engine.py`, `test_spin_planner.py`, `test_wheel_state.py`, `test_name_normalization.py`.
@@ -94,5 +111,5 @@
 ## Next Reasonable Steps
 
 1. Further decouple `main_window.py` (move more flow logic into specialized controllers).
-2. Separate persistence and sync interfaces more clearly (local save vs. remote sync).
-3. Expand UI-adjacent integration tests for mode and overlay flows.
+2. Continue reducing direct `config` access in remaining modules toward injected `AppSettings`.
+3. Expand UI-adjacent integration tests for startup/shutdown phase transitions and overlay flows.

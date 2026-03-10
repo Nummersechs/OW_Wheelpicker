@@ -167,6 +167,7 @@ TRANSLATIONS_DE = {
     "overlay.button_disable_results_tooltip": "Aktuell gezeigte Ergebnisse beim nächsten Spin ausschließen.",
     "overlay.button_online": "Online",
     "overlay.button_online_tooltip": "Online-Modus nutzen und mit dem Server synchronisieren.",
+    "overlay.button_online_disabled_tooltip": "In dieser Version nicht aktiv.",
     "overlay.button_offline": "Offline",
     "overlay.button_offline_tooltip": "Offline-Modus nutzen und alles lokal behalten.",
     "overlay.choice_loading_tooltip": "Startinitialisierung läuft. Bitte kurz warten.",

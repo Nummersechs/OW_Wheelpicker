@@ -3,7 +3,7 @@ from __future__ import annotations
 from PySide6 import QtCore, QtGui, QtWidgets
 
 import i18n
-from utils import theme as theme_util, ui_helpers
+from utils import qt_runtime, theme as theme_util, ui_helpers
 from view import style_helpers, ui_tokens
 from view.name_list import NamesListPanel
 
@@ -203,9 +203,12 @@ class BasePanel(QtWidgets.QWidget):
                 QtWidgets.QToolTip.hideText()
                 self._disabled_spin_hover_active = False
             return False
+        shown = False
         if force_show or not self._disabled_spin_hover_active:
-            QtWidgets.QToolTip.showText(global_pos, tip, btn, btn.rect())
-        self._disabled_spin_hover_active = True
+            if not qt_runtime.is_headless_qpa():
+                QtWidgets.QToolTip.showText(global_pos, tip, btn, btn.rect())
+                shown = True
+        self._disabled_spin_hover_active = shown
         return True
 
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:

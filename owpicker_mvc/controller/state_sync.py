@@ -1,18 +1,21 @@
 from __future__ import annotations
 
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 import concurrent.futures.thread as _futures_thread
 from pathlib import Path
-import importlib
-import json
 import threading
 import weakref
 from typing import Any, Dict, List
 
 from PySide6 import QtCore
 
-import config
-from model.role_keys import role_wheel_map
+from controller.state_sync_components import (
+    LocalStatePersistenceQueue,
+    RemoteRoleSyncService,
+    RoleSyncPayloadBuilder,
+    StateFilePersistence,
+    StateSnapshotBuilder,
+)
 
 
 class _DaemonThreadPoolExecutor(ThreadPoolExecutor):
@@ -54,34 +57,47 @@ class StateSyncController(QtCore.QObject):
         self._mw = main_window
         self._settings = getattr(main_window, "settings", None)
         self._state_file = state_file
+        self._snapshot_builder = StateSnapshotBuilder(main_window)
+        self._role_payload_builder = RoleSyncPayloadBuilder()
+        self._local_persistence = LocalStatePersistenceQueue(
+            state_file=self._state_file,
+            load_state_fn=self._load_state,
+            save_state_fn=self._save_state,
+            state_signature_fn=self._state_signature,
+        )
         self._closed = False
-        self._network_threads_active = 0
-        self._network_threads_lock = threading.Lock()
-        self._network_futures: set[Future] = set()
-        self._network_futures_lock = threading.Lock()
-        self._pending_state: Dict[str, Any] | None = None
-        self._pending_state_dirty = False
-        self._pending_save_sync = False
         self._save_debounce_ms = max(0, int(self._cfg("STATE_SAVE_DEBOUNCE_MS", 220)))
         self._sync_debounce_ms = max(0, int(self._cfg("NETWORK_SYNC_DEBOUNCE_MS", 220)))
         workers = max(1, int(self._cfg("NETWORK_SYNC_WORKERS", 2)))
-        self._executor_workers = workers
-        self._executor: ThreadPoolExecutor | None = None
+        self._remote_sync = RemoteRoleSyncService(
+            cfg_resolver=self._cfg,
+            debug_print=self._debug_print,
+            executor_workers=workers,
+            executor_cls=_DaemonThreadPoolExecutor,
+            thread_name_prefix="state_sync",
+        )
+        self._pending_state: Dict[str, Any] | None = None
+        self._pending_state_dirty = False
+        self._pending_save_sync = False
         self._last_saved_signature: str | None = None
-        existing = self._load_state(state_file)
-        if existing:
-            self._last_saved_signature = self._state_signature(existing)
+        self._sync_local_persistence_mirror()
         self._save_timer = QtCore.QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.timeout.connect(self._flush_pending_save)
         self._pending_sync_payload: list[dict] | None = None
         self._pending_sync_dirty = False
         self._last_synced_roles_signature: str | None = None
-        self._requests_checked = False
-        self._requests_module: Any | None = None
         self._sync_timer = QtCore.QTimer(self)
         self._sync_timer.setSingleShot(True)
         self._sync_timer.timeout.connect(self._flush_role_sync)
+
+    @property
+    def _executor(self) -> ThreadPoolExecutor | None:
+        return self._remote_sync.executor
+
+    @_executor.setter
+    def _executor(self, value: ThreadPoolExecutor | None) -> None:
+        self._remote_sync.executor = value
 
     def _cfg(self, key: str, default: Any = None) -> Any:
         settings = self._settings
@@ -95,7 +111,22 @@ class StateSyncController(QtCore.QObject):
                 return settings.get(key, default)
             except Exception:
                 pass
-        return getattr(config, key, default)
+        return default
+
+    def _debug_print(self, *args, **kwargs) -> None:
+        runtime = getattr(self._settings, "runtime", None)
+        if runtime is not None:
+            debug_enabled = bool(getattr(runtime, "debug", False))
+            quiet_enabled = bool(getattr(runtime, "quiet", False))
+        else:
+            debug_enabled = bool(self._cfg("DEBUG", False))
+            quiet_enabled = bool(self._cfg("QUIET", False))
+        if not debug_enabled or quiet_enabled:
+            return
+        try:
+            print(*args, **kwargs)
+        except Exception:
+            pass
 
     @staticmethod
     def state_file(base_dir: Path) -> Path:
@@ -105,35 +136,16 @@ class StateSyncController(QtCore.QObject):
     @staticmethod
     def _load_state(path: Path) -> Dict[str, Any]:
         """Load saved state or return an empty dict on failure."""
-        try:
-            if path.exists():
-                with path.open("r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    return data
-        except (OSError, TypeError, ValueError, json.JSONDecodeError):
-            # Quiet failure; callers decide on logging/fallback
-            pass
-        return {}
+        return StateFilePersistence.load_state(path)
 
     @staticmethod
     def _save_state(path: Path, data: Dict[str, Any]) -> bool:
         """Write state as JSON. Returns True on success."""
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            return True
-        except (OSError, TypeError, ValueError):
-            # Quiet failure; callers decide on logging
-            return False
+        return StateFilePersistence.save_state(path, data)
 
     @staticmethod
     def _state_signature(data: Dict[str, Any]) -> str | None:
-        try:
-            return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-        except (TypeError, ValueError):
-            return None
+        return StateFilePersistence.state_signature(data)
 
     @staticmethod
     def load_saved_state(state_file: Path) -> dict:
@@ -142,23 +154,22 @@ class StateSyncController(QtCore.QObject):
             return data
         return {}
 
+    def _sync_local_persistence_mirror(self) -> None:
+        local = self._local_persistence
+        self._pending_state = local.pending_state
+        self._pending_state_dirty = bool(local.pending_state_dirty)
+        self._pending_save_sync = bool(local.pending_save_sync)
+        self._last_saved_signature = local.last_saved_signature
+
+    def _push_local_persistence_from_mirror(self) -> None:
+        local = self._local_persistence
+        local.pending_state = self._pending_state
+        local.pending_state_dirty = bool(self._pending_state_dirty)
+        local.pending_save_sync = bool(self._pending_save_sync)
+        local.last_saved_signature = self._last_saved_signature
+
     def gather_state(self) -> dict:
-        mode_to_capture = self._mw.current_mode
-        if mode_to_capture == "maps":
-            mode_to_capture = getattr(self._mw, "last_non_hero_mode", "players") or "players"
-            if mode_to_capture not in ("players", "heroes"):
-                mode_to_capture = "players"
-        self._mw._state_store.capture_mode_from_wheels(
-            mode_to_capture,
-            role_wheel_map(self._mw),
-            hero_ban_active=self._mw.hero_ban_active if mode_to_capture == "heroes" else False,
-        )
-        if getattr(self._mw, "map_lists", None):
-            self._mw.map_mode.capture_state()
-        state = self._mw._state_store.to_saved(self._mw.volume_slider.value())
-        state["language"] = self._mw.language
-        state["theme"] = self._mw.theme
-        return state
+        return self._snapshot_builder.gather_state()
 
     def save_state(self, sync: bool = True, immediate: bool = False) -> None:
         if self._closed:
@@ -172,38 +183,36 @@ class StateSyncController(QtCore.QObject):
             state = self.gather_state()
             if self._save_timer.isActive():
                 self._save_timer.stop()
-            self._pending_state = None
-            self._pending_state_dirty = False
-            self._pending_save_sync = False
+            self._push_local_persistence_from_mirror()
+            self._local_persistence.clear_pending()
+            self._sync_local_persistence_mirror()
             self._persist_state(state)
             if sync:
                 self.sync_all_roles()
         else:
             # Build state once on flush instead of on every UI event while typing.
-            self._pending_state_dirty = True
-            self._pending_save_sync = bool(self._pending_save_sync or sync)
+            self._push_local_persistence_from_mirror()
+            self._local_persistence.queue_save(sync=sync)
+            self._sync_local_persistence_mirror()
             self._save_timer.start(self._save_debounce_ms)
         if self._mw.hero_ban_active and not getattr(self._mw, "_closing", False):
             self._mw._update_hero_ban_wheel()
 
     def _persist_state(self, state: Dict[str, Any]) -> None:
-        signature = self._state_signature(state)
-        if signature is not None and signature == self._last_saved_signature:
-            return
-        if self._save_state(self._state_file, state) and signature is not None:
-            self._last_saved_signature = signature
+        self._push_local_persistence_from_mirror()
+        self._local_persistence.persist_state_with(
+            state,
+            save_state_fn=self._save_state,
+            state_signature_fn=self._state_signature,
+        )
+        self._sync_local_persistence_mirror()
 
     def _flush_pending_save(self) -> None:
-        state = self._pending_state
-        sync = self._pending_save_sync
-        self._pending_state = None
-        dirty = self._pending_state_dirty
-        self._pending_state_dirty = False
-        self._pending_save_sync = False
-        if state is None and not dirty:
-            return
+        self._push_local_persistence_from_mirror()
+        state, sync = self._local_persistence.consume_pending(gather_state_fn=self.gather_state)
+        self._sync_local_persistence_mirror()
         if state is None:
-            state = self.gather_state()
+            return
         self._persist_state(state)
         if sync:
             self.sync_all_roles()
@@ -217,17 +226,12 @@ class StateSyncController(QtCore.QObject):
             self._save_timer.stop()
         if self._sync_timer.isActive():
             self._sync_timer.stop()
-        self._pending_state = None
-        self._pending_state_dirty = False
-        self._pending_save_sync = False
+        self._push_local_persistence_from_mirror()
+        self._local_persistence.clear_pending()
+        self._sync_local_persistence_mirror()
         self._pending_sync_payload = None
         self._pending_sync_dirty = False
-        if self._executor is not None:
-            try:
-                self._executor.shutdown(wait=False, cancel_futures=True)
-            except TypeError:
-                self._executor.shutdown(wait=False)
-            self._executor = None
+        self._remote_sync.shutdown()
 
     def resource_snapshot(self) -> dict:
         save_timer_active = False
@@ -240,10 +244,7 @@ class StateSyncController(QtCore.QObject):
             sync_timer_active = bool(self._sync_timer.isActive())
         except RuntimeError:
             pass
-        with self._network_threads_lock:
-            active_threads = int(self._network_threads_active)
-        with self._network_futures_lock:
-            pending_futures = len(self._network_futures)
+        remote_snapshot = self._remote_sync.resource_snapshot()
         return {
             "closed": bool(self._closed),
             "save_timer_active": save_timer_active,
@@ -251,48 +252,32 @@ class StateSyncController(QtCore.QObject):
             "has_pending_state": bool(self._pending_state is not None or self._pending_state_dirty),
             "pending_save_sync": bool(self._pending_save_sync),
             "has_pending_sync_payload": bool(self._pending_sync_payload is not None or self._pending_sync_dirty),
-            "network_threads_active": active_threads,
-            "network_futures_pending": pending_futures,
+            "network_threads_active": int(remote_snapshot.get("network_threads_active", 0)),
+            "network_futures_pending": int(remote_snapshot.get("network_futures_pending", 0)),
         }
 
     def _ensure_executor(self) -> ThreadPoolExecutor | None:
-        if self._closed:
-            return None
-        if self._executor is not None:
-            return self._executor
-        self._executor = _DaemonThreadPoolExecutor(
-            max_workers=self._executor_workers,
-            thread_name_prefix="state_sync",
+        return self._remote_sync.ensure_executor(
+            closed=bool(self._closed),
         )
-        return self._executor
 
     def _get_requests_module(self) -> Any | None:
-        if self._requests_checked:
-            return self._requests_module
-        self._requests_checked = True
-        try:
-            self._requests_module = importlib.import_module("requests")
-        except (ModuleNotFoundError, ImportError):
-            self._requests_module = None
-        return self._requests_module
+        return self._remote_sync.get_requests_module()
 
     def send_spin_result(self, tank: str, damage: str, support: str) -> None:
         if self._closed:
             return
         if not getattr(self._mw, "online_mode", False):
-            config.debug_print("Spin-Result: Offline-Modus - kein Senden.")
+            self._debug_print("Spin-Result: Offline-Modus - kein Senden.")
             return
-        pair_modes = {
-            role: getattr(wheel, "pair_mode", False)
-            for role, wheel in role_wheel_map(self._mw).items()
-        }
+        pair_modes = self._role_payload_builder.pair_modes(self._mw)
         self._send_spin_result(tank, damage, support, pair_modes)
 
     def sync_all_roles(self) -> None:
         if self._closed:
             return
         if not getattr(self._mw, "online_mode", False):
-            config.debug_print("Sync uebersprungen: Offline-Modus.")
+            self._debug_print("Sync uebersprungen: Offline-Modus.")
             self._pending_sync_payload = None
             self._pending_sync_dirty = False
             if self._sync_timer.isActive():
@@ -309,10 +294,7 @@ class StateSyncController(QtCore.QObject):
             self._pending_sync_dirty = False
             return
         if self._pending_sync_dirty:
-            self._pending_sync_payload = [
-                {"role": role, "names": wheel.get_current_names()}
-                for role, wheel in role_wheel_map(self._mw).items()
-            ]
+            self._pending_sync_payload = self._role_payload_builder.roles_payload(self._mw)
             self._pending_sync_dirty = False
         payload = self._pending_sync_payload
         self._pending_sync_payload = None
@@ -327,17 +309,7 @@ class StateSyncController(QtCore.QObject):
 
     @staticmethod
     def _split_pair_label(label: str, is_pair_mode: bool) -> tuple[str, str]:
-        label = (label or "").strip()
-        if not label:
-            return "", ""
-        if not is_pair_mode:
-            return label, ""
-        parts = [p.strip() for p in label.split("+") if p.strip()]
-        if not parts:
-            return "", ""
-        if len(parts) == 1:
-            return parts[0], ""
-        return parts[0], " + ".join(parts[1:])
+        return RoleSyncPayloadBuilder.split_pair_label(label, is_pair_mode)
 
     def _post_json_async(
         self,
@@ -349,66 +321,35 @@ class StateSyncController(QtCore.QObject):
         error_log: str,
         missing_requests_log: str,
     ) -> None:
-        """Post JSON payload in a daemon thread."""
-        requests_module = self._get_requests_module()
-
-        def _worker() -> None:
-            with self._network_threads_lock:
-                self._network_threads_active += 1
-            if requests_module is None:
-                try:
-                    config.debug_print(missing_requests_log)
-                finally:
-                    with self._network_threads_lock:
-                        self._network_threads_active = max(0, self._network_threads_active - 1)
-                return
-            try:
-                base = str(self._cfg("API_BASE_URL", config.API_BASE_URL))
-                url = base.rstrip("/") + endpoint
-                config.debug_print(payload_log, payload)
-                resp = requests_module.post(url, json=payload, timeout=3)
-                resp.raise_for_status()
-                config.debug_print(success_log, resp.json())
-            except Exception as e:
-                config.debug_print(error_log, e)
-            finally:
-                with self._network_threads_lock:
-                    self._network_threads_active = max(0, self._network_threads_active - 1)
-
+        """Post JSON payload in a daemon thread (transport delegated)."""
         if self._closed:
             return
+        requests_module = self._get_requests_module()
         if requests_module is None:
-            config.debug_print(missing_requests_log)
+            self._debug_print(missing_requests_log)
             return
         executor = self._ensure_executor()
         if executor is None:
             return
-        try:
-            future = executor.submit(_worker)
-        except RuntimeError:
-            return
-        with self._network_futures_lock:
-            self._network_futures.add(future)
-
-        def _on_done(done: Future) -> None:
-            with self._network_futures_lock:
-                self._network_futures.discard(done)
-
-        future.add_done_callback(_on_done)
+        self._remote_sync.post_json_async_prepared(
+            endpoint=endpoint,
+            payload=payload,
+            payload_log=payload_log,
+            success_log=success_log,
+            error_log=error_log,
+            missing_requests_log=missing_requests_log,
+            requests_module=requests_module,
+            executor=executor,
+        )
 
     def _send_spin_result(self, tank: str, damage: str, support: str, pair_modes: Dict[str, bool]) -> None:
         """Send spin result to the server in a background thread."""
-        tank1, tank2 = self._split_pair_label(tank, pair_modes.get("Tank", False))
-        dps1, dps2 = self._split_pair_label(damage, pair_modes.get("Damage", False))
-        sup1, sup2 = self._split_pair_label(support, pair_modes.get("Support", False))
-        payload = {
-            "tank1": tank1,
-            "tank2": tank2,
-            "dps1": dps1,
-            "dps2": dps2,
-            "support1": sup1,
-            "support2": sup2,
-        }
+        payload = self._role_payload_builder.spin_result_payload(
+            tank=tank,
+            damage=damage,
+            support=support,
+            pair_modes=pair_modes,
+        )
         self._post_json_async(
             endpoint="/spin-result",
             payload=payload,

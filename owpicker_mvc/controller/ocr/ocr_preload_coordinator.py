@@ -6,6 +6,8 @@ import time
 
 from PySide6 import QtCore
 
+from model.main_window_runtime_state import OCRPreloadPhase
+
 
 class OCRPreloadCoordinator:
     def __init__(self, mw: object, *, worker_cls: type, relay_cls: type) -> None:
@@ -97,6 +99,27 @@ class OCRPreloadCoordinator:
         if callable(trace_fn):
             trace_fn(event, **payload)
 
+    def _set_preload_phase(self, phase: OCRPreloadPhase, *, reason: str = "") -> None:
+        setter = getattr(self._mw, "_set_ocr_preload_phase", None)
+        if callable(setter):
+            try:
+                setter(phase, reason=str(reason or ""))
+                return
+            except Exception:
+                pass
+        set_state = getattr(self._mw, "_set_startup_runtime_state", None)
+        if callable(set_state):
+            try:
+                set_state(
+                    ocr_preload_phase=phase.value,
+                    ocr_preload_phase_reason=str(reason or "") or None,
+                )
+                return
+            except Exception:
+                pass
+        setattr(self._mw, "_ocr_preload_phase", phase.value)
+        setattr(self._mw, "_ocr_preload_phase_reason", str(reason or "") or None)
+
     def _mw_method_is_default(self, name: str, fn: object) -> bool:
         cls_fn = getattr(type(self._mw), name, None)
         bound_func = getattr(fn, "__func__", None)
@@ -156,6 +179,7 @@ class OCRPreloadCoordinator:
             return
         try:
             timer.stop()
+            self._set_preload_phase(OCRPreloadPhase.CANCELLED, reason="timer_cancelled")
         except Exception as exc:
             self._warn("cancel_preload_timer:stop", exc)
 
@@ -201,6 +225,7 @@ class OCRPreloadCoordinator:
         keep_job = bool(was_running and not waited)
         if not keep_job:
             setattr(self._mw, "_ocr_preload_job", None)
+            self._set_preload_phase(OCRPreloadPhase.CANCELLED, reason=str(reason or "cancelled"))
         try:
             self._trace(
                 "ocr_preload_cancelled",
@@ -239,6 +264,7 @@ class OCRPreloadCoordinator:
         )
         delay = max(0, int(delay_ms))
         timer.start(delay)
+        self._set_preload_phase(OCRPreloadPhase.SCHEDULED, reason=str(reason or "scheduled"))
         try:
             self._trace(
                 "ocr_preload_scheduled",
@@ -305,12 +331,14 @@ class OCRPreloadCoordinator:
         if bool(getattr(self._mw, "_ocr_runtime_activated", False)):
             setattr(self._mw, "_ocr_preload_done", True)
             setattr(self._mw, "_ocr_preload_attempted", True)
+            self._set_preload_phase(OCRPreloadPhase.DONE, reason="already_ready")
             return
         if getattr(self._mw, "_ocr_async_job", None) or getattr(self._mw, "_ocr_preload_job", None):
             return
 
         block_reason = self.background_preload_block_reason()
         if block_reason:
+            self._set_preload_phase(OCRPreloadPhase.DEFERRED, reason=str(block_reason))
             retry_ms = max(
                 250,
                 self._ocr_int(
@@ -383,6 +411,7 @@ class OCRPreloadCoordinator:
             "relay": relay,
         }
         setattr(self._mw, "_ocr_preload_job", job)
+        self._set_preload_phase(OCRPreloadPhase.RUNNING, reason="worker_started")
 
         def _finalize_preload(ok: bool, detail: str) -> None:
             current = getattr(self._mw, "_ocr_preload_job", None)
@@ -396,6 +425,9 @@ class OCRPreloadCoordinator:
                 setattr(self._mw, "_ocr_preload_done", True)
                 setattr(self._mw, "_ocr_runtime_activated", True)
                 self.schedule_cache_release()
+                self._set_preload_phase(OCRPreloadPhase.DONE, reason="worker_finished")
+            else:
+                self._set_preload_phase(OCRPreloadPhase.FAILED, reason="worker_failed")
             update_buttons = getattr(self._mw, "_update_role_ocr_buttons_enabled", None)
             if callable(update_buttons):
                 try:
@@ -502,6 +534,7 @@ class OCRPreloadCoordinator:
             job["thread_delete_connection"] = None
         if getattr(self._mw, "_closing", False):
             setattr(self._mw, "_ocr_preload_job", None)
+            self._set_preload_phase(OCRPreloadPhase.CANCELLED, reason="closing_before_start")
             try:
                 worker.deleteLater()
             except Exception as exc:

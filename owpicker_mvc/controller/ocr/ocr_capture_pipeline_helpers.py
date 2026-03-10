@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 import re
 import tempfile
 from PySide6 import QtGui
+
+from services import settings_provider
 
 from . import (
     ocr_debug_utils as _ocr_debug_utils,
@@ -49,11 +50,11 @@ def _prepare_ocr_variant_files(
                 tmp_path.unlink(missing_ok=True)
                 continue
             paths.append(tmp_path)
-        except Exception as exc:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
             errors.append(f"image-save-error:{exc}")
             try:
                 tmp_path.unlink(missing_ok=True)
-            except Exception:
+            except OSError:
                 pass
     return paths, errors
 
@@ -62,7 +63,7 @@ def _cleanup_temp_paths(paths: list[Path]) -> None:
     for path in paths:
         try:
             path.unlink(missing_ok=True)
-        except Exception:
+        except OSError:
             pass
 
 
@@ -95,18 +96,27 @@ _simple_name_key = _ocr_postprocess_utils._simple_name_key
 _IDENTIFIER_HINT_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,95}$")
 
 
-@lru_cache(maxsize=1)
 def _config_identifier_hints() -> tuple[str, ...]:
-    try:
-        import config as app_config
-    except Exception:
-        return ()
+    settings = settings_provider.get_settings()
+    source = getattr(settings, "values", None)
+    if not isinstance(source, dict) or not source:
+        try:
+            import config as app_config
+        except ImportError:
+            source = {}
+        else:
+            source = {
+                key: value
+                for key, value in vars(app_config).items()
+                if isinstance(key, str) and key.isupper()
+            }
     hints: set[str] = set()
-    for key in dir(app_config):
-        if not key.isupper():
+    for key in source.keys():
+        key_text = str(key or "")
+        if not key_text.isupper():
             continue
-        if _IDENTIFIER_HINT_RE.match(str(key)):
-            hints.add(str(key))
+        if _IDENTIFIER_HINT_RE.match(key_text):
+            hints.add(key_text)
     return tuple(sorted(hints))
 
 
@@ -319,7 +329,7 @@ def _estimate_expected_rows_from_paths(paths: list[Path], cfg: dict) -> int | No
             return 0
         try:
             return len(value)
-        except Exception:
+        except TypeError:
             return len(list(value or ()))
 
     def _collect_counts(expected_values: list[int]) -> list[int]:
@@ -391,7 +401,7 @@ def _primary_avg_line_confidence(primary_runs: list[dict]) -> float | None:
         for entry in list(run.get("lines") or []):
             try:
                 conf = float(entry.get("conf", -1.0))
-            except Exception:
+            except (TypeError, ValueError):
                 conf = -1.0
             if conf >= 0.0:
                 values.append(conf)
@@ -676,7 +686,7 @@ def _reconcile_row_overflow_with_primary_slots(
             name_similarity_fn=_name_similarity,
             common_prefix_len_fn=_common_prefix_len,
         )
-    except Exception:
+    except (AttributeError, TypeError, ValueError, RuntimeError):
         return deduped
 
     effective_position = dict(context.get("effective_position") or {})
@@ -705,7 +715,7 @@ def _reconcile_row_overflow_with_primary_slots(
             continue
         try:
             slot_idx = int(entry.get("line_index", 0) or 0)
-        except Exception:
+        except (TypeError, ValueError):
             slot_idx = 0
         if slot_idx <= 0:
             pos = effective_position.get(key)
@@ -873,4 +883,3 @@ def _build_ocr_debug_report(
         extract_line_debug_for_text_fn=_extract_line_debug_for_text,
         truncate_report_text_fn=_truncate_report_text,
     )
-

@@ -209,6 +209,8 @@ def _label_style(theme: theme_util.Theme, variant: str) -> str:
         cached = f"color:{theme.muted_text}; font-size:13px; font-weight:600;"
     elif variant == "summary":
         cached = f"font-size:15px; color:{theme.muted_text}; margin:10px 0 6px 0;"
+    elif variant == "summary_inline":
+        cached = f"font-size:15px; color:{theme.muted_text}; margin:0; padding:0 6px;"
     elif variant == "panel_title":
         cached = f"font-size:18px; font-weight:800; letter-spacing:0.3px; color:{theme.text};"
     elif variant == "hint":

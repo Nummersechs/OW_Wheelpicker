@@ -4,6 +4,23 @@ Overwatch 2 lineup/hero/map picker with role wheels, pair mode, hero-ban mode, a
 
 Status: This is still a vibe-code project ("vibe-coded") and is being cleaned up incrementally toward a clearer MVC structure.
 
+## Recent Refactoring Updates
+
+- `MainWindow` was further split:
+  - UI composition moved into `controller/main_window_ui_builder.py`
+  - runtime state bridge moved into `controller/main_window_runtime_bridge.py`
+- Runtime phases are now explicit in `model/main_window_runtime_state.py`:
+  - `StartupPhase`
+  - `ShutdownPhase`
+  - `OCRPreloadPhase`
+- State sync was split into components:
+  - local persistence queue (`LocalStatePersistenceQueue`)
+  - remote sync transport (`RemoteRoleSyncService`)
+  - both in `controller/state_sync_components.py`
+- Central settings provider added:
+  - `services/settings_provider.py`
+  - bootstrapped in `main.py`
+
 ## Run
 
 ```bash
@@ -33,6 +50,41 @@ From the repo root:
 
 ```bash
 python3 -m unittest discover owpicker_mvc/tests
+```
+
+## OCR Warmup / First-Click Metrics
+
+To measure OCR preload warmup and first OCR click latency from runtime traces:
+
+```bash
+python3 scripts/analyze_ocr_runtime_trace.py logs/ocr_runtime_trace.log
+```
+
+Optional:
+
+```bash
+python3 scripts/analyze_ocr_runtime_trace.py logs/ocr_runtime_trace.log --all-runs
+```
+
+The analyzer reports (per PID and summary):
+- preload total duration
+- in-process warmup duration
+- first OCR request to worker-start latency
+- first OCR request total latency
+- first click to terminal OCR result latency
+
+## Repo / Build Hygiene
+
+Before packaging or creating release artifacts, clean local caches/build outputs:
+
+```bash
+python3 scripts/repo_hygiene.py --include-build
+```
+
+Optional cleanup for runtime/debug artifacts:
+
+```bash
+python3 scripts/repo_hygiene.py --include-build --include-logs --include-saved-state
 ```
 
 ## Windows EXE OCR (EasyOCR only)
@@ -89,12 +141,12 @@ Notes:
 
 ## Structure (short)
 
-- `main.py`: entry point + quiet mode setup.
+- `main.py`: entry point, quiet mode setup, shared settings bootstrap.
 - `controller/`: MainWindow orchestration, mode handling, spin service, OCR, state sync, shutdown.
 - `view/`: Qt widgets for wheel/list/overlay/profile UI.
 - `logic/`: UI-free algorithms (`spin_engine`, `spin_planner`, `hero_ban_merge`, `name_normalization`).
-- `model/`: role and wheel state helpers.
-- `services/`: `state_store`, `sound`, `app_settings`.
+- `model/`: role/wheel helpers and runtime phase enums.
+- `services/`: `state_store`, `sound`, `app_settings`, `settings_provider`.
 - `i18n/`, `utils/`, `config.py`: cross-cutting concerns (texts, themes/helpers, feature flags).
 
 ## Docs

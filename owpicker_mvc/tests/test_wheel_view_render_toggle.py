@@ -173,7 +173,8 @@ class TestWheelViewRenderToggle(unittest.TestCase):
 
     def test_disabled_spin_button_hover_shows_tooltip_via_card_event_filter(self):
         wheel = WheelView("Test", [])
-        wheel.show()
+        if not qt_runtime.is_headless_qpa():
+            wheel.show()
         QtWidgets.QApplication.processEvents()
         self.assertFalse(wheel.btn_local_spin.isEnabled())
 
@@ -184,7 +185,10 @@ class TestWheelViewRenderToggle(unittest.TestCase):
         with patch("view.base_panel.QtWidgets.QToolTip.showText") as show_text:
             handled = wheel.eventFilter(wheel.card, evt)
             self.assertTrue(handled)
-            show_text.assert_called_once()
+            if qt_runtime.is_headless_qpa():
+                show_text.assert_not_called()
+            else:
+                show_text.assert_called_once()
         wheel.close()
 
     def test_pair_mode_falls_back_to_single_when_only_one_active_name_remains(self):

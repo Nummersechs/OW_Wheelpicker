@@ -5,9 +5,6 @@ from typing import Callable
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-import config
-
-
 def _cfg(mw, key: str, default=None):
     getter = getattr(mw, "_cfg", None)
     if callable(getter):
@@ -15,7 +12,7 @@ def _cfg(mw, key: str, default=None):
             return getter(key, default)
         except Exception:
             pass
-    return getattr(config, key, default)
+    return default
 
 
 def _background_services_paused(mw) -> bool:

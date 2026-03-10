@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from PySide6 import QtCore
 from typing import Callable
-import config
 
 
 class TooltipManager:
@@ -19,6 +18,15 @@ class TooltipManager:
         self._pending_signature: tuple | None = None
         self._paused = False
         self._generation = 0
+
+    def _cfg(self, key: str, default=None):
+        getter = getattr(self._mw, "_cfg", None)
+        if callable(getter):
+            try:
+                return getter(key, default)
+            except Exception:
+                pass
+        return default
 
     def pause(self) -> None:
         if self._paused:
@@ -68,7 +76,7 @@ class TooltipManager:
             return [map_main] if map_main else []
         wheels = [self._mw.tank, self._mw.dps, self._mw.support]
         map_main = getattr(self._mw, "map_main", None)
-        if map_main and getattr(config, "TOOLTIP_CACHE_ON_START", True):
+        if map_main and bool(self._cfg("TOOLTIP_CACHE_ON_START", True)):
             wheels.append(map_main)
         return wheels
 

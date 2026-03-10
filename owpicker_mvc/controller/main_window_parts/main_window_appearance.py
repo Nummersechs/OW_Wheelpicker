@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import config
 import i18n
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -21,8 +20,19 @@ class MainWindowAppearanceMixin:
             if not defer_heavy and hasattr(self, "btn_theme"):
                 self.btn_theme.setEnabled(True)
             return
-        theme_util.apply_app_theme(theme)  # einmal zentral, danach in Scheiben
+        cfg_getter = getattr(self, "_cfg", None)
+        force_fusion_style = False
+        if callable(cfg_getter):
+            try:
+                force_fusion_style = bool(cfg_getter("FORCE_FUSION_STYLE", False))
+            except Exception:
+                force_fusion_style = False
+        theme_util.apply_app_theme(
+            theme,
+            force_fusion_style=force_fusion_style,
+        )  # einmal zentral, danach in Scheiben
 
+        summary_role = "label.summary_inline" if bool(getattr(self, "_summary_inline", False)) else "label.summary"
         # Schnelle/kleine Updates sofort
         style_helpers.apply_theme_roles(
             theme,
@@ -35,7 +45,7 @@ class MainWindowAppearanceMixin:
                 (getattr(self, "lbl_anim_duration", None), "label.section"),
                 (getattr(self, "lbl_open_count", None), "label.section"),
                 (getattr(self, "lbl_open_count_value", None), "label.section"),
-                (getattr(self, "summary", None), "label.summary"),
+                (getattr(self, "summary", None), summary_role),
             ),
         )
         self._update_theme_button_label()

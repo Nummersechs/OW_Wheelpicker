@@ -12,6 +12,7 @@ from controller.ocr.ocr_import import (
     _resolve_easyocr_device,
     clear_ocr_runtime_caches,
     easyocr_available,
+    easyocr_warmup_runtime,
     extract_candidate_names,
     extract_candidate_names_debug,
     extract_candidate_names_multi,
@@ -526,6 +527,57 @@ class TestOCRImport(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertEqual(called_langs, ["en,de", "en"])
+
+    def test_easyocr_warmup_runtime_runs_readtext_for_each_reader_group(self):
+        class _Reader:
+            def __init__(self):
+                self.device = "cpu"
+                self.read_calls = 0
+
+            def readtext(self, *_args, **_kwargs):
+                self.read_calls += 1
+                return []
+
+        readers_by_lang: dict[str, _Reader] = {}
+
+        def _fake_resolve_reader(*, lang, model_dir, user_network_dir, gpu, download_enabled, quiet):
+            _ = (model_dir, user_network_dir, gpu, download_enabled, quiet)
+            key = str(lang or "")
+            reader = _Reader()
+            readers_by_lang[key] = reader
+            return reader, None
+
+        with patch("controller.ocr.ocr_import._resolve_easyocr_reader", side_effect=_fake_resolve_reader):
+            with patch("controller.ocr.ocr_import._build_easyocr_warmup_image", return_value=object()):
+                ok, detail = easyocr_warmup_runtime(lang="en,de,ja")
+
+        self.assertTrue(ok)
+        self.assertEqual(str(detail), "inference-warmed")
+        self.assertEqual(readers_by_lang["en,de"].read_calls, 1)
+        self.assertEqual(readers_by_lang["ja,en"].read_calls, 1)
+
+    def test_easyocr_warmup_runtime_keeps_ready_when_one_group_warmup_fails(self):
+        class _Reader:
+            def __init__(self, *, fail: bool):
+                self.device = "cpu"
+                self._fail = bool(fail)
+
+            def readtext(self, *_args, **_kwargs):
+                if self._fail:
+                    raise RuntimeError("warmup failed")
+                return []
+
+        def _fake_resolve_reader(*, lang, model_dir, user_network_dir, gpu, download_enabled, quiet):
+            _ = (model_dir, user_network_dir, gpu, download_enabled, quiet)
+            key = str(lang or "")
+            return _Reader(fail=(key == "ja,en")), None
+
+        with patch("controller.ocr.ocr_import._resolve_easyocr_reader", side_effect=_fake_resolve_reader):
+            with patch("controller.ocr.ocr_import._build_easyocr_warmup_image", return_value=object()):
+                ok, detail = easyocr_warmup_runtime(lang="en,de,ja")
+
+        self.assertTrue(ok)
+        self.assertIn("inference-warmed-partial", str(detail))
 
     def test_run_easyocr_merges_results_from_split_lang_groups(self):
         class _Reader:

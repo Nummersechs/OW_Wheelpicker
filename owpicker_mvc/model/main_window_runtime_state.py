@@ -1,11 +1,41 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Callable
+
+
+class StartupPhase(str, Enum):
+    IDLE = "idle"
+    SHOWING_MODE_CHOICE = "showing_mode_choice"
+    WARMUP_RUNNING = "warmup_running"
+    WARMUP_COOLDOWN = "warmup_cooldown"
+    WARMUP_DONE = "warmup_done"
+    FINALIZED = "finalized"
+
+
+class ShutdownPhase(str, Enum):
+    IDLE = "idle"
+    CLOSE_REQUESTED = "close_requested"
+    STOPPING_WORKERS = "stopping_workers"
+    WAITING_THREADS = "waiting_threads"
+    FINALIZING_CLOSE = "finalizing_close"
+    CLOSED = "closed"
+
+
+class OCRPreloadPhase(str, Enum):
+    IDLE = "idle"
+    SCHEDULED = "scheduled"
+    DEFERRED = "deferred"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 @dataclass
 class StartupRuntimeState:
+    startup_phase: str = StartupPhase.IDLE.value
     finalize_done: bool = False
     finalize_scheduled: bool = False
     visual_finalize_pending: bool = False
@@ -22,11 +52,14 @@ class StartupRuntimeState:
     ocr_preload_deadline: float | None = None
     ocr_preload_started_at: float | None = None
     ocr_preload_running_wait_logged: bool = False
+    ocr_preload_phase: str = OCRPreloadPhase.IDLE.value
+    ocr_preload_phase_reason: str | None = None
     drain_active: bool = False
 
 
 @dataclass
 class ShutdownRuntimeState:
+    shutdown_phase: str = ShutdownPhase.IDLE.value
     closing: bool = False
     close_overlay_active: bool = False
     close_overlay_done: bool = False

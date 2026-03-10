@@ -1,7 +1,6 @@
 import math
 from typing import List
 from PySide6 import QtCore, QtGui, QtWidgets
-import config
 
 
 def make_colors(n: int) -> List[QtGui.QColor]:
@@ -20,23 +19,29 @@ def _app_default_font() -> QtGui.QFont:
     return QtGui.QFont()
 
 
-def _label_base_font_for_radius(radius: int) -> QtGui.QFont:
+def _label_base_font_for_radius(
+    radius: int,
+    *,
+    base_size: float,
+    ref_radius: int,
+    bold: bool,
+) -> QtGui.QFont:
     base_font = _app_default_font()
-    base_size = float(getattr(config, "LABEL_FONT_SIZE", 10))
     # Scale relative to configured wheel radius while keeping sane limits.
-    scale = float(radius) / float(getattr(config, "WHEEL_RADIUS", radius or 1))
+    scale = float(radius) / float(max(1, int(ref_radius)))
     eff_scale = max(0.5, min(1.3, scale))
     scaled_size = max(6.0, min(64.0, base_size * eff_scale))
     base_font.setPointSizeF(scaled_size)
-    base_font.setBold(bool(getattr(config, "LABEL_FONT_BOLD", True)))
+    base_font.setBold(bool(bold))
     return base_font
 
 
 class WheelDisc(QtWidgets.QGraphicsObject):
     segmentToggled = QtCore.Signal(int, bool, str)
-    def __init__(self, names: List[str], radius: int = None, parent=None):
+    def __init__(self, names: List[str], radius: int = None, parent=None, cfg_getter=None):
         super().__init__(parent)
-        self.radius = radius if radius is not None else config.WHEEL_RADIUS
+        self._cfg_getter = cfg_getter
+        self.radius = radius if radius is not None else int(self._cfg("WHEEL_RADIUS", 136))
         self.names = [n.strip() for n in names if n.strip()]
         self.disabled_indices: set[int] = set()
         self._tooltips_ready: bool = True
@@ -52,10 +57,37 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         self._label_truncated: list[bool] = []
         self._names_revision = 1
         self._tooltip_runtime_cache: dict[tuple[int, int, int, int, bool], bool] = {}
-        self._hover_trace_budget = int(getattr(config, "HOVER_TRACE_BUDGET_PER_VIEW", 0))
+        self._hover_trace_budget = int(self._cfg("HOVER_TRACE_BUDGET_PER_VIEW", 0))
         # Own hover overlay inside the scene (more reliable than native tooltips)
         self._hover_item: QtWidgets.QGraphicsTextItem | None = None
         self._hover_bg: QtWidgets.QGraphicsRectItem | None = None
+
+    def _cfg(self, key: str, default=None):
+        getter = self._cfg_getter
+        if callable(getter):
+            try:
+                return getter(key, default)
+            except Exception:
+                pass
+        try:
+            scene = self.scene()
+            views = scene.views() if scene is not None else []
+            if views:
+                win = views[0].window()
+                win_getter = getattr(win, "_cfg", None)
+                if callable(win_getter):
+                    return win_getter(key, default)
+        except Exception:
+            pass
+        return default
+
+    def _label_base_font(self) -> QtGui.QFont:
+        return _label_base_font_for_radius(
+            int(self.radius),
+            base_size=float(self._cfg("LABEL_FONT_SIZE", 10)),
+            ref_radius=int(self._cfg("WHEEL_RADIUS", self.radius or 1)),
+            bold=bool(self._cfg("LABEL_FONT_BOLD", True)),
+        )
 
     @staticmethod
     def _theme_tooltip_colors() -> tuple[QtGui.QColor, QtGui.QColor, QtGui.QColor]:
@@ -173,7 +205,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
             self._cached = pm
             self._hover_cache_warmed = True
             return
-        base_font = _label_base_font_for_radius(self.radius)
+        base_font = self._label_base_font()
         p.setFont(base_font)
 
         def fmt(raw: str) -> str:
@@ -391,7 +423,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
 
     def hoverMoveEvent(self, event: QtWidgets.QGraphicsSceneHoverEvent) -> None:
         """Zeigt beim Hover den vollen Namen an der Maus, wenn das Segment aktiv ist."""
-        if getattr(config, "TRACE_HOVER", False) and self._hover_trace_budget > 0:
+        if bool(self._cfg("TRACE_HOVER", False)) and self._hover_trace_budget > 0:
             self._hover_trace_budget -= 1
             try:
                 view = None
@@ -461,7 +493,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         # Tooltip bei jeder Bewegung neu setzen, damit er der Maus folgt
         self._last_hover_idx = idx
         name = self.names[idx]
-        if getattr(config, "DISABLE_TOOLTIPS", False):
+        if bool(self._cfg("DISABLE_TOOLTIPS", False)):
             # Use scene overlay when native tooltips are disabled (avoids extra window/focus).
             self._show_hover_overlay(name, event.scenePos())
         else:
@@ -505,7 +537,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
         if cached is not None:
             return cached
         raw = self.names[idx]
-        base_font = _label_base_font_for_radius(self.radius)
+        base_font = self._label_base_font()
 
         def fmt(name: str) -> str:
             if " + " in name:
@@ -595,7 +627,7 @@ class WheelDisc(QtWidgets.QGraphicsObject):
 
     # ---- Floating label (custom tooltip) ----
     def _show_floating_label(self, text: str, screen_pos: QtCore.QPointF):
-        if getattr(config, "DISABLE_TOOLTIPS", False):
+        if bool(self._cfg("DISABLE_TOOLTIPS", False)):
             return
         bg_color, fg_color, border_color = self._theme_tooltip_colors()
         if not getattr(self, "_floating_label", None):
