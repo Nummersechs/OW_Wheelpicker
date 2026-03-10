@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from importlib import import_module
 import sys
 
-_IMPL_MODULE = import_module(".pipeline.import_ui_helpers", __package__)
+from .pipeline import import_ui_helpers as _IMPL_MODULE
+
 sys.modules[__name__] = _IMPL_MODULE

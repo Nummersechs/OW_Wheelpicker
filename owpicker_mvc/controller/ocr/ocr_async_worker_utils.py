@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from importlib import import_module
 import sys
 
-_IMPL_MODULE = import_module(".capture.async_worker_utils", __package__)
+from .capture import async_worker_utils as _IMPL_MODULE
+
 sys.modules[__name__] = _IMPL_MODULE

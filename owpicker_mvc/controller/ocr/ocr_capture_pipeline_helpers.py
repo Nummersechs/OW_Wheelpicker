@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from importlib import import_module
 import sys
 
-_IMPL_MODULE = import_module(".capture.pipeline_helpers", __package__)
-sys.modules[__name__] = _IMPL_MODULE
+from .capture import pipeline_helpers as _IMPL_MODULE
 
+sys.modules[__name__] = _IMPL_MODULE

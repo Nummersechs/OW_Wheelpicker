@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from importlib import import_module
 from typing import Any
 
-_FLOW_MODULE = import_module(".async_flow", __package__)
+from . import async_flow as _FLOW_MODULE
 
 
 def __getattr__(name: str) -> Any:

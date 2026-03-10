@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from importlib import import_module
 from typing import Any
 
-_LEGACY_MODULE = import_module("..ocr_name_extraction", __package__)
+from .. import ocr_name_extraction as _LEGACY_MODULE
 
 
 def __getattr__(name: str) -> Any:
@@ -14,4 +13,3 @@ def __getattr__(name: str) -> Any:
 
 def __dir__() -> list[str]:
     return sorted(set(globals()) | set(dir(_LEGACY_MODULE)))
-

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from importlib import import_module
 import sys
 
-_IMPL_MODULE = import_module(".pipeline.postprocess_retry_utils", __package__)
+from .pipeline import postprocess_retry_utils as _IMPL_MODULE
+
 sys.modules[__name__] = _IMPL_MODULE
