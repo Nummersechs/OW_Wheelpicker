@@ -478,9 +478,47 @@ class _OCRPreloadRelay(QtCore.QObject):
 
 
 class MainWindowOCRMixin:
+    def _runtime_settings(self):
+        settings = getattr(self, "settings", None)
+        return getattr(settings, "runtime", None)
+
+    def _ocr_settings(self):
+        settings = getattr(self, "settings", None)
+        return getattr(settings, "ocr", None)
+
+    def _runtime_bool(self, attr: str, key: str, default: bool) -> bool:
+        section = self._runtime_settings()
+        if section is not None and hasattr(section, attr):
+            try:
+                return bool(getattr(section, attr))
+            except (TypeError, ValueError):
+                pass
+        return bool(self._cfg(key, default))
+
+    def _ocr_bool(self, attr: str, key: str, default: bool) -> bool:
+        section = self._ocr_settings()
+        if section is not None and hasattr(section, attr):
+            try:
+                return bool(getattr(section, attr))
+            except (TypeError, ValueError):
+                pass
+        return bool(self._cfg(key, default))
+
+    def _ocr_float(self, attr: str, key: str, default: float) -> float:
+        section = self._ocr_settings()
+        if section is not None and hasattr(section, attr):
+            try:
+                return float(getattr(section, attr))
+            except (TypeError, ValueError):
+                pass
+        try:
+            return float(self._cfg(key, default))
+        except (TypeError, ValueError):
+            return float(default)
+
     def _warn_ocr_suppressed_exception(self, where: str, exc: Exception) -> None:
         try:
-            if bool(self._cfg("QUIET", False)):
+            if self._runtime_bool("quiet", "QUIET", False):
                 return
         except Exception:
             pass
@@ -529,7 +567,7 @@ class MainWindowOCRMixin:
         if isinstance(cfg_hints, (list, tuple, set)):
             for raw in cfg_hints:
                 _add(str(raw or ""))
-        if names and bool(self._cfg("OCR_NAME_HINTS_ONLY_WHEN_SET", True)):
+        if names and self._ocr_bool("name_hints_only_when_set", "OCR_NAME_HINTS_ONLY_WHEN_SET", True):
             return names
 
         if key in {"tank", "dps", "support"}:
@@ -575,14 +613,18 @@ class MainWindowOCRMixin:
         return min(1.0, score)
 
     def _apply_ocr_name_hints(self, role_key: str, names: list[str]) -> list[str]:
-        if not bool(self._cfg("OCR_USE_NAME_HINTS", False)):
+        if not self._ocr_bool("use_name_hints", "OCR_USE_NAME_HINTS", False):
             return list(names or [])
         hints = self._ocr_name_hint_candidates(role_key)
         if not hints:
             return list(names or [])
 
-        min_score = float(self._cfg("OCR_HINT_CORRECTION_MIN_SCORE", 0.62))
-        low_conf_min_score = float(self._cfg("OCR_HINT_CORRECTION_LOW_CONF_MIN_SCORE", 0.28))
+        min_score = self._ocr_float("hint_correction_min_score", "OCR_HINT_CORRECTION_MIN_SCORE", 0.62)
+        low_conf_min_score = self._ocr_float(
+            "hint_correction_low_conf_min_score",
+            "OCR_HINT_CORRECTION_LOW_CONF_MIN_SCORE",
+            0.28,
+        )
 
         hint_entries: list[tuple[str, str]] = []
         seen_hint_keys: set[str] = set()
@@ -835,7 +877,7 @@ class MainWindowOCRMixin:
             )
 
     def _ocr_runtime_sleep_until_used(self) -> bool:
-        return bool(self._cfg("OCR_RUNTIME_SLEEP_UNTIL_USED", True))
+        return self._ocr_bool("runtime_sleep_until_used", "OCR_RUNTIME_SLEEP_UNTIL_USED", True)
 
     def _mark_ocr_runtime_activated(self) -> None:
         self._ocr_runtime_activated = True

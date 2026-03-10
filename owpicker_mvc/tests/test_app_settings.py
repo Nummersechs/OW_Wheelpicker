@@ -47,12 +47,16 @@ class TestAppSettings(unittest.TestCase):
                 "DEFAULT_DURATION_MS": "999999",
                 "MIN_DURATION_MS": "100",
                 "MAX_DURATION_MS": "1000",
+                "DEFAULT_LANGUAGE": "DE",
+                "SPIN_WATCHDOG_ENABLED": "1",
             }
         )
 
         self.assertEqual(settings.resolve("QUIET", False), True)
         self.assertEqual(settings.resolve("NETWORK_SYNC_WORKERS", 99), 1)
         self.assertEqual(settings.resolve("DEFAULT_DURATION_MS", 0), 1000)
+        self.assertEqual(settings.resolve("DEFAULT_LANGUAGE", "en"), "de")
+        self.assertEqual(settings.resolve("SPIN_WATCHDOG_ENABLED", False), True)
 
     def test_update_rebuilds_sections(self):
         settings = AppSettings(values={"QUIET": False, "OCR_ENGINE": "easyocr"})

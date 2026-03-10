@@ -171,8 +171,8 @@ class MainWindow(
         self._state_dir = self._state_base_dir()
         self._state_file = self._get_state_file()
         self.settings = AppSettings.from_module(config)
-        self._quiet_mode = bool(self._cfg("QUIET", False))
-        configured_log_dir = str(self._cfg("LOG_OUTPUT_DIR", "logs")).strip()
+        self._quiet_mode = self._runtime_bool("quiet", "QUIET", False)
+        configured_log_dir = self._runtime_str("log_output_dir", "LOG_OUTPUT_DIR", "logs").strip()
         log_root = Path(configured_log_dir) if configured_log_dir else Path()
         if not configured_log_dir:
             log_root = self._state_dir
@@ -186,7 +186,7 @@ class MainWindow(
                 self._log_dir = self._state_dir
         self._run_id = f"{int(time.time() * 1000)}_{os.getpid()}"
         saved = StateSyncController.load_saved_state(self._state_file)
-        default_lang = self._cfg("DEFAULT_LANGUAGE", "en")
+        default_lang = self._runtime_str("default_language", "DEFAULT_LANGUAGE", "en")
         self.language = saved.get("language", default_lang) if isinstance(saved, dict) else default_lang
         i18n.set_language(self.language)
         self.theme = saved.get("theme", "light") if isinstance(saved, dict) else "light"
@@ -242,7 +242,7 @@ class MainWindow(
         self._map_lists_ready = False
         self._map_prebuild_in_progress = False
         self._map_spin_connected = False
-        self._focus_trace_enabled = bool(self._cfg("TRACE_FOCUS", False))
+        self._focus_trace_enabled = self._trace_bool("focus", "TRACE_FOCUS", False)
         self._focus_trace_count = 0
         self._focus_trace_max_events = int(self._cfg("FOCUS_TRACE_MAX_EVENTS", 120))
         self._focus_trace_until = time.monotonic() + float(self._cfg("FOCUS_TRACE_DURATION_S", 3.0))
@@ -254,7 +254,7 @@ class MainWindow(
         self._focus_trace_window_handle_installed = False
         self._focus_trace_last_t: float | None = None
         self._hover_rearm_last: float | None = None
-        self._hover_trace_enabled = bool(self._cfg("TRACE_HOVER", False))
+        self._hover_trace_enabled = self._trace_bool("hover", "TRACE_HOVER", False)
         self._hover_trace_count = 0
         self._hover_trace_max_events = int(self._cfg("HOVER_TRACE_MAX_EVENTS", 200))
         self._hover_trace_last_t: float | None = None
@@ -296,18 +296,18 @@ class MainWindow(
         self._focus_trace_file = self._log_dir / "focus_trace.log"
         self._write_trace_run_header(self._focus_trace_enabled, self._focus_trace_file)
         self._trace_enabled = bool(
-            self._cfg("TRACE_FLOW", False)
-            or self._cfg("TRACE_SHUTDOWN", False)
-            or self._cfg("DEBUG", False)
+            self._trace_bool("flow", "TRACE_FLOW", False)
+            or self._trace_bool("shutdown", "TRACE_SHUTDOWN", False)
+            or self._runtime_bool("debug", "DEBUG", False)
         )
         self._trace_last_t: float | None = None
         self._trace_file = self._log_dir / "flow_trace.log"
-        self._spin_perf_enabled = bool(self._cfg("TRACE_SPIN_PERF", False))
+        self._spin_perf_enabled = self._trace_bool("spin_perf", "TRACE_SPIN_PERF", False)
         self._spin_perf_file = self._log_dir / "spin_perf.log"
         self._write_trace_run_header(self._spin_perf_enabled, self._spin_perf_file)
         if self._trace_enabled:
             self._trace_event("startup", run_id=self._run_id)
-        if self._cfg("DISABLE_TOOLTIPS", False):
+        if self._runtime_bool("disable_tooltips", "DISABLE_TOOLTIPS", False):
             try:
                 QtWidgets.QToolTip.setEnabled(False)
             except Exception:
@@ -372,12 +372,59 @@ class MainWindow(
                 pass
         return getattr(config, key, default)
 
+    def _runtime_settings(self):
+        settings = getattr(self, "settings", None)
+        return getattr(settings, "runtime", None)
+
+    def _trace_settings(self):
+        settings = getattr(self, "settings", None)
+        return getattr(settings, "trace", None)
+
+    def _spin_ui_settings(self):
+        settings = getattr(self, "settings", None)
+        return getattr(settings, "spin_ui", None)
+
+    def _runtime_bool(self, attr: str, key: str, default: bool) -> bool:
+        section = self._runtime_settings()
+        if section is not None and hasattr(section, attr):
+            try:
+                return bool(getattr(section, attr))
+            except (TypeError, ValueError):
+                pass
+        return bool(self._cfg(key, default))
+
+    def _runtime_str(self, attr: str, key: str, default: str) -> str:
+        section = self._runtime_settings()
+        if section is not None and hasattr(section, attr):
+            value = str(getattr(section, attr, default) or "").strip()
+            return value or str(default)
+        value = str(self._cfg(key, default) or "").strip()
+        return value or str(default)
+
+    def _trace_bool(self, attr: str, key: str, default: bool) -> bool:
+        section = self._trace_settings()
+        if section is not None and hasattr(section, attr):
+            try:
+                return bool(getattr(section, attr))
+            except (TypeError, ValueError):
+                pass
+        return bool(self._cfg(key, default))
+
+    def _spin_ui_bool(self, attr: str, key: str, default: bool) -> bool:
+        section = self._spin_ui_settings()
+        if section is not None and hasattr(section, attr):
+            try:
+                return bool(getattr(section, attr))
+            except (TypeError, ValueError):
+                pass
+        return bool(self._cfg(key, default))
+
     def _write_trace_run_header(self, enabled: bool, trace_file: Path) -> None:
         if not enabled:
             return
         try:
             trace_file.parent.mkdir(parents=True, exist_ok=True)
-            if bool(self._cfg("TRACE_CLEAR_ON_START", False)):
+            if self._trace_bool("clear_on_start", "TRACE_CLEAR_ON_START", False):
                 trace_file.write_text("", encoding="utf-8")
             with trace_file.open("a", encoding="utf-8") as handle:
                 handle.write(f"=== run {self._run_id} ===\n")
@@ -872,7 +919,7 @@ class MainWindow(
         self._last_results_snapshot: dict | None = None
         self._spin_started_at_monotonic: float | None = None
         self._spin_watchdog_timer: QtCore.QTimer | None = None
-        if bool(self._cfg("SPIN_WATCHDOG_ENABLED", False)):
+        if self._spin_ui_bool("spin_watchdog_enabled", "SPIN_WATCHDOG_ENABLED", False):
             timer = QtCore.QTimer(self)
             timer.setSingleShot(True)
             timer.timeout.connect(self._on_spin_watchdog_timeout)
@@ -948,7 +995,7 @@ class MainWindow(
         self._schedule_hover_rearm("overlay_closed", force=True)
         self._schedule_hover_rearm("overlay_closed:late", delay_ms=200)
         # Tooltip/Truncation nach finalem Layout aktualisieren
-        if not self._cfg("DISABLE_TOOLTIPS", False):
+        if not self._runtime_bool("disable_tooltips", "DISABLE_TOOLTIPS", False):
             self._set_tooltips_ready(False)
             self._schedule_tooltip_refresh("overlay_closed", delay_ms=120)
         self._refresh_app_event_filter_state()

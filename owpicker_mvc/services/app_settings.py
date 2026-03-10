@@ -44,6 +44,7 @@ class RuntimeSettings:
     debug: bool = False
     quiet: bool = False
     log_output_dir: str = "logs"
+    default_language: str = "en"
     windows_single_instance: bool = True
     windows_single_instance_lock_name: str = "ow_wheelpicker_instance"
     force_fusion_style: bool = False
@@ -140,6 +141,7 @@ class SpinUiSettings:
     min_duration_ms: int = 0
     max_duration_ms: int = 10000
     default_duration_ms: int = 3000
+    spin_watchdog_enabled: bool = False
     spin_lightweight_ui_lock: bool = True
 
 
@@ -189,6 +191,7 @@ class AppSettings:
             debug=_coerce_bool(values.get("DEBUG", False)),
             quiet=_coerce_bool(values.get("QUIET", False)),
             log_output_dir=_coerce_str(values.get("LOG_OUTPUT_DIR", "logs"), "logs"),
+            default_language=_coerce_str(values.get("DEFAULT_LANGUAGE", "en"), "en").lower(),
             windows_single_instance=_coerce_bool(values.get("WINDOWS_SINGLE_INSTANCE", True)),
             windows_single_instance_lock_name=_coerce_str(
                 values.get("WINDOWS_SINGLE_INSTANCE_LOCK_NAME", "ow_wheelpicker_instance"),
@@ -380,6 +383,7 @@ class AppSettings:
             min_duration_ms=min_dur,
             max_duration_ms=max_dur,
             default_duration_ms=max(min_dur, min(max_dur, _coerce_int(values.get("DEFAULT_DURATION_MS", 3000), 3000))),
+            spin_watchdog_enabled=_coerce_bool(values.get("SPIN_WATCHDOG_ENABLED", False)),
             spin_lightweight_ui_lock=_coerce_bool(values.get("SPIN_LIGHTWEIGHT_UI_LOCK", True)),
         )
         self.network = NetworkSettings(
@@ -393,6 +397,7 @@ class AppSettings:
             "DEBUG": self.runtime.debug,
             "QUIET": self.runtime.quiet,
             "LOG_OUTPUT_DIR": self.runtime.log_output_dir,
+            "DEFAULT_LANGUAGE": self.runtime.default_language,
             "WINDOWS_SINGLE_INSTANCE": self.runtime.windows_single_instance,
             "WINDOWS_SINGLE_INSTANCE_LOCK_NAME": self.runtime.windows_single_instance_lock_name,
             "FORCE_FUSION_STYLE": self.runtime.force_fusion_style,
@@ -469,6 +474,7 @@ class AppSettings:
             "MIN_DURATION_MS": self.spin_ui.min_duration_ms,
             "MAX_DURATION_MS": self.spin_ui.max_duration_ms,
             "DEFAULT_DURATION_MS": self.spin_ui.default_duration_ms,
+            "SPIN_WATCHDOG_ENABLED": self.spin_ui.spin_watchdog_enabled,
             "SPIN_LIGHTWEIGHT_UI_LOCK": self.spin_ui.spin_lightweight_ui_lock,
             "STATE_SAVE_DEBOUNCE_MS": self.network.state_save_debounce_ms,
             "NETWORK_SYNC_DEBOUNCE_MS": self.network.network_sync_debounce_ms,
