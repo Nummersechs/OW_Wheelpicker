@@ -106,6 +106,19 @@ def capture_region_with_qt_selector(
     i18n_module,
 ) -> tuple[QtGui.QPixmap | None, str | None]:
     hide_for_capture = bool(mw._cfg("OCR_HIDE_MAIN_WINDOW_FOR_CAPTURE", True))
+    minimize_before_selector = bool(
+        mw._cfg("OCR_CAPTURE_MINIMIZE_BEFORE_SELECTOR", sys_platform == "win32")
+    )
+    if sys_platform == "win32":
+        default_minimize_delay_ms = 170
+    else:
+        default_minimize_delay_ms = 0
+    minimize_delay_ms = int(
+        mw._cfg(
+            "OCR_CAPTURE_MINIMIZE_DELAY_MS",
+            mw._cfg("OCR_CAPTURE_MINIMIZE_DELAY_MS_WINDOWS", default_minimize_delay_ms),
+        )
+    )
     if sys_platform == "win32":
         default_prepare_delay_ms = 70
     else:
@@ -124,6 +137,11 @@ def capture_region_with_qt_selector(
 
     with suspend_quit_on_last_window_closed_fn(active=bool(hide_for_capture and was_visible)):
         if hide_for_capture and was_visible:
+            if minimize_before_selector and (not was_minimized):
+                mw.showMinimized()
+                QtWidgets.QApplication.processEvents()
+                if minimize_delay_ms > 0:
+                    time_module.sleep(max(0, minimize_delay_ms) / 1000.0)
             mw.hide()
             QtWidgets.QApplication.processEvents()
             if prepare_delay_ms > 0:

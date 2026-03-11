@@ -549,6 +549,10 @@ OCR_NAME_NEAR_DUP_TAIL_HEAD_SIMILARITY = 0.70
 OCR_USE_NATIVE_MAC_CAPTURE = True
 # Hide the main window during region selection (recommended on Windows).
 OCR_HIDE_MAIN_WINDOW_FOR_CAPTURE = True
+# Minimize before hiding, then wait briefly so compositor/frame timing catches up.
+OCR_CAPTURE_MINIMIZE_BEFORE_SELECTOR = True
+OCR_CAPTURE_MINIMIZE_DELAY_MS = 1000
+OCR_CAPTURE_MINIMIZE_DELAY_MS_WINDOWS = 1000
 OCR_CAPTURE_PREPARE_DELAY_MS = 120
 # Optional Windows-specific delay before capture selector opens.
 OCR_CAPTURE_PREPARE_DELAY_MS_WINDOWS = 70
