@@ -2,6 +2,8 @@ import tempfile
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
+import sys
 from unittest.mock import patch
 
 from controller.ocr.ocr_import import (
@@ -484,6 +486,55 @@ class TestOCRImport(unittest.TestCase):
         with patch("controller.ocr.ocr_import._torch_device_support", return_value=(True, True)):
             self.assertEqual(_resolve_easyocr_device("auto"), "cuda")
 
+    def test_import_torch_module_retries_with_rpc_stub_on_missing_rpc_module(self):
+        import builtins
+        import controller.ocr.ocr_import as ocr_import_module
+
+        fake_torch = SimpleNamespace(__file__="fake_torch.py", __version__="0.0-test")
+        torch_calls = {"count": 0}
+        real_import = builtins.__import__
+
+        def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "torch":
+                torch_calls["count"] += 1
+                if torch_calls["count"] == 1:
+                    raise ModuleNotFoundError("No module named 'torch.distributed.rpc'")
+                return fake_torch
+            return real_import(name, globals, locals, fromlist, level)
+
+        with patch.dict(sys.modules, {}, clear=False):
+            sys.modules.pop("torch", None)
+            sys.modules.pop("torch.distributed.rpc", None)
+            with patch("builtins.__import__", side_effect=_fake_import):
+                resolved = ocr_import_module._import_torch_module()
+            self.assertIs(resolved, fake_torch)
+            rpc_stub = sys.modules.get("torch.distributed.rpc")
+            self.assertIsNotNone(rpc_stub)
+            self.assertTrue(callable(getattr(rpc_stub, "is_available", None)))
+            self.assertFalse(bool(rpc_stub.is_available()))
+        self.assertEqual(torch_calls["count"], 2)
+
+    def test_import_easyocr_module_caches_fatal_torchvision_failure(self):
+        import controller.ocr.ocr_import as ocr_import_module
+
+        calls = {"count": 0}
+
+        def _fake_import_torch():
+            calls["count"] += 1
+            raise RuntimeError("operator torchvision::nms does not exist")
+
+        with patch("controller.ocr.ocr_import._import_torch_module", side_effect=_fake_import_torch):
+            ocr_import_module._clear_easyocr_import_failure_cache()
+            module_1, error_1 = ocr_import_module._import_easyocr_module()
+            module_2, error_2 = ocr_import_module._import_easyocr_module()
+            ocr_import_module._clear_easyocr_import_failure_cache()
+
+        self.assertIsNone(module_1)
+        self.assertIsNone(module_2)
+        self.assertIn("operator torchvision::nms does not exist", str(error_1))
+        self.assertIn("operator torchvision::nms does not exist", str(error_2))
+        self.assertEqual(calls["count"], 1)
+
     def test_run_ocr_multi_passes_gpu_mode_through(self):
         with patch("controller.ocr.ocr_import.run_easyocr", return_value=OCRRunResult("Aero")) as easy_mock:
             result = run_ocr_multi(Path("dummy.png"), easyocr_gpu="mps")
@@ -527,6 +578,20 @@ class TestOCRImport(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertEqual(called_langs, ["en,de", "en"])
+
+    def test_easyocr_available_stops_after_global_import_failure(self):
+        called_langs: list[str] = []
+
+        def _fake_resolve_reader(*, lang, model_dir, user_network_dir, gpu, download_enabled, quiet):
+            _ = (model_dir, user_network_dir, gpu, download_enabled, quiet)
+            called_langs.append(str(lang or ""))
+            return None, "easyocr-import-error:operator torchvision::nms does not exist"
+
+        with patch("controller.ocr.ocr_import._resolve_easyocr_reader", side_effect=_fake_resolve_reader):
+            ok = easyocr_available(lang="en,de,ja,ch_sim,ko")
+
+        self.assertFalse(ok)
+        self.assertEqual(called_langs, ["en,de"])
 
     def test_easyocr_warmup_runtime_runs_readtext_for_each_reader_group(self):
         class _Reader:

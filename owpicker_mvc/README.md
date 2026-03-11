@@ -121,11 +121,13 @@ This uses CPU-only torch wheels and avoids CUDA probe warnings (for example `nvc
 4. Set `OW_EASYOCR_MODEL_DIR` to your local model folder so models are bundled into the EXE.
 5. `OW_INCLUDE_REQUESTS` is optional and defaults to `0` (smaller/faster build). Set it to `1` only if you need online sync.
 6. For smaller release builds, use `OW_BUILD_PROFILE=release`. On Windows, keep `OW_STRIP=0` unless you have a working `strip` tool installed.
-7. Verify build output contains lines like:
+7. Run the OCR dependency preflight once:
+   - `python owpicker_mvc/scripts/ocr_dependency_probe.py`
+8. Verify build output contains lines like:
    - `[spec] EasyOCR bundle enabled.`
    - `[spec] EasyOCR model source: ...`
    - `[spec] Build profile=... | dist_mode=... | strip=... | ...`
-8. Important: preload all languages from `OCR_EASYOCR_LANG` (not only `en`) before building, otherwise onefile may miss required language models.
+9. Important: preload all languages from `OCR_EASYOCR_LANG` (not only `en`) before building, otherwise onefile may miss required language models.
 
 Example (Windows CMD):
 

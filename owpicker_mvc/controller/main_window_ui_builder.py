@@ -364,7 +364,8 @@ class MainWindowUIBuilderMixin:
         self._trace_event("ensure_map_ui:start", map_initialized=getattr(self, "_map_initialized", False))
         if getattr(self, "_map_initialized", False):
             return
-        from controller.map import MapUI
+        # Use stable compatibility module path for frozen Windows builds.
+        from controller.map_ui import MapUI
 
         self._map_init_in_progress = True
         try:

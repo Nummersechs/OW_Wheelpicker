@@ -59,9 +59,19 @@ if OCR_ENGINE != "easyocr":
     print(f"[spec] Unsupported OW_OCR_ENGINE={OCR_ENGINE!r}; forcing 'easyocr'.")
     OCR_ENGINE = "easyocr"
 INCLUDE_EASYOCR = _env_flag("OW_INCLUDE_EASYOCR", True)
-EASYOCR_HIDDENIMPORT_PROFILE = (os.environ.get("OW_EASYOCR_HIDDENIMPORT_PROFILE") or "minimal").strip().lower()
+_easyocr_hiddenimport_profile_env = os.environ.get("OW_EASYOCR_HIDDENIMPORT_PROFILE")
+EASYOCR_HIDDENIMPORT_PROFILE = (_easyocr_hiddenimport_profile_env or "minimal").strip().lower()
 if EASYOCR_HIDDENIMPORT_PROFILE not in {"minimal", "full"}:
-    EASYOCR_HIDDENIMPORT_PROFILE = "minimal"
+    EASYOCR_HIDDENIMPORT_PROFILE = "full"
+if (
+    INCLUDE_EASYOCR
+    and os.name == "nt"
+    and not str(_easyocr_hiddenimport_profile_env or "").strip()
+):
+    # Windows onefile/onedir OCR builds are more sensitive to missing
+    # transitive imports; default to the safer full profile unless the user
+    # explicitly picks minimal.
+    EASYOCR_HIDDENIMPORT_PROFILE = "full"
 LEGACY_OCR_BUNDLE_REQUESTED = _env_flag("OW_INCLUDE_OCR_BUNDLE", False)
 if LEGACY_OCR_BUNDLE_REQUESTED:
     print("[spec] OW_INCLUDE_OCR_BUNDLE is obsolete and ignored (EasyOCR-only build).")
@@ -228,8 +238,12 @@ extra_hiddenimports: list[str] = []
 if INCLUDE_EASYOCR:
     print("[spec] EasyOCR bundle enabled.")
     if EASYOCR_HIDDENIMPORT_PROFILE == "full":
+        # Robust profile for frozen OCR builds on Windows:
+        # keep EasyOCR internals plus core runtime stacks that are frequently
+        # loaded via dynamic/indirect imports in torch/easyocr.
         easyocr_imports = [
             "easyocr",
+            "easyocr.easyocr",
             "easyocr.cli",
             "easyocr.config",
             "easyocr.craft_utils",
@@ -241,7 +255,14 @@ if INCLUDE_EASYOCR:
             "easyocr.recognition",
             "easyocr.utils",
             "torch",
+            "torch._dynamo",
+            "torch._dynamo.polyfills",
+            "torch._dynamo.polyfills.fx",
+            "torch._inductor",
+            "torch._inductor.test_operators",
             "torchvision",
+            "torchvision.ops",
+            "torchvision.transforms",
             "cv2",
             "numpy",
             "PIL",
@@ -300,6 +321,21 @@ hiddenimports = [
     ),
 ]
 _append_unique_strings(hiddenimports, extra_hiddenimports)
+
+# Internal modules imported via runtime indirection/lazy package access should
+# be pinned as hidden imports to avoid frozen-runtime misses on Windows.
+internal_hiddenimports = [
+    "controller.map_ui",
+    "controller.map.ui",
+]
+if INCLUDE_EASYOCR:
+    internal_hiddenimports.extend(
+        [
+            "controller.ocr.ocr_import",
+            "controller.ocr.pipeline.importer",
+        ]
+    )
+_append_unique_strings(hiddenimports, internal_hiddenimports)
 
 excludes = [
     "PySide6.QtConcurrent",
@@ -369,41 +405,37 @@ excludes = [
     "fsspec.conftest",
     "tkinter",
     "_tkinter",
-    # Torch compile/ONNX stacks are not used by runtime OCR inference here.
-    # Excluding them reduces hook probing noise and avoids unnecessary baggage.
-    "torch._inductor",
-    "torch._inductor.codecache",
-    "torch._dynamo",
-    "torch.onnx",
-    "torch.distributed",
-    "torch.distributed._sharding_spec",
-    "torch.distributed._sharded_tensor",
-    "torch.distributed._shard.checkpoint",
-    "torch.distributed.elastic",
-    "torch.testing",
-    "triton",
+    # Keep torch compile backends available; some torch/easyocr startup paths
+    # import torch._inductor.test_operators dynamically on Windows.
+    # "torch._inductor",
+    # "torch._inductor.codecache",
+    # Keep triton available when packaged torch dynamically probes compile backends.
+    # "triton",
     "onnxruntime",
     "onnxscript",
-    # Optional ecosystems pulled via conditional imports in scipy/torch stacks.
-    # Excluding them keeps warning output focused on actionable issues.
-    "pandas",
-    "cupy",
-    "cupyx",
-    "matplotlib",
-    "pytest",
-    "psutil",
-    "sphinx",
-    "uarray",
-    "sparse",
-    "scikits",
-    "sksparse",
-    "cffi",
-    "pyparsing",
-    "railroad",
-    "importlib_metadata",
 ]
 if MIN_SIZE_BUILD:
-    excludes.append("PySide6.QtMultimedia")
+    excludes.extend(
+        [
+            "PySide6.QtMultimedia",
+            # Lean-only optional ecosystems: keep default profile robust.
+            "pandas",
+            "cupy",
+            "cupyx",
+            "matplotlib",
+            "pytest",
+            "psutil",
+            "sphinx",
+            "uarray",
+            "sparse",
+            "scikits",
+            "sksparse",
+            "cffi",
+            "pyparsing",
+            "railroad",
+            "importlib_metadata",
+        ]
+    )
 
 
 _PRUNE_TOC_FRAGMENTS = (

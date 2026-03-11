@@ -6,9 +6,11 @@ from functools import lru_cache
 import importlib
 from pathlib import Path
 import gc
+import os
 import sys
 import threading
 import time
+import types
 from typing import Any, Iterable
 from . import easyocr_token_utils as _easyocr_token_utils
 from . import name_extraction as _ocr_name_extraction
@@ -62,6 +64,11 @@ _EASYOCR_LANG_ALIAS: dict[str, str] = {
 _EASYOCR_RESTRICTED_LANGS: set[str] = {"ch_sim", "ch_tra", "ja", "ko"}
 _EASYOCR_IMPORT_LOCK = threading.Lock()
 _TORCH_RUNTIME_IMPORT_LOCK = threading.RLock()
+_EASYOCR_IMPORT_FAILURE_TTL_FATAL_S = 45.0
+_EASYOCR_IMPORT_FAILURE_TTL_SOFT_S = 15.0
+_EASYOCR_IMPORT_FAILURE_UNTIL_MONO = 0.0
+_EASYOCR_IMPORT_FAILURE_TEXT: str | None = None
+_EASYOCR_IMPORT_FAILURE_FATAL = False
 _OCR_IMPORT_GUARD_ERRORS = (
     AttributeError,
     RuntimeError,
@@ -95,6 +102,131 @@ def _looks_like_torch_docstring_reimport_error(exc: Exception) -> bool:
     return "_has_torch_function" in text and "already has a docstring" in text
 
 
+def _looks_like_torchvision_ops_missing_error(exc: Exception) -> bool:
+    text = str(exc or "").strip().lower()
+    if not text:
+        return False
+    if "operator torchvision::nms does not exist" in text:
+        return True
+    if "torchvision::nms" in text and "does not exist" in text:
+        return True
+    if "couldn't load custom c++ ops" in text and "torchvision" in text:
+        return True
+    if "no module named" in text and "torchvision._c" in text:
+        return True
+    return False
+
+
+def _looks_like_torch_source_unavailable_error(exc: Exception) -> bool:
+    text = str(exc or "").strip().lower()
+    if not text:
+        return False
+    return ("source code" in text) and ("could not get" in text or "not available" in text)
+
+
+def _looks_like_torch_related_error(exc: Exception) -> bool:
+    text = str(exc or "").strip().lower()
+    if not text:
+        return False
+    return "torch" in text or "easyocr" in text
+
+
+def _looks_like_missing_torch_rpc_module_error(exc: Exception) -> bool:
+    text = str(exc or "").strip().lower()
+    if not text:
+        return False
+    return ("no module named" in text) and ("torch.distributed.rpc" in text)
+
+
+def _set_easyocr_import_failure_cache(
+    error: Exception | str,
+    *,
+    fatal: bool,
+    ttl_s: float,
+) -> None:
+    global _EASYOCR_IMPORT_FAILURE_UNTIL_MONO
+    global _EASYOCR_IMPORT_FAILURE_TEXT
+    global _EASYOCR_IMPORT_FAILURE_FATAL
+    error_text = str(error or "").strip() or "unknown-easyocr-import-error"
+    _EASYOCR_IMPORT_FAILURE_TEXT = error_text
+    _EASYOCR_IMPORT_FAILURE_FATAL = bool(fatal)
+    _EASYOCR_IMPORT_FAILURE_UNTIL_MONO = time.monotonic() + max(0.0, float(ttl_s))
+
+
+def _clear_easyocr_import_failure_cache() -> None:
+    global _EASYOCR_IMPORT_FAILURE_UNTIL_MONO
+    global _EASYOCR_IMPORT_FAILURE_TEXT
+    global _EASYOCR_IMPORT_FAILURE_FATAL
+    _EASYOCR_IMPORT_FAILURE_UNTIL_MONO = 0.0
+    _EASYOCR_IMPORT_FAILURE_TEXT = None
+    _EASYOCR_IMPORT_FAILURE_FATAL = False
+
+
+def _active_easyocr_import_failure_cache() -> tuple[str | None, bool]:
+    error_text = str(_EASYOCR_IMPORT_FAILURE_TEXT or "").strip()
+    if not error_text:
+        return None, False
+    if time.monotonic() >= float(_EASYOCR_IMPORT_FAILURE_UNTIL_MONO):
+        _clear_easyocr_import_failure_cache()
+        return None, False
+    return error_text, bool(_EASYOCR_IMPORT_FAILURE_FATAL)
+
+
+def _reader_error_is_global_import_failure(reader_error: str | None) -> bool:
+    token = str(reader_error or "").strip().lower()
+    if not token:
+        return False
+    if "easyocr-import-error:" in token:
+        return True
+    if "operator torchvision::nms does not exist" in token:
+        return True
+    if "_has_torch_function" in token and "already has a docstring" in token:
+        return True
+    if "torchvision._c" in token and "no module named" in token:
+        return True
+    if "couldn't load custom c++ ops" in token and "torchvision" in token:
+        return True
+    return False
+
+
+def _install_torch_distributed_rpc_stub() -> bool:
+    existing = sys.modules.get("torch.distributed.rpc")
+    if existing is not None:
+        return False
+    try:
+        rpc_stub = types.ModuleType("torch.distributed.rpc")
+        rpc_stub.__dict__["__package__"] = "torch.distributed"
+        rpc_stub.__dict__["__file__"] = "<owpicker-rpc-stub>"
+
+        def _rpc_unavailable(*_args, **_kwargs):
+            raise RuntimeError("torch.distributed.rpc unavailable in this runtime build")
+
+        rpc_stub.is_available = lambda: False
+        rpc_stub.init_rpc = _rpc_unavailable
+        rpc_stub.shutdown = _rpc_unavailable
+        rpc_stub.rpc_sync = _rpc_unavailable
+        rpc_stub.rpc_async = _rpc_unavailable
+        rpc_stub.remote = _rpc_unavailable
+        rpc_stub.__all__ = (
+            "is_available",
+            "init_rpc",
+            "shutdown",
+            "rpc_sync",
+            "rpc_async",
+            "remote",
+        )
+        sys.modules["torch.distributed.rpc"] = rpc_stub
+        parent = sys.modules.get("torch.distributed")
+        if parent is not None and getattr(parent, "rpc", None) is None:
+            try:
+                setattr(parent, "rpc", rpc_stub)
+            except _OCR_IMPORT_GUARD_ERRORS:
+                pass
+        return True
+    except _OCR_IMPORT_GUARD_ERRORS:
+        return False
+
+
 def _purge_import_modules(prefixes: tuple[str, ...]) -> int:
     """
     Best-effort cleanup for broken partial-import states.
@@ -123,6 +255,11 @@ def _purge_import_modules(prefixes: tuple[str, ...]) -> int:
 
 def _import_torch_module():
     with _TORCH_RUNTIME_IMPORT_LOCK:
+        is_win_frozen = bool(getattr(sys, "frozen", False)) and sys.platform.startswith("win")
+        if is_win_frozen:
+            # Torch can inspect Python source while importing JIT internals.
+            # In frozen builds this may fail with "could not get source code".
+            os.environ.setdefault("PYTORCH_JIT", "0")
         _ocr_runtime_trace.trace(
             "torch_import:start",
             frozen=bool(getattr(sys, "frozen", False)),
@@ -131,8 +268,25 @@ def _import_torch_module():
         try:
             import torch  # type: ignore
         except _OCR_IMPORT_GUARD_ERRORS as exc:
-            _ocr_runtime_trace.trace("torch_import:error", error=repr(exc))
-            raise
+            if _looks_like_missing_torch_rpc_module_error(exc):
+                installed = _install_torch_distributed_rpc_stub()
+                _ocr_runtime_trace.trace(
+                    "torch_import:rpc_stub",
+                    installed=bool(installed),
+                    error=repr(exc),
+                )
+                if installed:
+                    try:
+                        import torch  # type: ignore
+                    except _OCR_IMPORT_GUARD_ERRORS as retry_exc:
+                        _ocr_runtime_trace.trace("torch_import:error", error=repr(retry_exc))
+                        raise
+                else:
+                    _ocr_runtime_trace.trace("torch_import:error", error=repr(exc))
+                    raise
+            else:
+                _ocr_runtime_trace.trace("torch_import:error", error=repr(exc))
+                raise
     _ocr_runtime_trace.trace(
         "torch_import:ok",
         torch_file=getattr(torch, "__file__", None),
@@ -385,8 +539,16 @@ def _import_easyocr_module() -> tuple[Any | None, str | None]:
     # Serialize easyocr/torch imports to avoid transient partial-init states in
     # packaged Windows runs where OCR may warm up while user triggers OCR.
     with _EASYOCR_IMPORT_LOCK:
+        cached_error, cached_fatal = _active_easyocr_import_failure_cache()
+        if cached_error:
+            _ocr_runtime_trace.trace(
+                "easyocr_import:cached_error",
+                fatal=bool(cached_fatal),
+                error=cached_error,
+            )
+            return None, f"easyocr-import-error:{cached_error}"
         is_win_frozen = bool(getattr(sys, "frozen", False)) and sys.platform.startswith("win")
-        attempts = 2 if is_win_frozen else 4
+        attempts = 3 if is_win_frozen else 4
         delay_s = 0.15
         last_exc: Exception | None = None
         previous_transient = False
@@ -398,7 +560,7 @@ def _import_easyocr_module() -> tuple[Any | None, str | None]:
             executable=sys.executable,
         )
         for attempt in range(attempts):
-            if previous_transient and (not is_win_frozen):
+            if previous_transient:
                 purged = _purge_import_modules(("easyocr", "torch", "torchvision"))
                 _ocr_runtime_trace.trace(
                     "easyocr_import:purge_modules",
@@ -436,26 +598,50 @@ def _import_easyocr_module() -> tuple[Any | None, str | None]:
                     attempt=int(attempt + 1),
                     easyocr_file=getattr(easyocr, "__file__", None),
                 )
+                _clear_easyocr_import_failure_cache()
                 return easyocr, None
             except _OCR_IMPORT_GUARD_ERRORS as exc:
                 last_exc = exc
+                fatal = (
+                    _looks_like_torch_docstring_reimport_error(exc)
+                    or _looks_like_torch_source_unavailable_error(exc)
+                    or _looks_like_torchvision_ops_missing_error(exc)
+                )
                 transient = (
                     _looks_like_partial_torch_import_error(exc)
-                    or _looks_like_torch_docstring_reimport_error(exc)
                 )
                 previous_transient = bool(transient)
                 _ocr_runtime_trace.trace(
                     "easyocr_import:error",
                     attempt=int(attempt + 1),
+                    fatal=bool(fatal),
                     transient=bool(transient),
                     error=repr(exc),
                 )
-                # In frozen Windows builds, repeating torch re-import attempts
-                # can enter a persistent docstring/circular state. Fail fast and
-                # let the next app run start from a clean interpreter.
-                if transient and is_win_frozen:
+                if transient or _looks_like_torch_related_error(exc):
+                    purged = _purge_import_modules(("easyocr", "torch", "torchvision"))
+                    _ocr_runtime_trace.trace(
+                        "easyocr_import:purge_modules_on_error",
+                        attempt=int(attempt + 1),
+                        removed=int(purged),
+                    )
+                    try:
+                        gc.collect()
+                    except _OCR_IMPORT_GUARD_ERRORS:
+                        pass
+                if fatal:
+                    _set_easyocr_import_failure_cache(
+                        exc,
+                        fatal=True,
+                        ttl_s=_EASYOCR_IMPORT_FAILURE_TTL_FATAL_S,
+                    )
                     return None, f"easyocr-import-error:{exc}"
                 if (not transient) or attempt >= (attempts - 1):
+                    _set_easyocr_import_failure_cache(
+                        exc,
+                        fatal=False,
+                        ttl_s=_EASYOCR_IMPORT_FAILURE_TTL_SOFT_S,
+                    )
                     return None, f"easyocr-import-error:{exc}"
                 try:
                     time.sleep(delay_s * float(attempt + 1))
@@ -581,7 +767,16 @@ def _resolve_easyocr_group_readers(
             quiet=quiet,
         )
         if reader is None:
-            errors.append(f"{'+'.join(group)}:{reader_error or 'easyocr-reader-not-ready'}")
+            group_name = "+".join(group)
+            resolved_error = str(reader_error or "easyocr-reader-not-ready")
+            errors.append(f"{group_name}:{resolved_error}")
+            if _reader_error_is_global_import_failure(resolved_error):
+                _ocr_runtime_trace.trace(
+                    "easyocr_reader:global_import_failure",
+                    group=group_name,
+                    error=resolved_error,
+                )
+                break
             continue
         readers.append((group, reader))
     return readers, errors, groups
@@ -602,6 +797,8 @@ def _should_try_easyocr_english_fallback(
     parsed_langs: tuple[str, ...],
     reader_errors: Iterable[str],
 ) -> bool:
+    if any(_reader_error_is_global_import_failure(err) for err in list(reader_errors or ())):
+        return False
     if "en" not in tuple(parsed_langs or ()):
         return False
     if len(tuple(parsed_langs or ())) <= 1:
