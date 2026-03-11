@@ -2,6 +2,8 @@
 
 Overwatch 2 Lineup-/Hero-/Map-Picker mit drei Rollenrädern, Hero-Ban-Modus, Open-Queue-Option und OCR-Import.
 
+Hinweis: Dieses Projekt ist aus einem Vibe-Code-Ansatz entstanden und wird schrittweise refaktoriert.
+
 ## Start
 
 ```bash
