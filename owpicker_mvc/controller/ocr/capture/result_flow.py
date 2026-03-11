@@ -21,6 +21,12 @@ def handle_worker_result(
     qtwidgets,
     ocr_runtime_trace_module,
 ) -> None:
+    if bool(job.get("_timed_out", False)):
+        ocr_runtime_trace_module.trace(
+            "ocr_async_import:worker_result_ignored_after_timeout",
+            role=str(role or ""),
+        )
+        return
     finalize_job_fn()
     ocr_runtime_trace_module.trace(
         "ocr_async_import:worker_result",
@@ -130,6 +136,13 @@ def handle_worker_error(
     qtwidgets,
     ocr_runtime_trace_module,
 ) -> None:
+    if bool(job.get("_timed_out", False)):
+        ocr_runtime_trace_module.trace(
+            "ocr_async_import:worker_error_ignored_after_timeout",
+            role=str(role or ""),
+            reason=str(reason or "worker-error"),
+        )
+        return
     finalize_job_fn()
     ocr_runtime_trace_module.trace(
         "ocr_async_import:worker_error",

@@ -50,6 +50,13 @@ def _coerce_str(value: Any, default: str = "") -> str:
     return str(default)
 
 
+def _coerce_choice(value: Any, choices: set[str], default: str) -> str:
+    token = _coerce_str(value, default).lower()
+    if token in choices:
+        return token
+    return str(default)
+
+
 def _coerce_unique_tokens(value: Any) -> list[str]:
     if isinstance(value, str):
         raw = [token.strip() for token in value.split(",")]
@@ -250,9 +257,14 @@ class AppSettings:
             easyocr_gpu=_coerce_str(values.get("OCR_EASYOCR_GPU", "auto"), "auto"),
             easyocr_download_enabled=_coerce_bool(values.get("OCR_EASYOCR_DOWNLOAD_ENABLED", False)),
             timeout_s=max(0.5, _coerce_float(values.get("OCR_TIMEOUT_S", 8.0), 8.0)),
-            timeout_s_windows=max(0.5, _coerce_float(values.get("OCR_TIMEOUT_S_WINDOWS", 6.0), 6.0)),
+            timeout_s_windows=max(0.5, _coerce_float(values.get("OCR_TIMEOUT_S_WINDOWS", 8.0), 8.0)),
+            low_end_mode=_coerce_choice(values.get("OCR_LOW_END_MODE", "auto"), {"auto", "on", "off"}, "auto"),
+            low_end_cpu_count_max=max(1, _coerce_int(values.get("OCR_LOW_END_CPU_COUNT_MAX", 4), 4)),
             runtime_sleep_until_used=_coerce_bool(values.get("OCR_RUNTIME_SLEEP_UNTIL_USED", True)),
             background_preload_enabled=_coerce_bool(values.get("OCR_BACKGROUND_PRELOAD_ENABLED", True)),
+            background_preload_low_end_enabled=_coerce_bool(
+                values.get("OCR_BACKGROUND_PRELOAD_LOW_END_ENABLED", False)
+            ),
             background_preload_delay_ms=max(
                 0,
                 _coerce_int(values.get("OCR_BACKGROUND_PRELOAD_DELAY_MS", 2500), 2500),
@@ -294,7 +306,7 @@ class AppSettings:
             ),
             release_cache_on_spin=_coerce_bool(values.get("OCR_RELEASE_CACHE_ON_SPIN", False)),
             debug_show_report=_coerce_bool(values.get("OCR_DEBUG_SHOW_REPORT", False)),
-            debug_log_to_file=_coerce_bool(values.get("OCR_DEBUG_LOG_TO_FILE", True)),
+            debug_log_to_file=_coerce_bool(values.get("OCR_DEBUG_LOG_TO_FILE", False)),
         )
         min_dur = max(0, _coerce_int(values.get("MIN_DURATION_MS", 0), 0))
         max_dur = max(min_dur, _coerce_int(values.get("MAX_DURATION_MS", 10000), 10000))

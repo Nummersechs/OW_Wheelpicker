@@ -443,6 +443,15 @@ def _replace_names_if_better(
     return list(current)
 
 
+def _should_abort_ocr_flow(should_abort_fn) -> bool:
+    if not callable(should_abort_fn):
+        return False
+    try:
+        return bool(should_abort_fn())
+    except Exception:
+        return False
+
+
 def _order_and_collapse_by_trace(
     names: list[str],
     *,
@@ -520,6 +529,7 @@ def _collect_optional_pass_flow(
     primary_names: list[str],
     primary_texts: list[str],
     primary_errors: list[str],
+    should_abort_fn=None,
 ) -> _OCRPassFlowState:
     state = _OCRPassFlowState(
         names=list(primary_names),
@@ -531,6 +541,10 @@ def _collect_optional_pass_flow(
         row_runs=[],
         row_preferred=False,
     )
+
+    if _should_abort_ocr_flow(should_abort_fn):
+        state.errors.append("ocr-flow-aborted")
+        return state
 
     if _should_run_recall_retry(runtime_cfg, primary_names):
         retry_cfg = _build_recall_retry_cfg(runtime_cfg)
@@ -548,15 +562,27 @@ def _collect_optional_pass_flow(
         if _prefer_retry_candidates(primary_names, state.retry_names, runtime_cfg):
             state.names = list(state.retry_names)
 
+    if _should_abort_ocr_flow(should_abort_fn):
+        state.errors.append("ocr-flow-aborted")
+        return state
+
     if len(state.names) > max(0, int(runtime_cfg.get("recall_retry_max_candidates", 7))):
         strict_cfg = _build_strict_extraction_cfg(runtime_cfg)
         strict_names = _extract_names_from_texts(ocr_import, state.merged_texts, strict_cfg)
         state.names = _replace_names_if_better(state.names, strict_names, cfg=runtime_cfg)
 
+    if _should_abort_ocr_flow(should_abort_fn):
+        state.errors.append("ocr-flow-aborted")
+        return state
+
     if bool(runtime_cfg.get("recall_relax_support_on_low_count", True)) and _is_low_count_candidate_set(runtime_cfg, state.names):
         relaxed_cfg = _build_relaxed_support_cfg(runtime_cfg)
         relaxed_names = _extract_names_from_texts(ocr_import, state.merged_texts, relaxed_cfg)
         state.names = _replace_names_if_better(state.names, relaxed_names, cfg=runtime_cfg)
+
+    if _should_abort_ocr_flow(should_abort_fn):
+        state.errors.append("ocr-flow-aborted")
+        return state
 
     row_cfg = dict(runtime_cfg)
     row_cfg["primary_candidate_count"] = len(list(primary_names or []))
@@ -756,6 +782,20 @@ def _extract_names_from_ocr_files(
     runtime_cfg["precount_rows_visual"] = int(visual_precount_rows or 0)
     runtime_cfg["precount_rows"] = int(visual_precount_rows or 0)
     runtime_cfg["precount_rows_primary_stable"] = 0
+    started_mono = time.monotonic()
+    timeout_budget_s = max(1.0, float(runtime_cfg.get("timeout_s", 8.0)))
+    budget_scale = max(0.2, float(runtime_cfg.get("optional_pass_budget_scale", 1.15)))
+
+    def _should_abort_optional_passes() -> bool:
+        if callable(cancel_check):
+            try:
+                if bool(cancel_check()):
+                    return True
+            except Exception:
+                pass
+        elapsed = float(time.monotonic() - started_mono)
+        return elapsed >= float(timeout_budget_s * budget_scale)
+
     line_parse_ctx = _OCRLineParseContext(ocr_import, runtime_cfg)
     debug_requested = (
         bool(runtime_cfg.get("debug_show_report", False))
@@ -795,6 +835,11 @@ def _extract_names_from_ocr_files(
         )
 
     primary_names = _extract_names_from_texts(ocr_import, primary_texts, runtime_cfg)
+    if _should_abort_optional_passes():
+        merged_text = _merge_ocr_texts_unique_lines(primary_texts)
+        error_text = "; ".join(primary_errors) if primary_errors else None
+        return primary_names, merged_text, error_text
+
     flow_state = _collect_optional_pass_flow(
         paths=paths,
         ocr_cmd=ocr_cmd,
@@ -804,6 +849,7 @@ def _extract_names_from_ocr_files(
         primary_names=primary_names,
         primary_texts=primary_texts,
         primary_errors=primary_errors,
+        should_abort_fn=_should_abort_optional_passes,
     )
 
     cfg_effective, seed_names = _build_effective_cfg_and_seed_names(

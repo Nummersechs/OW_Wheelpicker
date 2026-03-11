@@ -312,13 +312,16 @@ class NamesListPanel(QtWidgets.QWidget):
         ui_helpers.set_fixed_width_from_translations(
             self.btn_toggle_all_names,
             ["wheel.select_all", "wheel.deselect_all"],
-            padding=26,
+            # QPushButton styles add substantial horizontal padding; keep enough
+            # reserve so longer DE labels do not clip on Windows.
+            padding=44,
             prefixes=["☑ ", "☐ "],
         )
         ui_helpers.set_fixed_width_from_translations(
             self.btn_sort_names,
             ["wheel.sort_names"],
-            padding=24,
+            # Same rationale as above; "A→Z sortieren" should always fit.
+            padding=44,
         )
         self._apply_panel_width_constraints()
         self._apply_fixed_visible_rows_height()

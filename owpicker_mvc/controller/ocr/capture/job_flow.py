@@ -20,6 +20,14 @@ def build_job_callbacks(
         if bool(job.get("_finalized", False)):
             return
         job["_finalized"] = True
+        for timer_key in ("watchdog_timer", "watchdog_force_timer"):
+            timer = job.get(timer_key)
+            if timer is None:
+                continue
+            try:
+                timer.stop()
+            except Exception:
+                pass
         cleanup_temp_paths_fn(list(job.get("paths") or []))
         hide_ocr_busy_overlay_fn(mw, active=busy_overlay_shown)
         restore_override_cursor_fn()
@@ -40,6 +48,14 @@ def build_job_callbacks(
                 setattr(mw, "_ocr_async_job", None)
 
     def cleanup_finished_job() -> None:
+        for timer_key in ("watchdog_timer", "watchdog_force_timer"):
+            timer = job.get(timer_key)
+            if timer is None:
+                continue
+            try:
+                timer.stop()
+            except Exception:
+                pass
         current = getattr(mw, "_ocr_async_job", None)
         if current is job:
             setattr(mw, "_ocr_async_job", None)

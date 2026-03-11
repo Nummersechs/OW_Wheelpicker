@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 import time
 
 from . import error_flow as _ocr_capture_error_flow
@@ -104,6 +105,45 @@ def start_ocr_async_import(
             ocr_runtime_trace_module=ocr_runtime_trace_module,
         )
 
+        timeout_default_s = 38.0
+        try:
+            timeout_s = float(mw._cfg("OCR_ASYNC_IMPORT_TIMEOUT_S", timeout_default_s))
+        except (TypeError, ValueError):
+            timeout_s = timeout_default_s
+        if sys.platform.startswith("win"):
+            try:
+                timeout_s = float(mw._cfg("OCR_ASYNC_IMPORT_TIMEOUT_S_WINDOWS", timeout_s))
+            except (TypeError, ValueError):
+                pass
+        try:
+            terminate_after_ms = int(mw._cfg("OCR_ASYNC_IMPORT_TIMEOUT_TERMINATE_MS", 1800))
+        except (TypeError, ValueError):
+            terminate_after_ms = 1800
+        wait_cursor_default = not sys.platform.startswith("win")
+        try:
+            use_wait_cursor = bool(mw._cfg("OCR_ASYNC_WAIT_CURSOR", wait_cursor_default))
+        except (TypeError, ValueError):
+            use_wait_cursor = bool(wait_cursor_default)
+        if sys.platform.startswith("win"):
+            try:
+                use_wait_cursor = bool(mw._cfg("OCR_ASYNC_WAIT_CURSOR_WINDOWS", False))
+            except (TypeError, ValueError):
+                use_wait_cursor = False
+
+        def _handle_watchdog_timeout() -> None:
+            timeout_reason = f"timeout-after-{max(0.0, float(timeout_s)):.1f}s"
+            _finalize_job()
+            setattr(mw, "_ocr_async_job", None)
+            try:
+                mw._update_role_ocr_buttons_enabled()
+            except Exception:
+                pass
+            qtwidgets.QMessageBox.warning(
+                mw,
+                i18n_module.t("ocr.error_title"),
+                i18n_module.t("ocr.error_run_failed", reason=timeout_reason),
+            )
+
         _ocr_capture_thread_flow.connect_async_job_signals(
             job=job,
             thread=thread,
@@ -114,10 +154,22 @@ def start_ocr_async_import(
             cleanup_finished_job_fn=_cleanup_finished_job,
             qtcore=qtcore,
         )
+        _ocr_capture_thread_flow.install_async_job_watchdog(
+            mw,
+            job=job,
+            thread=thread,
+            worker=worker,
+            timeout_s=float(timeout_s),
+            terminate_after_ms=int(terminate_after_ms),
+            on_timeout_fn=_handle_watchdog_timeout,
+            qtcore=qtcore,
+            ocr_runtime_trace_module=ocr_runtime_trace_module,
+        )
         _ocr_capture_thread_flow.start_async_job_thread(
             job=job,
             thread=thread,
             request_started_at=float(request_started_at),
+            use_wait_cursor=bool(use_wait_cursor),
             qtcore=qtcore,
             qtwidgets=qtwidgets,
             ocr_runtime_trace_module=ocr_runtime_trace_module,

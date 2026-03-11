@@ -681,14 +681,14 @@ class ResultOverlay(QtWidgets.QWidget):
                     max_w = max(max_w, fm.horizontalAdvance(str(txt)))
             return max_w + 48
 
-        # Keep result actions compact: "OK" should not inherit the long disable-button width.
+        # Size each button family to the longest translated text across all languages.
         ok_width = max_width(("overlay.button_ok",))
-        ok_width = max(96, min(int(ok_width), 140))
+        ok_width = max(96, int(ok_width))
         self.btn_close.setMinimumWidth(ok_width)
         self.btn_close.setMaximumWidth(ok_width)
 
         disable_width = max_width(("overlay.button_disable_results",))
-        disable_width = max(200, min(int(disable_width), 320))
+        disable_width = max(200, int(disable_width))
         self.btn_disable.setMinimumWidth(disable_width)
         self.btn_disable.setMaximumWidth(disable_width)
 
@@ -705,8 +705,7 @@ class ResultOverlay(QtWidgets.QWidget):
             btn.setMinimumWidth(delete_width)
             btn.setMaximumWidth(delete_width)
 
-        # Keep OCR action buttons compact enough to avoid overlap on smaller windows.
-        ocr_width = max_width(("ocr.pick_cancel", "ocr.pick_replace", "ocr.pick_confirm")) - 20
+        ocr_width = max_width(("ocr.pick_cancel", "ocr.pick_replace", "ocr.pick_confirm"))
         ocr_width = max(120, int(ocr_width))
         for btn in (self.btn_ocr_cancel, self.btn_ocr_replace, self.btn_ocr_confirm):
             btn.setMinimumWidth(ocr_width)

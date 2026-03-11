@@ -2,9 +2,39 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
+import sys
 import tempfile
 
 from PySide6 import QtCore, QtGui, QtWidgets
+
+
+def _responsive_delay_ms(delay_ms: int, *, time_module) -> None:
+    wait_ms = max(0, int(delay_ms))
+    if wait_ms <= 0:
+        return
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        time_module.sleep(wait_ms / 1000.0)
+        return
+    try:
+        target_mono = float(time_module.monotonic()) + (wait_ms / 1000.0)
+    except Exception:
+        time_module.sleep(wait_ms / 1000.0)
+        return
+
+    while True:
+        now_mono = float(time_module.monotonic())
+        remaining_s = target_mono - now_mono
+        if remaining_s <= 0:
+            break
+        try:
+            max_time_ms = max(1, min(25, int(remaining_s * 1000.0)))
+            app.processEvents(QtCore.QEventLoop.AllEvents, max_time_ms)
+        except Exception:
+            QtWidgets.QApplication.processEvents()
+        sleep_s = min(0.02, max(0.0, remaining_s))
+        if sleep_s > 0:
+            time_module.sleep(sleep_s)
 
 
 def restore_main_window_after_capture(
@@ -141,11 +171,11 @@ def capture_region_with_qt_selector(
                 mw.showMinimized()
                 QtWidgets.QApplication.processEvents()
                 if minimize_delay_ms > 0:
-                    time_module.sleep(max(0, minimize_delay_ms) / 1000.0)
+                    _responsive_delay_ms(minimize_delay_ms, time_module=time_module)
             mw.hide()
             QtWidgets.QApplication.processEvents()
             if prepare_delay_ms > 0:
-                time_module.sleep(max(0, prepare_delay_ms) / 1000.0)
+                _responsive_delay_ms(prepare_delay_ms, time_module=time_module)
 
         try:
             return select_region_from_primary_screen_fn(
@@ -196,7 +226,7 @@ def capture_region_for_ocr(
 
         delay_ms = max(0, int(mw._cfg("OCR_CAPTURE_PREPARE_DELAY_MS", 120)))
         if delay_ms > 0:
-            time_module.sleep(delay_ms / 1000.0)
+            _responsive_delay_ms(delay_ms, time_module=time_module)
 
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
             capture_path = Path(tmp.name)
@@ -226,6 +256,25 @@ def capture_region_for_ocr(
 def build_ocr_pixmap_variants(mw, source: QtGui.QPixmap) -> list[QtGui.QPixmap]:
     variants: list[QtGui.QPixmap] = []
     seen: set[tuple[int, int, int]] = set()
+    yield_events = bool(mw._cfg("OCR_UI_YIELD_DURING_VARIANT_BUILD", sys.platform.startswith("win")))
+    try:
+        yield_max_ms = max(1, int(mw._cfg("OCR_UI_YIELD_MAX_MS", 8)))
+    except (TypeError, ValueError):
+        yield_max_ms = 8
+
+    def _yield_ui_events() -> None:
+        if not yield_events:
+            return
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return
+        try:
+            app.processEvents(QtCore.QEventLoop.AllEvents, int(yield_max_ms))
+        except Exception:
+            try:
+                QtWidgets.QApplication.processEvents()
+            except Exception:
+                pass
 
     def _add_variant(pix: QtGui.QPixmap | None) -> None:
         if pix is None or pix.isNull():
@@ -235,6 +284,7 @@ def build_ocr_pixmap_variants(mw, source: QtGui.QPixmap) -> list[QtGui.QPixmap]:
             return
         seen.add(key)
         variants.append(pix)
+        _yield_ui_events()
 
     def _left_crop_variant(pix: QtGui.QPixmap) -> QtGui.QPixmap | None:
         if pix.isNull():
@@ -304,4 +354,5 @@ def build_ocr_pixmap_variants(mw, source: QtGui.QPixmap) -> list[QtGui.QPixmap]:
             _add_variant(gray_scaled_fast)
             _add_variant(_left_crop_variant(gray_scaled_fast))
             _add_variant(_mono_variant(gray_scaled_fast))
+    _yield_ui_events()
     return variants

@@ -82,9 +82,12 @@ class OcrSettings:
     easyocr_gpu: str = "auto"
     easyocr_download_enabled: bool = False
     timeout_s: float = 8.0
-    timeout_s_windows: float = 6.0
+    timeout_s_windows: float = 8.0
+    low_end_mode: str = "auto"
+    low_end_cpu_count_max: int = 4
     runtime_sleep_until_used: bool = True
     background_preload_enabled: bool = True
+    background_preload_low_end_enabled: bool = False
     background_preload_delay_ms: int = 2500
     background_preload_min_uptime_ms: int = 8000
     background_preload_allow_during_startup: bool = True
@@ -98,7 +101,7 @@ class OcrSettings:
     idle_cache_release_busy_retry_ms: int = 2500
     release_cache_on_spin: bool = False
     debug_show_report: bool = False
-    debug_log_to_file: bool = True
+    debug_log_to_file: bool = False
 
 
 @dataclass(frozen=True)

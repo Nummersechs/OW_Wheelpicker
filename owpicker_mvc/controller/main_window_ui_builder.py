@@ -149,6 +149,7 @@ class MainWindowUIBuilderMixin:
         mode_row.setContentsMargins(0, 2, 0, 4)
         mode_row.setSpacing(ui_tokens.SECTION_SPACING)
         self.lbl_player_profile = QtWidgets.QLabel(i18n.t("players.profile_label"))
+        self.lbl_player_profile.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Preferred)
         self.player_profile_dropdown = PlayerProfileDropdown()
         self.player_profile_dropdown.setMinimumWidth(158)
         self.player_profile_dropdown.setFixedHeight(ui_tokens.INPUT_HEIGHT_MD)
@@ -161,6 +162,7 @@ class MainWindowUIBuilderMixin:
         mode_row.addSpacing(10)
         mode_row.addStretch(1)
         self.lbl_mode = QtWidgets.QLabel(i18n.t("label.mode"))
+        self.lbl_mode.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Preferred)
         self.lbl_mode.setToolTip(i18n.t("label.mode_tooltip"))
         mode_row.addWidget(self.lbl_mode)
         mode_row.addWidget(self.btn_mode_players)
@@ -169,6 +171,33 @@ class MainWindowUIBuilderMixin:
         mode_row.addWidget(self.btn_mode_maps)
         mode_row.addStretch(1)
         root.addLayout(mode_row)
+        self._apply_translation_width_constraints()
+
+    def _apply_translation_width_constraints(self) -> None:
+        if hasattr(self, "lbl_player_profile"):
+            ui_helpers.set_minimum_width_from_translations(
+                self.lbl_player_profile,
+                ["players.profile_label"],
+                padding=12,
+            )
+        if hasattr(self, "lbl_mode"):
+            ui_helpers.set_minimum_width_from_translations(
+                self.lbl_mode,
+                ["label.mode"],
+                padding=12,
+            )
+        if hasattr(self, "lbl_anim_duration"):
+            ui_helpers.set_minimum_width_from_translations(
+                self.lbl_anim_duration,
+                ["controls.anim_duration"],
+                padding=12,
+            )
+        if hasattr(self, "lbl_open_count"):
+            ui_helpers.set_minimum_width_from_translations(
+                self.lbl_open_count,
+                ["controls.open_count_label"],
+                padding=12,
+            )
 
     def _capture_players_state_for_profiles(self) -> None:
         if getattr(self, "current_mode", "") != "players":
@@ -489,6 +518,7 @@ class MainWindowUIBuilderMixin:
         self.spin_mode_toggle.setToolTip(i18n.t("controls.spin_mode_tooltip"))
         self.spin_mode_toggle.valueChanged.connect(self._update_spin_all_enabled)
         self.lbl_open_count = QtWidgets.QLabel(i18n.t("controls.open_count_label"))
+        self.lbl_open_count.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Preferred)
         self.lbl_open_count.setToolTip(i18n.t("controls.open_count_tooltip"))
         self.open_count_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         self.open_count_slider.setRange(1, 6)
@@ -502,6 +532,7 @@ class MainWindowUIBuilderMixin:
         self.lbl_open_count_value.setToolTip(i18n.t("controls.open_count_tooltip"))
         controls.addStretch(1)
         self.lbl_anim_duration = QtWidgets.QLabel(i18n.t("controls.anim_duration"))
+        self.lbl_anim_duration.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Preferred)
         controls.addWidget(self.lbl_anim_duration)
         self.duration.setFixedHeight(ui_tokens.SLIDER_HEIGHT_MD)
         controls.addWidget(self.duration)
@@ -520,6 +551,7 @@ class MainWindowUIBuilderMixin:
         self.btn_cancel_spin.clicked.connect(self._cancel_spin)
         controls.addWidget(self.btn_cancel_spin)
         controls.addStretch(1)
+        self._apply_translation_width_constraints()
         self.lbl_open_count.setVisible(False)
         self.open_count_slider.setVisible(False)
         self.lbl_open_count_value.setVisible(False)

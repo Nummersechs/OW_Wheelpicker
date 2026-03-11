@@ -308,6 +308,8 @@ class MainWindowAppearanceMixin:
             self.open_count_slider.setToolTip(i18n.t("controls.open_count_tooltip"))
         if hasattr(self, "lbl_open_count_value"):
             self.lbl_open_count_value.setToolTip(i18n.t("controls.open_count_tooltip"))
+        if hasattr(self, "_apply_translation_width_constraints"):
+            self._apply_translation_width_constraints()
         if hasattr(self, "btn_all_players"):
             self.btn_all_players.setText(i18n.t("players.list_button"))
             self.btn_all_players.setToolTip(i18n.t("players.list_button_tooltip"))

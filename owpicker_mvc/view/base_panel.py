@@ -134,7 +134,9 @@ class BasePanel(QtWidgets.QWidget):
         ui_helpers.set_fixed_width_from_translations(
             self.btn_local_spin,
             ["wheel.spin_role", "wheel.spin_map", "wheel.spin_single_map"],
-            padding=22,
+            # Keep enough reserve for long DE text ("Diese Rolle drehen")
+            # plus QPushButton horizontal style padding on Windows.
+            padding=48,
         )
         ui_helpers.set_fixed_width_from_translations(
             self.btn_include_in_all,

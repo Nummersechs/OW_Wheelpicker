@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 
 def build_runtime_cfg_snapshot(mw, *, sys_platform: str) -> dict:
     def _parse_psm_values(raw) -> list[int]:
@@ -53,6 +55,23 @@ def build_runtime_cfg_snapshot(mw, *, sys_platform: str) -> dict:
     def _cfg_optional_str(cfg_key: str, default: str = "") -> str | None:
         return str(mw._cfg(cfg_key, default)).strip() or None
 
+    def _is_low_end_mode_active() -> bool:
+        token = str(mw._cfg("OCR_LOW_END_MODE", "auto") or "auto").strip().lower()
+        if token in {"on", "true", "1", "yes"}:
+            return True
+        if token in {"off", "false", "0", "no"}:
+            return False
+        if sys_platform != "win32":
+            return False
+        try:
+            threshold = max(1, int(mw._cfg("OCR_LOW_END_CPU_COUNT_MAX", 4)))
+        except (TypeError, ValueError):
+            threshold = 4
+        cpu_count = int(os.cpu_count() or 0)
+        if cpu_count <= 0:
+            return False
+        return cpu_count <= threshold
+
     engine = str(mw._cfg("OCR_ENGINE", "easyocr")).strip().casefold()
     if engine in {"easy", "easy-ocr", "easy_ocr"}:
         engine = "easyocr"
@@ -75,6 +94,11 @@ def build_runtime_cfg_snapshot(mw, *, sys_platform: str) -> dict:
     timeout_s = float(mw._cfg("OCR_TIMEOUT_S", 8.0))
     if sys_platform == "win32":
         timeout_s = float(mw._cfg("OCR_TIMEOUT_S_WINDOWS", timeout_s))
+    optional_pass_budget_scale = float(mw._cfg("OCR_OPTIONAL_PASS_BUDGET_SCALE", 1.15))
+    if sys_platform == "win32":
+        optional_pass_budget_scale = float(
+            mw._cfg("OCR_OPTIONAL_PASS_BUDGET_SCALE_WINDOWS", optional_pass_budget_scale)
+        )
     retry_min_candidates = int(mw._cfg("OCR_RECALL_RETRY_MIN_CANDIDATES", 5))
     retry_max_variants = int(mw._cfg("OCR_RECALL_RETRY_MAX_VARIANTS", 4))
     if retry_max_variants < 0:
@@ -109,6 +133,7 @@ def build_runtime_cfg_snapshot(mw, *, sys_platform: str) -> dict:
         "easyocr_gpu": _parse_easyocr_gpu_value(mw._cfg("OCR_EASYOCR_GPU", "auto")),
         "quiet_mode": quiet_mode,
         "timeout_s": timeout_s,
+        "optional_pass_budget_scale": optional_pass_budget_scale,
         "debug_show_report": debug_show_report,
         "debug_include_report_text": debug_include_report_text,
         "debug_log_to_file": debug_log_to_file,
@@ -300,4 +325,24 @@ def build_runtime_cfg_snapshot(mw, *, sys_platform: str) -> dict:
             ]
         )
     )
+
+    low_end_mode_active = _is_low_end_mode_active()
+    cfg["low_end_mode"] = bool(low_end_mode_active)
+    if low_end_mode_active:
+        # Keep weak systems responsive: skip expensive optional passes and
+        # heavy debug/report paths by default.
+        cfg["stop_after_variant_success"] = True
+        cfg["max_variants"] = 1
+        cfg["recall_retry_enabled"] = False
+        cfg["row_pass_always_run"] = False
+        cfg["row_pass_include_mono"] = False
+        cfg["row_pass_full_width_fallback"] = False
+        cfg["row_pass_max_rows"] = min(int(cfg.get("row_pass_max_rows", 12)), 8)
+        cfg["optional_pass_budget_scale"] = min(float(cfg.get("optional_pass_budget_scale", 1.0)), 0.90)
+        cfg["debug_show_report"] = False
+        cfg["debug_include_report_text"] = False
+        cfg["debug_log_to_file"] = False
+        cfg["debug_line_analysis"] = False
+        cfg["debug_trace_line_mapping"] = False
+
     return cfg

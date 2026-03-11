@@ -1,16 +1,14 @@
 import os
 import sys
 from pathlib import Path
-
-from services.app_settings import AppSettings
-from services import settings_provider
+from typing import Any
 
 _QUIET_QT_MESSAGE_HANDLER = None
 _SINGLE_INSTANCE_LOCK = None
 
 
-def _apply_quiet_mode(settings: AppSettings):
-    """Leitet Ausgabe um, bevor Qt geladen wird."""
+def _apply_quiet_mode(settings: Any):
+    """Leitet Ausgabe so früh wie möglich in den Quiet-Modus um."""
     if not bool(settings.runtime.quiet):
         return
     os.environ.setdefault("QT_LOGGING_RULES", "*=false")
@@ -32,7 +30,7 @@ def _apply_quiet_mode(settings: AppSettings):
         pass
 
 
-def _install_quiet_qt_handler(QtCore, settings: AppSettings):
+def _install_quiet_qt_handler(QtCore, settings: Any):
     """Unterdrückt Qt Runtime-Messages zusätzlich zum Env-Filter."""
     if not bool(settings.runtime.quiet):
         return
@@ -48,7 +46,7 @@ def _install_quiet_qt_handler(QtCore, settings: AppSettings):
         pass
 
 
-def _acquire_single_instance_lock(QtCore, settings: AppSettings) -> bool:
+def _acquire_single_instance_lock(QtCore, settings: Any) -> bool:
     """Prevent duplicate app launches on Windows double-click."""
     if not sys.platform.startswith("win"):
         return True
@@ -78,23 +76,7 @@ def _acquire_single_instance_lock(QtCore, settings: AppSettings) -> bool:
     return True
 
 
-def main():
-    import config
-
-    settings = settings_provider.set_settings(AppSettings.from_module(config))
-    # Quiet-Modus so früh wie möglich aktivieren (vor Qt-Imports)
-    _apply_quiet_mode(settings)
-
-    from PySide6 import QtCore, QtGui, QtWidgets  # nach Quiet-Setup laden
-    from utils.qt_runtime import apply_preferred_app_font
-    _install_quiet_qt_handler(QtCore, settings)
-    if not _acquire_single_instance_lock(QtCore, settings):
-        return
-
-    app = QtWidgets.QApplication([])
-    app.setQuitOnLastWindowClosed(True)
-    apply_preferred_app_font(app)
-
+def _show_boot_splash(app, QtCore, QtGui, QtWidgets, text: str):
     splash = None
     try:
         pixmap = QtGui.QPixmap(520, 180)
@@ -105,7 +87,7 @@ def main():
         font.setPointSize(max(10, int(font.pointSize()) + 2))
         font.setBold(True)
         painter.setFont(font)
-        painter.drawText(pixmap.rect(), QtCore.Qt.AlignCenter, "Overwatch Wheel Picker\nStarting...")
+        painter.drawText(pixmap.rect(), QtCore.Qt.AlignCenter, str(text or "Starting..."))
         painter.end()
         splash = QtWidgets.QSplashScreen(pixmap)
         splash.setWindowFlag(QtCore.Qt.WindowStaysOnTopHint, True)
@@ -113,12 +95,58 @@ def main():
         app.processEvents()
     except (RuntimeError, TypeError, ValueError):
         splash = None
+    return splash
+
+
+def _update_boot_splash(splash, app, QtCore, QtGui, text: str) -> None:
+    if splash is None:
+        return
+    try:
+        splash.showMessage(
+            str(text or ""),
+            QtCore.Qt.AlignCenter | QtCore.Qt.AlignBottom,
+            QtGui.QColor("#ffffff"),
+        )
+        app.processEvents(QtCore.QEventLoop.AllEvents, 50)
+    except (RuntimeError, TypeError, ValueError):
+        pass
+
+
+def main():
+    # First visible feedback as early as possible for slower systems.
+    from PySide6 import QtCore, QtGui, QtWidgets
+
+    app = QtWidgets.QApplication([])
+    splash = _show_boot_splash(app, QtCore, QtGui, QtWidgets, "Overwatch Wheel Picker\nStarting...")
+    app.setQuitOnLastWindowClosed(True)
+    _update_boot_splash(splash, app, QtCore, QtGui, "Overwatch Wheel Picker\nLoading settings...")
+
+    # Defer heavy imports until after splash is visible.
+    from services.app_settings import AppSettings
+    from services import settings_provider
+    import config
+
+    settings = settings_provider.set_settings(AppSettings.from_module(config))
+    _update_boot_splash(splash, app, QtCore, QtGui, "Overwatch Wheel Picker\nApplying startup checks...")
+    _apply_quiet_mode(settings)
+    _install_quiet_qt_handler(QtCore, settings)
+    if not _acquire_single_instance_lock(QtCore, settings):
+        if splash is not None:
+            splash.close()
+            splash.deleteLater()
+        return
+
+    _update_boot_splash(splash, app, QtCore, QtGui, "Overwatch Wheel Picker\nLoading UI modules...")
 
     # Erst nach sichtbarem Splash laden, damit "Klick -> sichtbares Feedback"
     # schneller passiert, auch wenn MainWindow-Module länger importieren.
+    from utils.qt_runtime import apply_preferred_app_font
+    apply_preferred_app_font(app)
     from controller.main_window import MainWindow
 
+    _update_boot_splash(splash, app, QtCore, QtGui, "Overwatch Wheel Picker\nBuilding main window...")
     win = MainWindow(settings=settings)
+    _update_boot_splash(splash, app, QtCore, QtGui, "Overwatch Wheel Picker\nFinalizing...")
     win.show()
     if splash is not None:
         splash.finish(win)

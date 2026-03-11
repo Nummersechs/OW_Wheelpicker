@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sys
 import time
@@ -159,8 +160,30 @@ class OCRPreloadCoordinator:
             return fn(**kwargs)
         return fallback(**kwargs)
 
+    def _is_low_end_mode_active(self) -> bool:
+        token = str(self._cfg("OCR_LOW_END_MODE", "auto") or "auto").strip().lower()
+        if token in {"on", "true", "1", "yes"}:
+            return True
+        if token in {"off", "false", "0", "no"}:
+            return False
+        if not sys.platform.startswith("win"):
+            return False
+        try:
+            threshold = max(1, int(self._cfg("OCR_LOW_END_CPU_COUNT_MAX", 4)))
+        except (TypeError, ValueError):
+            threshold = 4
+        cpu_count = int(os.cpu_count() or 0)
+        if cpu_count <= 0:
+            return False
+        return cpu_count <= threshold
+
     def background_preload_enabled(self) -> bool:
-        return self._ocr_bool("background_preload_enabled", "OCR_BACKGROUND_PRELOAD_ENABLED", True)
+        enabled = self._ocr_bool("background_preload_enabled", "OCR_BACKGROUND_PRELOAD_ENABLED", True)
+        if not enabled:
+            return False
+        if not self._is_low_end_mode_active():
+            return True
+        return bool(self._cfg("OCR_BACKGROUND_PRELOAD_LOW_END_ENABLED", False))
 
     def easyocr_resolution_kwargs(self) -> dict[str, object]:
         def _optional_str(*, attr: str, key: str) -> str | None:

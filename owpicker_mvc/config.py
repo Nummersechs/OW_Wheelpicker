@@ -110,17 +110,17 @@ def _disable_flags_if_quiet(*flag_names: str) -> None:
 
 
 # Trace / Focus
-TRACE_FLOW = True
+TRACE_FLOW = False
 TRACE_SHUTDOWN = False
 TRACE_FOCUS = False
 TRACE_HOVER = False
-TRACE_SPIN_PERF = True
+TRACE_SPIN_PERF = False
 TRACE_CLEAR_ON_START = False
 # Reduziert Rauschen in flow_trace.log durch häufige Startup-/OCR-Events.
 # Bei Bedarf für tiefe Analysen temporär aktivieren.
 TRACE_STARTUP_VISUAL_FINALIZE_DEFER = False
 TRACE_OCR_PRELOAD_VERBOSE = False
-TRACE_OCR_RUNTIME = True
+TRACE_OCR_RUNTIME = False
 TRACE_SHUTDOWN_STEP_VERBOSE = False
 FOCUS_TRACE_DURATION_S = 12.0
 FOCUS_TRACE_MAX_EVENTS = 800
@@ -297,6 +297,9 @@ OCR_BACKGROUND_PRELOAD_MIN_UPTIME_MS = 8000
 OCR_BACKGROUND_PRELOAD_ALLOW_DURING_STARTUP = True
 # If startup/spin is still busy when preload is due, retry later.
 OCR_BACKGROUND_PRELOAD_BUSY_RETRY_MS = 1800
+# On weak systems auto mode can disable background preload to keep first
+# interactions responsive; set True to force preload even in low-end mode.
+OCR_BACKGROUND_PRELOAD_LOW_END_ENABLED = False
 # Timeout for the OCR background-preload subprocess. If exceeded, preload is
 # aborted so shutdown can stay responsive.
 OCR_PRELOAD_SUBPROCESS_TIMEOUT_S = 60.0
@@ -327,7 +330,18 @@ OCR_FALLBACK_PSM = 6
 OCR_RETRY_EXTRA_PSMS = [7, 13]
 OCR_TIMEOUT_S = 8.0
 # Windows override for OCR timeout (seconds). Lower = more responsive.
-OCR_TIMEOUT_S_WINDOWS = 6.0
+OCR_TIMEOUT_S_WINDOWS = 8.0
+# OCR runtime profile for weaker hardware:
+# - "auto": enable low-end tuning on Windows machines with few CPU cores
+# - "on": always enable low-end tuning
+# - "off": never enable low-end tuning
+OCR_LOW_END_MODE = "auto"
+# Auto low-end detection threshold (logical CPU count).
+OCR_LOW_END_CPU_COUNT_MAX = 4
+# Relative budget for optional OCR passes (retry/row pass) compared to
+# OCR_TIMEOUT_S. Lower values return primary-pass results sooner on weak CPUs.
+OCR_OPTIONAL_PASS_BUDGET_SCALE = 1.15
+OCR_OPTIONAL_PASS_BUDGET_SCALE_WINDOWS = 1.00
 OCR_FAST_MODE = True
 # 0 = all generated variants, >0 = cap variant count per OCR run
 OCR_MAX_VARIANTS = 2
@@ -486,17 +500,17 @@ OCR_ROW_PASS_EMPTY_ROW_STOP_MIN_COLLECTED = 0
 # OCR debug: shows a detailed report dialog after each OCR run.
 OCR_DEBUG_SHOW_REPORT = False
 # Keep enabled with OCR_DEBUG_SHOW_REPORT so the dialog receives the full report text.
-OCR_DEBUG_INCLUDE_REPORT_TEXT = True
+OCR_DEBUG_INCLUDE_REPORT_TEXT = False
 OCR_DEBUG_REPORT_MAX_CHARS = 24000
 # Persist OCR debug reports into a file for easier sharing/analysis.
-OCR_DEBUG_LOG_TO_FILE = True
+OCR_DEBUG_LOG_TO_FILE = False
 OCR_DEBUG_LOG_FILE = "ocr_debug.log"
 OCR_DEBUG_LOG_MAX_CHARS = 200000
 # Per-line parser diagnostics (accepted/dropped + reason) inside debug report.
-OCR_DEBUG_LINE_ANALYSIS = True
+OCR_DEBUG_LINE_ANALYSIS = False
 OCR_DEBUG_LINE_MAX_ENTRIES_PER_RUN = 60
 # High-level mapping trace: each OCR line with strict/relaxed parse + final selection.
-OCR_DEBUG_TRACE_LINE_MAPPING = True
+OCR_DEBUG_TRACE_LINE_MAPPING = False
 OCR_DEBUG_TRACE_MAX_ENTRIES = 220
 # QUIET erzwingt zusätzlich: keine OCR-Debug-Reports/Dateilogs.
 QUIET_DISABLED_OCR_DEBUG_FLAGS = (
@@ -556,6 +570,19 @@ OCR_CAPTURE_MINIMIZE_DELAY_MS_WINDOWS = 1000
 OCR_CAPTURE_PREPARE_DELAY_MS = 120
 # Optional Windows-specific delay before capture selector opens.
 OCR_CAPTURE_PREPARE_DELAY_MS_WINDOWS = 70
+# Preflight availability check can be expensive (imports/readers). Keep this
+# off on weaker systems so OCR setup starts in the async worker immediately.
+OCR_AVAILABILITY_PROBE_ON_CLICK = False
+# How long OCR async import may run before the watchdog aborts it.
+# 0 disables the watchdog.
+OCR_ASYNC_IMPORT_TIMEOUT_S = 38.0
+# Windows override (often slower CPUs + onefile extraction overhead).
+OCR_ASYNC_IMPORT_TIMEOUT_S_WINDOWS = 60.0
+# Grace window after timeout before force-terminating a stuck OCR thread.
+OCR_ASYNC_IMPORT_TIMEOUT_TERMINATE_MS = 1800
+# Preflight: how long we wait for background preload shutdown before starting
+# interactive OCR capture. Lower value keeps UI responsive on weaker systems.
+OCR_PRELOAD_STOP_WAIT_MS = 700
 # UX: in Qt selector, confirm on mouse release instead of requiring Enter.
 OCR_QT_SELECTOR_AUTO_ACCEPT_ON_RELEASE = True
 OCR_CAPTURE_TIMEOUT_S = 45.0
@@ -731,7 +758,16 @@ def _normalize_config_values() -> None:
     global OCR_RECALL_RETRY_MAX_VARIANTS
     global OCR_TIMEOUT_S
     global OCR_TIMEOUT_S_WINDOWS
+    global OCR_LOW_END_MODE
+    global OCR_LOW_END_CPU_COUNT_MAX
+    global OCR_OPTIONAL_PASS_BUDGET_SCALE
+    global OCR_OPTIONAL_PASS_BUDGET_SCALE_WINDOWS
     global OCR_PRELOAD_SUBPROCESS_TIMEOUT_S
+    global OCR_BACKGROUND_PRELOAD_LOW_END_ENABLED
+    global OCR_ASYNC_IMPORT_TIMEOUT_S
+    global OCR_ASYNC_IMPORT_TIMEOUT_S_WINDOWS
+    global OCR_ASYNC_IMPORT_TIMEOUT_TERMINATE_MS
+    global OCR_PRELOAD_STOP_WAIT_MS
     global MAP_LIST_NAMES_MIN_VISIBLE_ROWS
     global MAP_LIST_NAMES_MAX_VISIBLE_ROWS
     global MAP_LIST_NAMES_EXTRA_PADDING_PX
@@ -778,7 +814,24 @@ def _normalize_config_values() -> None:
 
     OCR_TIMEOUT_S = max(0.5, _as_float(OCR_TIMEOUT_S, 8.0))
     OCR_TIMEOUT_S_WINDOWS = max(0.5, _as_float(OCR_TIMEOUT_S_WINDOWS, 6.0))
+    OCR_LOW_END_MODE = _normalize_str(OCR_LOW_END_MODE, "auto").lower()
+    if OCR_LOW_END_MODE not in {"auto", "on", "off"}:
+        OCR_LOW_END_MODE = "auto"
+    OCR_LOW_END_CPU_COUNT_MAX = max(1, _as_int(OCR_LOW_END_CPU_COUNT_MAX, 4))
+    OCR_OPTIONAL_PASS_BUDGET_SCALE = max(0.2, _as_float(OCR_OPTIONAL_PASS_BUDGET_SCALE, 1.15))
+    OCR_OPTIONAL_PASS_BUDGET_SCALE_WINDOWS = max(
+        0.2,
+        _as_float(OCR_OPTIONAL_PASS_BUDGET_SCALE_WINDOWS, OCR_OPTIONAL_PASS_BUDGET_SCALE),
+    )
     OCR_PRELOAD_SUBPROCESS_TIMEOUT_S = max(1.0, _as_float(OCR_PRELOAD_SUBPROCESS_TIMEOUT_S, 60.0))
+    OCR_BACKGROUND_PRELOAD_LOW_END_ENABLED = _as_bool(OCR_BACKGROUND_PRELOAD_LOW_END_ENABLED)
+    OCR_ASYNC_IMPORT_TIMEOUT_S = max(0.0, _as_float(OCR_ASYNC_IMPORT_TIMEOUT_S, 38.0))
+    OCR_ASYNC_IMPORT_TIMEOUT_S_WINDOWS = max(
+        0.0,
+        _as_float(OCR_ASYNC_IMPORT_TIMEOUT_S_WINDOWS, OCR_ASYNC_IMPORT_TIMEOUT_S),
+    )
+    OCR_ASYNC_IMPORT_TIMEOUT_TERMINATE_MS = max(0, _as_int(OCR_ASYNC_IMPORT_TIMEOUT_TERMINATE_MS, 1800))
+    OCR_PRELOAD_STOP_WAIT_MS = max(0, _as_int(OCR_PRELOAD_STOP_WAIT_MS, 700))
 
     MAP_LIST_NAMES_MIN_VISIBLE_ROWS = max(1, _as_int(MAP_LIST_NAMES_MIN_VISIBLE_ROWS, 2))
     MAP_LIST_NAMES_MAX_VISIBLE_ROWS = max(

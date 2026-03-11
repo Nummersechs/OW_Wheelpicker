@@ -122,11 +122,24 @@ def start_async_job_thread(
     job: dict,
     thread,
     request_started_at: float,
+    use_wait_cursor: bool,
     qtcore,
     qtwidgets,
     ocr_runtime_trace_module,
 ) -> None:
-    qtwidgets.QApplication.setOverrideCursor(qtcore.Qt.WaitCursor)
+    if bool(use_wait_cursor):
+        try:
+            qtwidgets.QApplication.setOverrideCursor(qtcore.Qt.WaitCursor)
+        except Exception:
+            pass
+    else:
+        # Clear stale global override cursors from older runs so Windows keeps
+        # showing the normal arrow cursor during OCR processing.
+        try:
+            while qtwidgets.QApplication.overrideCursor() is not None:
+                qtwidgets.QApplication.restoreOverrideCursor()
+        except Exception:
+            pass
     try:
         thread.start(qtcore.QThread.LowPriority)
     except Exception:
@@ -140,3 +153,107 @@ def start_async_job_thread(
         ),
     )
 
+
+def install_async_job_watchdog(
+    mw,
+    *,
+    job: dict,
+    thread,
+    worker,
+    timeout_s: float,
+    terminate_after_ms: int,
+    on_timeout_fn,
+    qtcore,
+    ocr_runtime_trace_module,
+) -> None:
+    try:
+        timeout_ms = int(max(0.0, float(timeout_s)) * 1000.0)
+    except (TypeError, ValueError):
+        timeout_ms = 0
+    if timeout_ms <= 0:
+        return
+
+    timer = qtcore.QTimer(mw)
+    timer.setSingleShot(True)
+    job["watchdog_timer"] = timer
+
+    def _force_terminate_if_still_running() -> None:
+        if not bool(job.get("_timed_out", False)):
+            return
+        try:
+            running = bool(thread.isRunning())
+        except Exception:
+            running = False
+        if not running:
+            return
+        if not hasattr(thread, "terminate"):
+            return
+        ocr_runtime_trace_module.trace(
+            "ocr_async_import:watchdog_force_terminate",
+            role=str(job.get("role", "") or ""),
+        )
+        try:
+            thread.terminate()
+        except Exception as exc:
+            ocr_runtime_trace_module.trace(
+                "ocr_async_import:watchdog_force_terminate_failed",
+                role=str(job.get("role", "") or ""),
+                error=repr(exc),
+            )
+
+    def _on_timeout() -> None:
+        try:
+            running = bool(thread.isRunning())
+        except Exception:
+            running = False
+        if not running:
+            return
+        if bool(job.get("_timed_out", False)):
+            return
+
+        job["_timed_out"] = True
+        ocr_runtime_trace_module.trace(
+            "ocr_async_import:watchdog_timeout",
+            role=str(job.get("role", "") or ""),
+            timeout_ms=int(timeout_ms),
+        )
+
+        cancel_slot = getattr(worker, "cancel", None)
+        if callable(cancel_slot):
+            try:
+                cancel_slot()
+            except Exception as exc:
+                ocr_runtime_trace_module.trace(
+                    "ocr_async_import:watchdog_cancel_failed",
+                    role=str(job.get("role", "") or ""),
+                    error=repr(exc),
+                )
+        try:
+            thread.requestInterruption()
+        except Exception:
+            pass
+        try:
+            thread.quit()
+        except Exception:
+            pass
+
+        try:
+            on_timeout_fn()
+        except Exception as exc:
+            ocr_runtime_trace_module.trace(
+                "ocr_async_import:watchdog_timeout_handler_failed",
+                role=str(job.get("role", "") or ""),
+                error=repr(exc),
+            )
+
+        grace_ms = max(0, int(terminate_after_ms))
+        if grace_ms <= 0:
+            return
+        force_timer = qtcore.QTimer(mw)
+        force_timer.setSingleShot(True)
+        job["watchdog_force_timer"] = force_timer
+        force_timer.timeout.connect(_force_terminate_if_still_running)
+        force_timer.start(grace_ms)
+
+    timer.timeout.connect(_on_timeout)
+    timer.start(timeout_ms)
